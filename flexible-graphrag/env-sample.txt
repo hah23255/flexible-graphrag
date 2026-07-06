@@ -772,12 +772,12 @@ OLLAMA_EMBEDDING_MODEL=nomic-embed-text              # 768 dims, 8192 context - 
 #OLLAMA_EMBEDDING_MODEL=all-minilm                   # 384 dims, 512 context - NOT RECOMMENDED (context too small)
 
 # Google Gemini Embeddings (active when EMBEDDING_KIND=google)
-GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview    # 768 dims - recommended
-#GOOGLE_EMBEDDING_MODEL=gemini-embedding-001         # 768 dims - stable GA alternative
+GOOGLE_EMBEDDING_MODEL=gemini-embedding-001          # 768 dims - stable GA (recommended)
+#GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview   # preview: 1 content/call — breaks LangChain-backend batching (stores only 1 vector); also preview names are short-lived
 
 # Google Vertex AI Embeddings (active when EMBEDDING_KIND=vertex)
-VERTEX_EMBEDDING_MODEL=gemini-embedding-2-preview    # 768 dims - recommended
-#VERTEX_EMBEDDING_MODEL=gemini-embedding-001         # 768 dims - stable GA alternative
+VERTEX_EMBEDDING_MODEL=gemini-embedding-001          # 768 dims - stable GA (recommended)
+#VERTEX_EMBEDDING_MODEL=gemini-embedding-2-preview   # preview: 1 content/call — breaks LangChain-backend batching (stores only 1 vector); also preview names are short-lived
 #VERTEX_EMBEDDING_MODEL=text-embedding-005           # 768 dims - text-only option
 
 # Azure Embeddings (active when EMBEDDING_KIND=azure)
@@ -1247,3 +1247,45 @@ ONTOLOGY_PATHS=../schemas/company_classes.ttl,../schemas/company_properties.ttl,
 # Serialization format for ONTOLOGY_PATH and ONTOLOGY_PATHS.
 # Directory loading (ONTOLOGY_DIR) auto-detects format from file extension.
 ONTOLOGY_FORMAT=turtle          # turtle | rdfxml | ntriples | nquads
+
+
+# =============================================================================
+# Langflow Flow Mode (optional, off by default)
+# =============================================================================
+
+# When enabled, the app runs the ingest pipeline, hybrid search, and AI query
+# THROUGH Langflow visual flows (via the Langflow REST API) instead of calling
+# the system directly. This lets you customize the ingest/query flows visually
+# in Langflow while the app keeps driving them. All the other settings in this
+# file (data sources, DBs, LLM/embeddings, chunking, KG, RDF) still apply — the
+# flow executes the same backend machinery, just orchestrated by Langflow.
+#
+# Requires a running Langflow server with the Flexible GraphRAG custom
+# components installed (see LANGFLOW_IMPORT_GUIDE.md for setup + how to
+# duplicate/export the bundled flows to customize them).
+
+# Off by default: the app calls the system directly (no Langflow needed).
+ENABLE_LANGFLOW_FLOWS=false
+#ENABLE_LANGFLOW_FLOWS=true
+
+# URL of the running Langflow server.
+LANGFLOW_URL=http://localhost:7860
+
+# Optional Langflow API key. Not needed for a default local single-user
+# Langflow (AUTO_LOGIN on = no auth). Required only if your Langflow has
+# authentication enabled — create one in the Langflow UI under
+# Settings -> Langflow API Keys -> "Add New" (or the `langflow api-key` CLI).
+#LANGFLOW_API_KEY=
+
+# Optional paths to the flow JSON files the app uploads/runs.
+# Leave unset to use the bundled defaults under flexible-graphrag/flows/.
+# To customize: duplicate + export a flow from Langflow, then point these at
+# your exported copy (see LANGFLOW_IMPORT_GUIDE.md).
+# INGEST_FLOW_PATH  = the ingestion pipeline flow.
+# QUERY_FLOW_PATH   = the combined Hybrid Search + AI Query flow (Langflow Playground only).
+# SEARCH_FLOW_PATH  = dedicated search-only flow the app uses (no AI Query branch runs).
+# AIQUERY_FLOW_PATH = dedicated AI-query-only flow the app uses (no Hybrid Search branch runs).
+#INGEST_FLOW_PATH=flows/fg_ingestion_flow.json
+#QUERY_FLOW_PATH=flows/fg_query_flow.json
+#SEARCH_FLOW_PATH=flows/fg_search_flow.json
+#AIQUERY_FLOW_PATH=flows/fg_aiquery_flow.json

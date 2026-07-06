@@ -389,8 +389,17 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
     otel_service_version: str = Field("1.0.0", description="Service version for observability")
     otel_service_namespace: str = Field("llm-apps", description="Service namespace for observability")
     enable_llama_index_instrumentation: bool = Field(True, description="Enable automatic LlamaIndex instrumentation")
-    
-    
+
+    # Langflow flow mode — run ingest/query through Langflow flows (app UI flow mode)
+    # instead of calling the system directly.
+    enable_langflow_flows: bool = Field(False, description="Run ingest/query through Langflow flows instead of calling the system directly (ENABLE_LANGFLOW_FLOWS)")
+    langflow_url: str = Field("http://localhost:7860", description="Langflow server URL (LANGFLOW_URL)")
+    langflow_api_key: Optional[str] = Field(None, description="Optional Langflow API key/token (LANGFLOW_API_KEY)")
+    ingest_flow_path: Optional[str] = Field(None, description="Path to the Langflow ingestion flow JSON (INGEST_FLOW_PATH; default flows/fg_ingestion_flow.json)")
+    query_flow_path: Optional[str] = Field(None, description="Path to the combined Langflow query flow JSON — Playground only (QUERY_FLOW_PATH; default flows/fg_query_flow.json)")
+    search_flow_path: Optional[str] = Field(None, description="Path to the dedicated Langflow search-only flow JSON (SEARCH_FLOW_PATH; default flows/fg_search_flow.json). Avoids running the AI Query branch on a search.")
+    aiquery_flow_path: Optional[str] = Field(None, description="Path to the dedicated Langflow AI-query-only flow JSON (AIQUERY_FLOW_PATH; default flows/fg_aiquery_flow.json). Avoids running the Hybrid Search branch on an AI query.")
+
     # Database connection parameters
     vector_db_config: Dict[str, Any] = {}
     graph_db_config: Dict[str, Any] = {}

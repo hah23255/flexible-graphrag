@@ -3,6 +3,7 @@ Shared backend core for Flexible GraphRAG
 This module contains the business logic that can be called by both FastAPI and FastMCP servers
 """
 
+import os
 import logging
 import uuid
 import asyncio
@@ -60,12 +61,96 @@ class FlexibleGraphRAGBackend:
     def __init__(self, settings: Settings = None):
         self.settings = settings or Settings()
         self._system = None
+        self._flow_service = None  # lazy: Langflow flow runner (app/flow mode)
         self.ingestion_manager = IngestionManager()
         logger.info("FlexibleGraphRAGBackend initialized")
+
+    async def _get_flow_service(self):
+        """Lazy-init the Langflow FlowService and load the ingest/query flows.
+
+        Used when settings.enable_langflow_flows is true — the backend runs the Langflow
+        flows (via the Langflow API) instead of calling the system directly.
+        """
+        if self._flow_service is None:
+            from flow_service import FlowService
+            fs = FlowService(self.settings.langflow_url, self.settings.langflow_api_key)
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ingest = self.settings.ingest_flow_path or os.path.join(repo_root, "flows", "fg_ingestion_flow.json")
+            query = self.settings.query_flow_path or os.path.join(repo_root, "flows", "fg_query_flow.json")
+            search = self.settings.search_flow_path or os.path.join(repo_root, "flows", "fg_search_flow.json")
+            aiquery = self.settings.aiquery_flow_path or os.path.join(repo_root, "flows", "fg_aiquery_flow.json")
+            logger.info("FlowService: ingest flow file  = %s", ingest)
+            logger.info("FlowService: query flow file   = %s", query)
+            logger.info("FlowService: search flow file  = %s", search)
+            logger.info("FlowService: aiquery flow file = %s", aiquery)
+            await fs.initialize_flows(ingest, query, search, aiquery)
+            self._flow_service = fs
+            logger.info("FlowService initialized (Langflow flow mode) — ingest=%s query=%s",
+                        fs.ingestion_flow_id, fs.query_flow_id)
+        return self._flow_service
+
+    @staticmethod
+    def _source_config_for_flow(data_source, paths, kwargs) -> dict:
+        """Build the per-source config dict the flow's Data Source node expects."""
+        if data_source == "filesystem":
+            fs = kwargs.get("filesystem_config", {}) or {}
+            p = paths or fs.get("paths") or []
+            # Absolute paths: the langflow process resolves them in ITS cwd, not the backend's.
+            return {"paths": [os.path.abspath(str(x).strip('"').strip("'")) for x in (p or [])]}
+        return kwargs.get(f"{data_source}_config") or {}
+
+    @staticmethod
+    def _store_flow_docs_for_sync(processing_id, data_source, doc_states):
+        """Reconstruct lightweight Document stand-ins (id_ + metadata) from the flow's
+        doc_states and stash them in PROCESSING_STATUS so create_document_states_after_ingestion
+        (which reads PROCESSING_STATUS['documents']) can build document_state rows in flow mode."""
+        from llama_index.core import Document
+        docs = []
+        for ds in doc_states or []:
+            # Carry the real text so the sync engine's content_hash = SHA-256(doc.text) is
+            # correct (empty text -> null content_hash -> NOT NULL violation + broken change detect).
+            d = Document(text=ds.get("text") or "", metadata=dict(ds.get("metadata") or {}))
+            if ds.get("id_"):
+                d.id_ = ds["id_"]
+            docs.append(d)
+        entry = PROCESSING_STATUS.setdefault(processing_id, {})
+        entry["documents"] = docs
+        entry["data_source"] = data_source
+        logger.info("Flow sync: stored %d doc_states in PROCESSING_STATUS for document_state creation", len(docs))
+
+    async def _ingest_via_flow(self, processing_id, data_source, paths, skip_graph, **kwargs):
+        """Run the Langflow ingestion flow with the app's per-source config as tweaks."""
+        self._update_processing_status(
+            processing_id, "processing", f"Running Langflow ingestion flow for {data_source}...", 30
+        )
+        source_config = self._source_config_for_flow(data_source, paths, kwargs)
+        config_id = kwargs.get("config_id")
+        logger.info("Flow ingest: source=%s paths=%s config_id=%s source_config=%s",
+                    data_source, paths, config_id, source_config)
+        try:
+            fsvc = await self._get_flow_service()
+            result = await fsvc.run_ingestion_flow(
+                source_type=data_source, source_config=source_config,
+                skip_graph=skip_graph, config_id=config_id,
+            )
+            msg = fsvc.extract_message(result)
+            # Incremental sync: the docs were parsed in the langflow process, so the backend's
+            # document_state creator (reads PROCESSING_STATUS['documents']) has nothing unless
+            # we feed it the flow's doc_states. Populate BEFORE marking completed so the
+            # post-ingestion poller finds them.
+            if config_id:
+                self._store_flow_docs_for_sync(processing_id, data_source,
+                                               fsvc.extract_doc_states(result))
+            self._update_processing_status(
+                processing_id, "completed", f"Langflow ingestion complete. {msg}", 100
+            )
+        except Exception as e:
+            logger.error(f"Langflow ingestion flow failed: {e}", exc_info=True)
+            self._update_processing_status(processing_id, "failed", f"Langflow ingestion failed: {e}", 0)
     
     @property
-    def system(self) -> HybridSearchSystem:
-        """Lazy-load the hybrid search system"""
+    def system(self):
+        """Lazy-load the hybrid search system (full LangChain + LlamaIndex adapter layer)."""
         if self._system is None:
             self._system = HybridSearchSystem.from_settings(self.settings)
             logger.info("HybridSearchSystem initialized")
@@ -800,12 +885,21 @@ class FlexibleGraphRAGBackend:
                 return
                 
             self._update_processing_status(
-                processing_id, 
-                "processing", 
-                f"Initializing {data_source} document ingestion...", 
+                processing_id,
+                "processing",
+                f"Initializing {data_source} document ingestion...",
                 10
             )
-            
+
+            # FLOW MODE: run the Langflow ingestion flow (same spot as the use-component
+            # pipeline branch) instead of the direct per-source pipeline below.
+            if self.settings.enable_langflow_flows:
+                # config_id is a named param here, so it isn't in **kwargs — pass it explicitly
+                # (the flow needs it for stable doc_ids + document_state creation).
+                await self._ingest_via_flow(processing_id, data_source, paths, skip_graph,
+                                            config_id=config_id, **kwargs)
+                return
+
             if data_source == "filesystem":
                 # Extract filesystem_config from kwargs if provided (used by detectors)
                 filesystem_config = kwargs.get('filesystem_config', {})
@@ -1508,8 +1602,16 @@ class FlexibleGraphRAGBackend:
         """Search documents using hybrid search"""
         start_time = datetime.now()
         logger.info(f"Search query started at {start_time.strftime('%H:%M:%S.%f')[:-3]} - Query: '{query}' (top_k={top_k})")
-        
+
         try:
+            # FLOW MODE: run the Langflow query flow instead of the system.
+            if self.settings.enable_langflow_flows:
+                fsvc = await self._get_flow_service()
+                results = await fsvc.run_search_flow(query, top_k=top_k)
+                duration = (datetime.now() - start_time).total_seconds()
+                logger.info(f"Flow search returned {len(results)} results in {duration:.3f}s")
+                return {"success": True, "results": results, "query_time": f"{duration:.3f}s"}
+
             results = await self.system.search(query, top_k=top_k)
             
             end_time = datetime.now()
@@ -1541,8 +1643,16 @@ class FlexibleGraphRAGBackend:
         """Answer a question using the Q&A system"""
         start_time = datetime.now()
         logger.info(f"Q&A query started at {start_time.strftime('%H:%M:%S.%f')[:-3]} - Query: '{query}'")
-        
+
         try:
+            # FLOW MODE: run the Langflow query flow instead of the system.
+            if self.settings.enable_langflow_flows:
+                fsvc = await self._get_flow_service()
+                qa = await fsvc.run_aiquery_flow(query)
+                duration = (datetime.now() - start_time).total_seconds()
+                return {"success": True, "answer": qa["answer"], "sources": qa["sources"],
+                        "query_time": f"{duration:.3f}s"}
+
             # Ensure Weaviate async client is connected before Q&A query
             if self.system.vector_store and type(self.system.vector_store).__name__ == "WeaviateVectorStore":
                 if hasattr(self.system.vector_store, '_aclient') and self.system.vector_store._aclient is not None:
@@ -1663,10 +1773,18 @@ class FlexibleGraphRAGBackend:
         """Query documents with AI-generated answers"""
         start_time = datetime.now()
         logger.info(f"Document query started at {start_time.strftime('%H:%M:%S.%f')[:-3]} - Query: '{query}'")
-        
+
         try:
+            # FLOW MODE: run the Langflow query flow instead of the system.
+            if self.settings.enable_langflow_flows:
+                fsvc = await self._get_flow_service()
+                qa = await fsvc.run_aiquery_flow(query)
+                duration = (datetime.now() - start_time).total_seconds()
+                return {"success": True, "answer": qa["answer"], "sources": qa["sources"],
+                        "query_time": f"{duration:.3f}s"}
+
             query_engine = self.system.get_query_engine()
-            
+
             # Use async method directly (nest_asyncio.apply() called at module level)
             _qd_attempts = 0
             while True:

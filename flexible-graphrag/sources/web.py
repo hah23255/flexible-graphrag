@@ -17,12 +17,17 @@ class WebSource(BaseDataSource):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.url = config.get("url", "")
-        
+        # Extract readable text instead of raw HTML by default. SimpleWebPageReader defaults to
+        # html_to_text=False, which ingests the page's full HTML (inline scripts/CSS/SVG) — a
+        # single marketing page can balloon into hundreds of markup "chunks". html_to_text=True
+        # runs html2text to keep only the readable content.
+        self.html_to_text = bool(config.get("html_to_text", True))
+
         # Import LlamaIndex web reader
         try:
             from llama_index.readers.web import SimpleWebPageReader
-            self.reader = SimpleWebPageReader()
-            logger.info(f"WebSource initialized for URL: {self.url}")
+            self.reader = SimpleWebPageReader(html_to_text=self.html_to_text)
+            logger.info(f"WebSource initialized for URL: {self.url} (html_to_text={self.html_to_text})")
         except ImportError as e:
             logger.error(f"Failed to import SimpleWebPageReader: {e}")
             raise ImportError("Please install llama-index-readers-web: pip install llama-index-readers-web")

@@ -30,6 +30,7 @@ async def update_pg_graph(
     loop,
     *,
     skip_graph: bool = False,
+    pre_extracted: bool = False,
     span_name: str = "rag.graph_extraction",
 ) -> tuple:
     """Run KG extraction and update the PG graph index (LI or LC backend).
@@ -97,7 +98,11 @@ async def update_pg_graph(
         )
         # Report extraction time under kg_duration, graph write under graph_update_duration
         lc_write = lc_total - lc_extract
-        return nodes, False, lc_extract, lc_write, 0, 0
+        # entity/relation counts stashed on the system by aingest_lc_graph (LC path returns
+        # durations, not counts) — surface them so the KG node + summary report real numbers.
+        lc_ents = getattr(system, "_last_lc_kg_entities", 0)
+        lc_rels = getattr(system, "_last_lc_kg_relations", 0)
+        return nodes, False, lc_extract, lc_write, lc_ents, lc_rels
 
     # LI backend
     kg_extractor = make_kg_extractor(system)
@@ -128,16 +133,29 @@ async def update_pg_graph(
 
     try:
         # --- Phase A: KG extraction (LLM-intensive) ---
-        from process.kg_extractor import run_kg_extractors_on_nodes
-        extraction_start = time.time()
-        nodes, num_entities, num_relations, _ = await run_kg_extractors_on_nodes(
-            nodes, [kg_extractor], system.config, span_name=span_name
-        )
-        extraction_duration = time.time() - extraction_start
-        logger.info(
-            f"KG extraction: {num_entities} entities, {num_relations} relations "
-            f"in {extraction_duration:.2f}s"
-        )
+        if pre_extracted:
+            # Nodes were already KG-extracted upstream (e.g. a separate KG Extraction
+            # node). Skip the LLM extraction and just count from metadata; Phase B
+            # (graph store I/O) runs as normal with kg_extractors=[].
+            from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
+            num_entities = sum(len(n.metadata.get(KG_NODES_KEY, []) or []) for n in nodes)
+            num_relations = sum(len(n.metadata.get(KG_RELATIONS_KEY, []) or []) for n in nodes)
+            extraction_duration = 0.0
+            logger.info(
+                f"KG pre-extracted: {num_entities} entities, {num_relations} relations "
+                f"(skipping re-extraction)"
+            )
+        else:
+            from process.kg_extractor import run_kg_extractors_on_nodes
+            extraction_start = time.time()
+            nodes, num_entities, num_relations, _ = await run_kg_extractors_on_nodes(
+                nodes, [kg_extractor], system.config, span_name=span_name
+            )
+            extraction_duration = time.time() - extraction_start
+            logger.info(
+                f"KG extraction: {num_entities} entities, {num_relations} relations "
+                f"in {extraction_duration:.2f}s"
+            )
 
         if graph_span:
             graph_span.set_attribute("graph.extraction_latency_ms", extraction_duration * 1000)

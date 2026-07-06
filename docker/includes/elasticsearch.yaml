@@ -18,7 +18,10 @@ services:
     mem_limit: 2g
     ports:
       - "9200:9200"
-      - "9300:9300"
+      # 9300 (inter-node transport) intentionally NOT exposed: single-node ES has no peers,
+      # and on Windows 9300 falls in a WinNAT-reserved range (9248-9347) so the bind is
+      # forbidden ("access permissions"). The app only needs 9200 (HTTP). ES still binds 9300
+      # internally in the container.
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     restart: unless-stopped

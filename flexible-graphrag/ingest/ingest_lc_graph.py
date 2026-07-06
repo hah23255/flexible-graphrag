@@ -169,6 +169,10 @@ async def aingest_lc_graph(
 
     total_nodes = sum(len(gd.nodes) for gd in graph_docs)
     total_rels = sum(len(gd.relationships) for gd in graph_docs)
+    # Stash entity/relation counts on the system: the LC path returns durations (not counts),
+    # so update_pg_graph -> the flow's KG node -> the ingestion summary read them from here.
+    system._last_lc_kg_entities = total_nodes
+    system._last_lc_kg_relations = total_rels
     logger.info(
         "LC graph ingestion: extracted %d graph docs (%d nodes, %d relationships) "
         "in %.2fs — writing to graph store",

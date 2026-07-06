@@ -236,22 +236,44 @@ def build_rdf_store_adapter(config: "AppSettings") -> Optional[RdfGraphStoreAdap
     if rdf_type_str == "graphdb":
         try:
             from rdf.ontology_manager import resolve_user_config_path as _resolve_path
-            import os as _os, glob as _glob
-            ontology_file = None
+            import os as _os, glob as _glob, tempfile as _tempfile
+
+            _ext_fmt = {".ttl": "turtle", ".n3": "n3", ".nt": "nt",
+                        ".rdf": "xml", ".owl": "xml", ".xml": "xml"}
             ontology_dir = getattr(config, "ontology_dir", None)
             ontology_paths = getattr(config, "ontology_paths", None)
             ontology_path = getattr(config, "ontology_path", None)
+
+            # Collect ALL configured ontology files (not just the first).
+            files = []
             if ontology_dir:
                 _dir = _resolve_path(ontology_dir)
-                ttl_files = sorted(_glob.glob(_os.path.join(_dir, "*.ttl")))
-                if ttl_files:
-                    ontology_file = ttl_files[0]
+                for _ext in _ext_fmt:
+                    files += _glob.glob(_os.path.join(_dir, f"*{_ext}"))
+                files = sorted(files)
             elif ontology_paths:
-                first = ontology_paths.split(",")[0].strip()
-                if first:
-                    ontology_file = _resolve_path(first)
+                files = [_resolve_path(p.strip()) for p in ontology_paths.split(",") if p.strip()]
             elif ontology_path:
-                ontology_file = _resolve_path(ontology_path)
+                files = [_resolve_path(ontology_path)]
+
+            ontology_file = None
+            if len(files) == 1:
+                ontology_file = files[0]
+            elif len(files) > 1:
+                # Merge ALL ontology files so GraphDB gets the COMPLETE schema for SPARQL
+                # generation (previously only the first file was used).
+                from rdflib import Graph as _RDFGraph
+                _g = _RDFGraph()
+                for _f in files:
+                    try:
+                        _fmt = _ext_fmt.get(_os.path.splitext(_f)[1].lower(), "turtle")
+                        _g.parse(_f, format=_fmt)
+                    except Exception as _pe:
+                        logger.warning("GraphDB adapter: could not parse ontology %s: %s", _f, _pe)
+                ontology_file = _os.path.join(_tempfile.gettempdir(), "fg_graphdb_merged_ontology.ttl")
+                _g.serialize(destination=ontology_file, format="turtle")
+                logger.info("GraphDB adapter: merged %d ontology files -> %s", len(files), ontology_file)
+
             if ontology_file:
                 inner_config = dict(inner_config)
                 inner_config["ontology_file"] = ontology_file

@@ -357,6 +357,11 @@ spanner-extras = [
     "google-cloud-spanner",        # GCP Spanner client (required by llama-index-spanner)
 ]
 
+# LangFlow integration (optional - for using components in LangFlow)
+langflow = [
+    "langflow>=1.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/stevereiner/flexible-graphrag"
 Documentation = "https://stevereiner.github.io/flexible-graphrag/"
@@ -389,7 +394,7 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["adapters*", "ingest*", "process*", "sources*", "observability*", "incremental_updates*", "rdf*", "langchain*", "stores*", "llamaindex*"]
+include = ["adapters*", "ingest*", "process*", "sources*", "observability*", "incremental_updates*", "rdf*", "langchain*", "stores*", "llamaindex*", "langflow_components*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.txt", "*.md", "*.sql", "*.toml"]

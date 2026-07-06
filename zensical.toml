@@ -34,7 +34,8 @@ nav = [
     {"Python Backend"            = "GETTING-STARTED/PYTHON-BACKEND.md"},
     {"Frontend Setup"            = "GETTING-STARTED/FRONTEND-SETUP.md"},
     {"Docker Deployment"         = "GETTING-STARTED/DOCKER-DEPLOYMENT.md"},
-    {"Environment Configuration" = "GETTING-STARTED/ENVIRONMENT-CONFIGURATION.md"}
+    {"Environment Configuration" = "GETTING-STARTED/ENVIRONMENT-CONFIGURATION.md"},
+    {"Langflow Integration"      = "GETTING-STARTED/LANGFLOW-INTEGRATION.md"}
   ]},
   {"Configuration" = [
     {"Database Configuration" = [
@@ -118,6 +119,7 @@ nav = [
     {"REST API"             = "DEVELOPER/REST-API.md"},
     {"Sync REST API"        = "DATA-SOURCES/INCREMENTAL-UPDATE-AUTO-SYNC/API-REFERENCE.md"},
     {"MCP Developer Setup"  = "DEVELOPER/DEVELOPER-MCP.md"},
+    {"Langflow Components"  = "DEVELOPER/DEVELOPER-LANGFLOW-COMPONENTS.md"},
     {"Testing & Cleanup"    = "DEVELOPER/DEVELOPER-TESTING-CLEANUP.md"},
     {"Full-Stack Debugging" = "DEVELOPER/DEVELOPER-FULL-STACK-DEBUGGING.md"},
     {"Documentation System" = "DEVELOPER/DEVELOPER-DOCS-SYSTEM.md"},

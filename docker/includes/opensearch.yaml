@@ -18,7 +18,10 @@ services:
     mem_limit: 2g
     ports:
       - "9201:9200"    # Changed port to avoid conflict with Elasticsearch
-      - "9301:9300"
+      # 9301 (inter-node transport) intentionally NOT exposed: single-node OpenSearch has no
+      # peers, and on Windows 9301 falls in a WinNAT-reserved range (9248-9347) so the bind is
+      # forbidden ("access permissions"). The app only needs 9201 (HTTP). OpenSearch still
+      # binds 9300 internally in the container.
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     restart: unless-stopped

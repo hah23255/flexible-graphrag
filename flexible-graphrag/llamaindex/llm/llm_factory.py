@@ -24,6 +24,53 @@ from llama_index.llms.fireworks import Fireworks
 from llama_index.core.base.llms.types import ChatResponse, MessageRole
 from llama_index.llms.openai.utils import to_openai_message_dicts
 
+
+def _patch_google_genai_nested_asyncio() -> None:
+    """Python 3.14 fix for the Gemini/Vertex (google-genai) LLM.
+
+    llama-index-llms-google-genai's sync ``_chat`` bridges to its async client via
+    ``asyncio.run(prepare_chat_params(...))``, which raises "asyncio.run() cannot be called
+    from a running event loop" when the LLM is invoked from an async context — e.g. KG
+    extraction runs SchemaLLMPathExtractor through its async ``run_jobs`` path, and google-
+    genai's ``astructured_predict`` falls back to the sync ``structured_predict`` → sync chat.
+    nest_asyncio papered over this on <=3.13 but is broken/neutralised on 3.14. We replace
+    google-genai's ``asyncio.run`` with one that offloads the coroutine to a fresh-loop worker
+    thread when a loop is already running (only the google-genai module sees the shim).
+    Idempotent; no-op on <3.14 (nest_asyncio handles it there).
+    """
+    import sys
+    if sys.version_info < (3, 14):
+        return
+    try:
+        import asyncio
+        import concurrent.futures
+        from llama_index.llms.google_genai import base as _gg_base
+
+        if getattr(_gg_base, "_fg_asyncio_run_patched", False):
+            return
+
+        def _safe_run(coro):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(coro)  # no running loop — normal path
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(asyncio.run, coro).result()  # nested — own thread+loop
+
+        class _AsyncioShim:
+            run = staticmethod(_safe_run)
+
+            def __getattr__(self, name):
+                return getattr(asyncio, name)
+
+        _gg_base.asyncio = _AsyncioShim()
+        _gg_base._fg_asyncio_run_patched = True
+    except Exception:
+        pass
+
+
+_patch_google_genai_nested_asyncio()
+
 from config import LLMProvider
 
 logger = logging.getLogger(__name__)

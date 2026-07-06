@@ -1,4 +1,6 @@
 
+**New 7/5/26:** Optional **Langflow visual flows** — the app can run its ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows (12 custom Flexible GraphRAG components), using your existing `.env` config. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
+
 **New 5/6/26:** 15 property graph databases total: 8 supported on both LlamaIndex and LangChain, 1 LI-only (Google Cloud Spanner Graph), 6 LC-only (ArangoDB, Apache AGE, Azure Cosmos DB for Gremlin, Apache HugeGraph, SurrealDB, TigerGraph). AWS Neptune RDF/SPARQL added. All 10 vector databases, all 3 search engines, and all LLM/embedding providers work with both LlamaIndex and LangChain. Every pipeline stage (chunking, KG extraction, graph write, vector write, search write, and retrieval fusion) can be configured independently. (Data source reading is LlamaIndex only; RDF stores use framework-independent adapters with LangChain Text-to-SPARQL retrieval.)
 
 **New:** Flexible GraphRAG now supports RDF-based ontologies for both property graph databases and RDF triple store databases (Graphwise Ontotext GraphDB, Fuseki, and Oxigraph). Document ingestion with KG extraction, auto incremental data source change detection, and UI search (hybrid search, AI query, and AI chat) are all supported with both database types.
@@ -19,7 +21,7 @@
 [![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling or LlamaParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout.
+**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling or LlamaParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
 
 <p align="center">
   <a href="./screen-shots/auto-sync/auto-sync.png">
@@ -51,6 +53,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 - **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 13 data sources with 9 supporting incremental auto sync), hybrid search, and AI query. Uses FastAPI backend REST APIs. 
 - **UI Clients**: Angular, React, and Vue UI clients support choosing the data source (filesystem, Alfresco, CMIS, etc.), ingesting documents, performing hybrid searches, AI queries, and AI chat. The UI clients use the REST APIs of the FastAPI backend.
 - **Docker Deployment Flexibility**: Supports both standalone and Docker deployment modes. Docker infrastructure provides modular database selection via docker-compose includes - vector, graph, search engines, and Alfresco can be included or excluded with a single comment. Choose between hybrid deployment (databases in Docker, backend and UIs standalone) or full containerization.
+- **Langflow Visual Flows (optional)**: Run the ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows built from 12 custom Flexible GraphRAG components — the same backend machinery (all database, LLM, and framework `.env` config applies), orchestrated visually. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
 
 ## Frontend Screenshots
 
@@ -1222,6 +1225,28 @@ Between tests you can clean up data:
 - **Vector Indexes**: See [docs/DATABASES/VECTOR-DATABASES/VECTOR-DIMENSIONS.md](docs/DATABASES/VECTOR-DATABASES/VECTOR-DIMENSIONS.md) for vector database cleanup instructions
 - **Graph Data**: See [docs/DATABASES/GRAPH-DATABASES/README-neo4j.md](docs/DATABASES/GRAPH-DATABASES/README-neo4j.md) for graph-related cleanup commands
 
+## Langflow Visual Flows (Optional)
+
+Flexible GraphRAG ships **12 custom Langflow components** (implemented in **Python**) and four ready-made flows (ingest, search, AI query, and a combined query flow for the Langflow Playground). With `ENABLE_LANGFLOW_FLOWS=true`, the app runs its **ingest pipeline, hybrid search, and AI query through those visual flows** instead of calling the system directly — the flows execute the **same backend machinery** driven by your existing `.env` (all database, LLM/embedding, chunking, KG, RDF, and LlamaIndex/LangChain settings apply unchanged), so the pipeline becomes a flow you can customize. You can also just drag the components onto the Langflow canvas to build your own flows.
+
+The main requirement is a **separate venv for Langflow** — Langflow runs the flows' Python component code in its own process, and the backend app calls the **Langflow REST API** to run the two flows.
+
+**1. Langflow venv** — create it on Python **3.14.5 or newer** (or 3.13). Use an explicit patch version: `uv venv --python 3.14.5` (or greater) — plain `uv venv --python 3.14` resolves to **3.14.0**, which has an OpenSSL bug that makes Langflow abort on startup. Then install Langflow and the backend (LlamaIndex + fuller LangChain), and run Langflow **from the `flexible-graphrag` backend dir**:
+
+```powershell
+uv pip install --native-tls langflow==1.10.1
+uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"
+$env:LANGFLOW_COMPONENTS_PATH = "…/flexible-graphrag/langflow_components"
+# from the flexible-graphrag backend dir:
+langflow run --port 7860 --log-level WARNING --log-file langflow.log
+```
+
+Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; it's ready once that finishes.
+
+**2. Backend venv** — set `ENABLE_LANGFLOW_FLOWS=true` and `LANGFLOW_URL=http://localhost:7860` in `.env`, then start the app as usual.
+
+For the full setup, configuration reference, flow customization, and the 12-component developer reference, see **[Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md)** and **[Langflow Components](docs/DEVELOPER/DEVELOPER-LANGFLOW-COMPONENTS.md)**.
+
 ## MCP Server Setup (Quickstart)
 
 The MCP server (`flexible-graphrag-mcp`) is a lightweight standalone package that connects MCP clients (Claude Desktop, Cursor, etc.) to the Flexible GraphRAG backend via its REST API.
@@ -1409,6 +1434,7 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
     - `adapters/vector/`: Vector store adapter ABC
   - `incremental_updates/`: Auto-sync engine — detectors, orchestrator, state manager for real-time/near-real-time source sync
   - `ingest/`: Modular ingestion steps — `ingest_from_files`, `ingest_from_text`, `ingest_from_source`, `run_chunk_pipeline`, `update_pg_graph`, `update_rdf_graph`, `update_vector`, `update_search`
+  - `langflow_components/`: 12 custom Langflow components (Python) in `flexible_graphrag/` + shared run-cache helper `_fg_shared.py`; `flow_service.py` (backend) drives them over the Langflow REST API
   - `langchain/`: LangChain peer framework — graph, vector, search, chunking, KG extraction, retrieval
     - `langchain/graph/pg_store_adapters/`: 15 property graph store adapters (one file per store)
     - `langchain/graph/rdf_store_adapters/`: 4 RDF/SPARQL store adapters (Fuseki, GraphDB, Oxigraph, Neptune)
@@ -1434,12 +1460,14 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
   - `start.py`: Startup script (`flexible-graphrag` console entry point)
   - `install.py`: Installation helper script
 
+- `/flows`: Bundled Langflow flow JSONs the app uploads in flow mode — `fg_ingestion_flow.json`, `fg_search_flow.json`, `fg_aiquery_flow.json`, `fg_query_flow.json` (see `README.md` there)
+
 - `/flexible-graphrag-mcp`: Standalone MCP server
   - `main.py`: HTTP-based MCP server (calls REST API)
   - `pyproject.toml`: MCP package definition with minimal dependencies
   - `README.md`: MCP server setup and installation instructions
   - `QUICK-USAGE-GUIDE.md`: Quick usage guide
-  - **Lightweight**: Only 4 dependencies (fastmcp, nest-asyncio, httpx, python-dotenv)
+  - **Lightweight**: Only 3 dependencies (fastmcp, httpx, python-dotenv)
 
 - `/flexible-graphrag-ui`: Frontend applications
   - `/frontend-react`: React + TypeScript frontend (built with Vite)
@@ -1466,25 +1494,18 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
   - `/nginx`: Reverse proxy configuration
   - `README.md`: Docker deployment documentation
 
-- `/docs`: Documentation
-  - `ARCHITECTURE.md`: System architecture and component relationships
-  - `DEPLOYMENT-CONFIGURATIONS.md`: Standalone, hybrid, and full Docker deployment guides
-  - `DOCKER-RESOURCE-CONFIGURATION.md`: Docker memory/CPU configuration for Windows (WSL2), macOS, and Linux — essential for running the full stack, especially with vLLM
-  - `ENVIRONMENT-CONFIGURATION.md`: Environment setup guide with database switching
-  - `POSTGRES-SETUP.md`: PostgreSQL setup for pgvector and incremental state management
-  - `SCHEMA-EXAMPLES.md`: Knowledge graph schema examples
-  - `PERFORMANCE.md`: Performance benchmarks and optimization guides
-  - `DEFAULT-USERNAMES-PASSWORDS.md`: Database credentials and dashboard access
-  - `PORT-MAPPINGS.md`: Complete port reference for all services
-  - `DATA-SOURCES/`: Data source setup guides (Azure Blob, S3, GCS, Alfresco etc.)
-  - `DOC-PROCESSING/`: Document processing guides (Docling GPU, parser output)
-  - `GRAPH-DATABASES/`: Graph database guides (Neo4j, Neptune, Nebula, ArcadeDB, etc.)
-  - `INCREMENTAL-UPDATE-AUTO-SYNC/`: Incremental updates documentation (README, QUICKSTART, SETUP-GUIDE, API-REFERENCE)
-  - `LLM/`: LLM and embedding configuration guides
-  - `LANGCHAIN/`: LangChain integration guides (RDF QA fusion, graph retriever setup, adapter reference)
-  - `OBSERVABILITY/`: Observability and monitoring guides
-  - `RDF/`: RDF/ontology guides (store setup, ontology config, ingestion modes, SPARQL examples, user guide)
-  - `VECTOR-DATABASES/`: Vector database guides (dimensions, integration, Chroma modes)
+- `/docs`: Documentation ([Zensical](https://zensical.org/) site; nav in `zensical.toml`) — organized into these sections:
+  - `index.md`: Documentation home / overview
+  - `HOME/`: Section landing pages (overview, getting started, docker, configuration, UI, data sources, databases, MCP, developer)
+  - `GETTING-STARTED/`: Quickstart, prerequisites, setup overview, Python backend, frontend setup, Docker deployment, environment configuration, **Langflow Integration**
+  - `CONFIGURATION/`: Search / vector / property-graph / RDF database config, schema examples, Framework (LangChain/LlamaIndex) configuration
+  - `UI-GUIDE/`: UI screenshots and per-tab guides (Sources, Processing, Hybrid Search, AI Chat)
+  - `DATA-SOURCES/`: Data source setup (S3, Azure Blob, GCS, CMIS, path examples); `DOC-PROCESSING/` (file formats, Docling GPU/OCR, parser output); `INCREMENTAL-UPDATE-AUTO-SYNC/`
+  - `LLM/`: LLM & embedding configuration, testing results, Ollama
+  - `DATABASES/`: Database configuration, PostgreSQL; `GRAPH-DATABASES/`, `RDF/`, `VECTOR-DATABASES/`
+  - `MCP/`: MCP server quickstart, MCP tools, usage guide
+  - `DEVELOPER/`: REST API, MCP developer setup, **Langflow Components**, testing & cleanup, full-stack debugging, documentation system; `OBSERVABILITY/`
+  - `ADVANCED/`: Architecture, deployment configurations, Docker resource config, port mappings, timeouts, default usernames/passwords; `LANGCHAIN/` (framework integration)
 
 - `/scripts`: Utility scripts
   - `create_opensearch_pipeline.py`: OpenSearch hybrid search pipeline setup

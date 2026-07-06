@@ -287,6 +287,9 @@ def setup_hybrid_retriever(system) -> None:
     )
     has_langchain_pg = _pg_adapter_is_lc
 
+    logger.info(f"Hybrid retriever modalities: vector_index={system.vector_index is not None}, vector_store={system.vector_store is not None}, graph_index={system.graph_index is not None}, search_index={getattr(system, 'search_index', None) is not None}")
+    logger.debug(f"Modalities check: has_vector={has_vector}, has_graph={has_graph}, has_search={has_search}, has_langchain_rdf={has_langchain_rdf}, has_langchain_pg={has_langchain_pg}")
+
     if not (has_vector or has_graph or has_search or has_langchain_rdf or has_langchain_pg):
         logger.warning("Cannot setup hybrid retriever: no search modalities available")
         return
@@ -734,6 +737,9 @@ def setup_hybrid_retriever(system) -> None:
         raise ValueError(error_msg)
 
     # Assign to system
+    logger.info(f"[HYBRID RETRIEVER] Building from {len(retrievers)} retrievers: {retriever_types}")
+    logger.debug(f"[HYBRID RETRIEVER] System type: {type(system).__name__}, system id: {id(system)}")
+
     if len(retrievers) == 1:
         system.hybrid_retriever = retrievers[0]
         logger.info(f"Using single {retriever_types[0]} retriever directly (no fusion needed)")
@@ -766,5 +772,7 @@ def setup_hybrid_retriever(system) -> None:
                 logger.info("Using QueryFusionRetriever for multiple retrievers (async enabled)")
 
     # Optional synonym exploder — "all" scope: wrap the entire fusion retriever.
+    logger.debug(f"[HYBRID RETRIEVER] Before wrap_all: system.hybrid_retriever={type(system.hybrid_retriever).__name__ if system.hybrid_retriever else None}")
     system.hybrid_retriever = _syn.wrap_all(system.hybrid_retriever)
-    logger.info("Hybrid retriever setup completed")
+    logger.debug(f"[HYBRID RETRIEVER] After wrap_all: system.hybrid_retriever={type(system.hybrid_retriever).__name__ if system.hybrid_retriever else None}")
+    logger.info(f"[HYBRID RETRIEVER] Hybrid retriever setup completed - system.hybrid_retriever={type(system.hybrid_retriever).__name__ if system.hybrid_retriever else 'None'}")

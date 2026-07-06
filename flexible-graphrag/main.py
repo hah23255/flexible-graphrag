@@ -14,16 +14,20 @@ if sys.version_info >= (3, 14):
         pass
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env FIRST before any other imports (especially backend.py) so environment vars are available
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import asyncio
-from pathlib import Path
 import uvicorn
 import shutil
-from dotenv import load_dotenv
 import importlib.metadata
 import nest_asyncio
 from config import Settings, DataSourceType
@@ -35,9 +39,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Load .env before any Settings() so observability and ontology paths match the shell cwd.
-load_dotenv()
 
 # Initialize observability if enabled
 try:
@@ -518,7 +519,21 @@ async def lifespan(app: FastAPI):
     # Initialize backend (hybrid_system lazy-loaded)
     backend = get_backend()
     logger.info("Backend initialized")
-    
+
+    # Langflow flow mode: log status and eagerly bind the flows (best-effort — langflow may
+    # not be up yet; it will retry on first request).
+    if backend.settings.enable_langflow_flows:
+        logger.info("Langflow flow mode ENABLED — ingest/query run via Langflow flows at %s",
+                    backend.settings.langflow_url)
+        try:
+            fsvc = await backend._get_flow_service()
+            logger.info("Langflow flows bound — ingest_flow_id=%s, query_flow_id=%s",
+                        fsvc.ingestion_flow_id, fsvc.query_flow_id)
+        except Exception as e:
+            logger.warning("Could not bind Langflow flows at startup (will retry on first request): %s", e)
+    else:
+        logger.info("Langflow flow mode disabled (ENABLE_LANGFLOW_FLOWS not true) — using direct pipeline")
+
     # Check if incremental updates enabled
     enable_incremental = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower() == 'true'
     postgres_url = os.getenv('POSTGRES_INCREMENTAL_URL')

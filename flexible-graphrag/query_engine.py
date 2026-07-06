@@ -369,9 +369,15 @@ async def search(system, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
                 logger.info("Connected Weaviate async client for search operation")
 
     # Lazy retriever initialisation
+    logger.debug(f"[SEARCH/QA INIT] System type: {type(system).__name__}, system id: {id(system)}")
+    logger.debug(f"[SEARCH/QA INIT] system.hybrid_retriever before check: {system.hybrid_retriever is not None}, type: {type(system.hybrid_retriever).__name__ if system.hybrid_retriever else 'None'}")
+
     if not system.hybrid_retriever:
         logger.info("Hybrid retriever not initialized - setting up now...")
+        logger.info(f"[SEARCH/QA INIT] About to call setup_hybrid_retriever on system {id(system)} ({type(system).__name__})")
         setup_hybrid_retriever(system)
+        logger.debug(f"[SEARCH/QA INIT] After setup_hybrid_retriever: system.hybrid_retriever={system.hybrid_retriever is not None}, type: {type(system.hybrid_retriever).__name__ if system.hybrid_retriever else 'None'}")
+
         if not system.hybrid_retriever:
             has_rdf = str(getattr(system.config, "rdf_graph_db", "none")) != "none"
             if has_rdf and str(system.config.vector_db) == "none" and str(system.config.search_db) == "none":
@@ -380,6 +386,8 @@ async def search(system, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
                     "Check that the RDF store is running and RDF_GRAPH_DB is set correctly. "
                     "See server logs for details."
                 )
+            logger.error(f"[SEARCH/QA INIT] CRITICAL: After setup_hybrid_retriever, system.hybrid_retriever is still None!")
+            logger.error(f"[SEARCH/QA INIT] System state - vector_index: {system.vector_index is not None}, graph_index: {system.graph_index is not None}, search_index: {getattr(system, 'search_index', None) is not None}")
             raise ValueError("No search indexes available. The databases may be empty or disconnected.")
 
     logger.info(f"Searching for query: '{query}' with top_k={top_k}")
@@ -701,9 +709,15 @@ def get_query_engine(system, **kwargs):
         logger.info("Weaviate async client will be connected on first query")
 
     # Lazy retriever initialisation
+    logger.debug(f"[SEARCH/QA INIT] System type: {type(system).__name__}, system id: {id(system)}")
+    logger.debug(f"[SEARCH/QA INIT] system.hybrid_retriever before check: {system.hybrid_retriever is not None}, type: {type(system.hybrid_retriever).__name__ if system.hybrid_retriever else 'None'}")
+
     if not system.hybrid_retriever:
         logger.info("Hybrid retriever not initialized - setting up now...")
+        logger.info(f"[SEARCH/QA INIT] About to call setup_hybrid_retriever on system {id(system)} ({type(system).__name__})")
         setup_hybrid_retriever(system)
+        logger.debug(f"[SEARCH/QA INIT] After setup_hybrid_retriever: system.hybrid_retriever={system.hybrid_retriever is not None}, type: {type(system.hybrid_retriever).__name__ if system.hybrid_retriever else 'None'}")
+
         if not system.hybrid_retriever:
             has_rdf = str(getattr(system.config, "rdf_graph_db", "none")) != "none"
             if has_rdf and str(system.config.vector_db) == "none" and str(system.config.search_db) == "none":
@@ -712,6 +726,8 @@ def get_query_engine(system, **kwargs):
                     "Check that the RDF store is running and RDF_GRAPH_DB is set correctly. "
                     "See server logs for details."
                 )
+            logger.error(f"[SEARCH/QA INIT] CRITICAL: After setup_hybrid_retriever, system.hybrid_retriever is still None!")
+            logger.error(f"[SEARCH/QA INIT] System state - vector_index: {system.vector_index is not None}, graph_index: {system.graph_index is not None}, search_index: {getattr(system, 'search_index', None) is not None}")
             raise ValueError("No search indexes available. The databases may be empty or disconnected.")
 
     # Partial state check

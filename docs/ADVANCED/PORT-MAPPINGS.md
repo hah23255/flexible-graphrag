@@ -66,10 +66,12 @@ The following port conflicts were identified and resolved for new vector databas
 ### Search Databases
 | **Service** | **Port(s)** | **Purpose** | **Dashboard URL** |
 |-------------|-------------|-------------|-------------------|
-| Elasticsearch | 9200, 9300 | Search engine | - |
+| Elasticsearch | 9200 (9300 internal) | Search engine | - |
 | Kibana | 5601 | Elasticsearch dashboard | http://localhost:5601 |
-| OpenSearch | 9201, 9301 | Search engine | - |
+| OpenSearch | 9201 (9301 internal) | Search engine | - |
 | OpenSearch Dashboards | 5602 | OpenSearch dashboard | http://localhost:5602 |
+
+**Transport ports (9300/9301) note**: The inter-node transport ports are **not exposed to the host** — these are single-node deployments with no peer nodes, and the app connects only over HTTP (9200/9201). On Windows this also **avoids a hard failure**: 9300 and 9301 fall inside a Hyper-V/WinNAT-reserved range (commonly `9248-9347`), so binding them yields `bind: An attempt was made to access a socket in a way forbidden by its access permissions`. The container still binds 9300/9301 internally for Elasticsearch/OpenSearch's own use. Check current reservations with `netsh interface ipv4 show excludedportrange protocol=tcp`.
 
 ### Content Management (Alfresco Community)
 | **Service** | **Port(s)** | **Purpose** | **Dashboard URL** |

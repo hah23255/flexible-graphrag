@@ -126,15 +126,18 @@ def get_langchain_llm(config: Any) -> Any:
             )
 
         if provider == "vertex_ai":
-            from langchain_google_vertexai import ChatVertexAI  # type: ignore[import-not-found]
+            # Vertex via the combined langchain-google-genai (ChatGoogleGenerativeAI with
+            # vertexai=True) — the same class as the Gemini path. Replaces the deprecated,
+            # no-longer-installed langchain-google-vertexai (which also pulled in numexpr).
+            from langchain_google_genai import ChatGoogleGenerativeAI
             from google.genai.types import (
                 GenerateContentConfig as _GCC,
                 AutomaticFunctionCallingConfig as _AFCConfig,
             )
             _AFC_OFF = _AFCConfig(disable=True)
 
-            class _ChatVertexNoAFC(ChatVertexAI):
-                """ChatVertexAI with Automatic Function Calling disabled (same fix as Gemini)."""
+            class _ChatVertexNoAFC(ChatGoogleGenerativeAI):
+                """ChatGoogleGenerativeAI (Vertex mode) with Automatic Function Calling disabled."""
 
                 def _build_request_config(self, *args: Any, **kwargs: Any) -> _GCC:
                     cfg: _GCC = super()._build_request_config(*args, **kwargs)
@@ -142,9 +145,10 @@ def get_langchain_llm(config: Any) -> Any:
                     return cfg
 
             return _ChatVertexNoAFC(
-                model_name=llm_config.get("model", "gemini-2.0-flash-001"),
-                location=llm_config.get("location", "us-central1"),
+                model=llm_config.get("model", "gemini-2.0-flash-001"),
                 temperature=llm_config.get("temperature", 0.1),
+                vertexai=True,
+                location=llm_config.get("location", "us-central1"),
                 **_kw(project=llm_config.get("project")),
             )
 

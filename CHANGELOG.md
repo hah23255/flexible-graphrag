@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-07-06] — Langflow integration + backend fixes
+
+### Added
+
+- **Langflow custom components** (`flexible-graphrag/langflow_components/`) — 12 `Flexible*` nodes (data source, document processor, text splitter, vector/search/property-graph/RDF stores, KG extraction, hybrid search, AI query, summaries) that delegate to the real backend machinery (full LangChain + LlamaIndex), plus ready-made ingestion + query flows in `flows/`.
+- **Optional Langflow visual flows for app ingest pipeline, search, and AI query** (`ENABLE_LANGFLOW_FLOWS`, off by default) — the app runs the ingest pipeline, hybrid search, and AI query through the Langflow visual flows (via the Langflow REST API) instead of calling the system directly (OpenRAG-style), allowing the flows to be customized. Supports all 13 data sources, skip-graph, and incremental sync (add/delete/modify). Config: `LANGFLOW_URL`, `LANGFLOW_API_KEY`, `INGEST_FLOW_PATH`, `SEARCH_FLOW_PATH`, `AIQUERY_FLOW_PATH`, `QUERY_FLOW_PATH`.
+
+### Changed / Fixed (non-Langflow backend)
+
+- **Python 3.14 support** — runs on the python.org 3.14.5 build (OpenSSL 3.0.x). On 3.14, `nest_asyncio.apply()` is made a no-op (nest_asyncio is incompatible with 3.14's asyncio and broke the event loop), and the google-genai (Gemini/Vertex) LLM's internal `asyncio.run()` is redirected to a worker thread — so KG extraction no longer errors with "asyncio.run() cannot be called from a running event loop".
+- **Vertex AI (LangChain backend)** — migrated to `ChatGoogleGenerativeAI(vertexai=True)` (langchain-google-genai), dropping the deprecated `langchain-google-vertexai` (and its `numexpr` dependency).
+- **Default Gemini/Vertex embedding** → `gemini-embedding-001` (the `-2-preview` model returns 1 vector per batch, breaking the LangChain vector store).
+- **RDF / ontology (LangChain backend)** — the local RDF query now loads all configured ontology files merged together (was using only the first); ontology-manager init / load-files startup timing changed.
+- **Web page data source** (`sources/web.py`) — extracts readable text instead of raw HTML (`SimpleWebPageReader(html_to_text=True)`), so a page no longer balloons into hundreds of markup "chunks".
+- **LangChain KG entity/relation counts** — the LangChain `LLMGraphTransformer` graph extraction now returns its entity/relation counts (were `0`), so the **Langflow** ingestion result/summary reports them.
+- **Docker** — dropped the Elasticsearch/OpenSearch `9300`/`9301` transport host-port mappings (fall in a Windows WinNAT-reserved range), keeping the `9200` / `9201` only
+
+---
+
 ## [2026-06-19] v0.6.3 — Frontend package cleanup and icons
 
 ### Fixed

@@ -91,7 +91,7 @@ def build_lc_embedding(config: "AppSettings"):
         # dimension tables and existing vector collections.
         _dim = getattr(config, "embedding_dimension", None) or 768
         return GoogleGenerativeAIEmbeddings(
-            model=embedding_model or "models/gemini-embedding-2-preview",
+            model=embedding_model or "models/gemini-embedding-001",
             google_api_key=_google_key,
             output_dimensionality=int(_dim),
         )
@@ -124,7 +124,7 @@ def build_lc_embedding(config: "AppSettings"):
         # dimension tables and existing vector collections.
         _dim = getattr(config, "embedding_dimension", None) or 768
         return GoogleGenerativeAIEmbeddings(
-            model=embedding_model or "models/gemini-embedding-2-preview",
+            model=embedding_model or "models/gemini-embedding-001",
             output_dimensionality=int(_dim),
         )
 

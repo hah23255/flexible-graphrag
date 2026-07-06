@@ -96,13 +96,13 @@ def get_embedding_dimension(
 
 def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settings):
     """Create a LlamaIndex embedding model based on configuration."""
-    logger.info(f"Creating embedding model with LLM provider: {provider}")
+    logger.debug(f"[EmbFactory] Creating embedding model with LLM provider: {provider}")
 
-    embedding_kind = getattr(settings, "embedding_kind", None)
-    embedding_model = getattr(settings, "embedding_model", None)
-    embedding_dimension = getattr(settings, "embedding_dimension", None)
+    embedding_kind = getattr(settings, "embedding_kind", None) if settings else None
+    embedding_model = getattr(settings, "embedding_model", None) if settings else None
+    embedding_dimension = getattr(settings, "embedding_dimension", None) if settings else None
 
-    logger.info(f"Embedding kind: {embedding_kind}, Model: {embedding_model}, Dimension: {embedding_dimension}")
+    logger.debug(f"[EmbFactory] From settings - kind: {embedding_kind}, model: {embedding_model}, dim: {embedding_dimension}")
 
     if embedding_kind:
         logger.info(f"Using explicit embedding_kind: {embedding_kind}")
@@ -114,7 +114,9 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             ) or os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OpenAI embeddings require OPENAI_API_KEY")
-            return OpenAIEmbedding(model_name=model_name, api_key=api_key)
+            emb = OpenAIEmbedding(model_name=model_name, api_key=api_key)
+            logger.debug(f"[EmbFactory] Created OpenAIEmbedding")
+            return emb
 
         elif embedding_kind == "ollama":
             model_name = embedding_model or "nomic-embed-text"
@@ -122,7 +124,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             return OllamaEmbedding(model_name=model_name, base_url=base_url)
 
         elif embedding_kind == "google":
-            model_name = embedding_model or "gemini-embedding-2-preview"
+            model_name = embedding_model or "gemini-embedding-001"
             # When EMBEDDING_KIND=google but LLM_PROVIDER is different, config belongs
             # to that other provider — prefer the explicit Google env vars.
             api_key = (
@@ -170,7 +172,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             )
 
         elif embedding_kind == "vertex":
-            model_name = embedding_model or "gemini-embedding-2-preview"
+            model_name = embedding_model or "gemini-embedding-001"
             # When EMBEDDING_KIND=vertex but LLM_PROVIDER is different, config belongs
             # to that other provider — prefer explicit Vertex env vars.
             project = os.getenv("VERTEX_AI_PROJECT") or (config.get("project") if provider == LLMProvider.VERTEX_AI else None)
@@ -240,17 +242,22 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             logger.warning(f"Unknown embedding_kind '{embedding_kind}', using provider default")
 
     # Provider defaults
+    logger.info(f"[EmbFactory] Using provider defaults for {provider}")
     if provider in (LLMProvider.OPENAI, LLMProvider.AZURE_OPENAI):
         if provider == LLMProvider.AZURE_OPENAI:
             model_name = embedding_model or "text-embedding-3-small"
-            return AzureOpenAIEmbedding(
+            emb = AzureOpenAIEmbedding(
                 model=model_name,
                 azure_endpoint=config["azure_endpoint"],
                 api_key=config["api_key"],
                 api_version=config.get("api_version", "2024-02-01"),
             )
+            logger.info(f"[EmbFactory] Returning AzureOpenAIEmbedding: {type(emb).__name__}")
+            return emb
         model_name = embedding_model or "text-embedding-3-small"
-        return OpenAIEmbedding(model_name=model_name, api_key=config.get("api_key"))
+        emb = OpenAIEmbedding(model_name=model_name, api_key=config.get("api_key"))
+        logger.info(f"[EmbFactory] Returning OpenAIEmbedding (provider default): {type(emb).__name__}")
+        return emb
 
     elif provider == LLMProvider.OLLAMA:
         model_name = embedding_model or "nomic-embed-text"
@@ -258,7 +265,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
         return OllamaEmbedding(model_name=model_name, base_url=base_url)
 
     elif provider == LLMProvider.GEMINI:
-        model_name = embedding_model or "gemini-embedding-2-preview"
+        model_name = embedding_model or "gemini-embedding-001"
         target_dim = embedding_dimension or 768
         params: Dict[str, Any] = {
             "model_name": model_name,
@@ -277,7 +284,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
         return OllamaEmbedding(model_name=model_name, base_url=base_url)
 
     elif provider == LLMProvider.VERTEX_AI:
-        model_name = embedding_model or "gemini-embedding-2-preview"
+        model_name = embedding_model or "gemini-embedding-001"
         project = config.get("project")
         if not project:
             raise ValueError("Vertex AI embeddings require 'project' parameter")
