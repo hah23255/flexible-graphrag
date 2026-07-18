@@ -175,6 +175,9 @@ class FilesystemDetector(ChangeDetector):
         
         # Track known files for CREATE vs MODIFY detection
         self.known_file_paths = set()
+        # Files currently being ingested — dedups a concurrent periodic-refresh + watchdog overlap
+        # (both call _process_via_backend during the window before document_state is written).
+        self._in_flight = set()
         
         # Track recent events to deduplicate CREATE+UPDATE bursts
         self.recent_events: dict = {}  # path -> (event_type, timestamp)
@@ -430,9 +433,19 @@ class FilesystemDetector(ChangeDetector):
         if not self.backend:
             logger.error("Backend not injected into FilesystemDetector - cannot process file")
             return
-        
+
+        # In-flight guard: the periodic refresh AND the watchdog both call this for a newly-added
+        # file and can overlap during the ingest window before document_state is written. Skip the
+        # second concurrent trigger (asyncio → check-then-add is atomic). Genuine modifies still run:
+        # the modify path deletes document_state before re-adding, and a file is only in _in_flight
+        # while a process is actively running for it.
+        if full_path in self._in_flight:
+            logger.info(f"Filesystem: {full_path} already being ingested (periodic/watchdog overlap) — skipping duplicate")
+            return
+        self._in_flight.add(full_path)
+
         logger.info(f"Processing {relative_path} via backend (full pipeline)")
-        
+
         try:
             skip_graph = getattr(self, 'skip_graph', False)
             processing_id = f"incremental_fs_{Path(full_path).stem[:8]}"
@@ -462,7 +475,9 @@ class FilesystemDetector(ChangeDetector):
         except Exception as e:
             logger.error(f"Failed to process {relative_path} via backend: {e}")
             raise
-    
+        finally:
+            self._in_flight.discard(full_path)
+
     async def _create_document_state_from_processing_status(
         self, processing_id: str, filename: str, full_path: str
     ):

@@ -165,6 +165,56 @@ async def update_pg_graph(
         # --- Phase B: Graph DB update (store I/O) ---
         graph_update_start = time.time()
 
+        # Property-graph stores (Neo4j, etc.) reject dict-valued properties
+        # ("Property values can only be of primitive types or arrays thereof. Encountered: Map{}").
+        # Two sources of dicts: (a) chunk-node metadata from readers like AzStorageBlobReader
+        # (Azure custom-metadata map), and (b) the extracted ENTITY/RELATION .properties — KG
+        # extraction copies source metadata into them, and PropertyGraphIndex upserts those same
+        # objects (popped from KG_NODES_KEY/KG_RELATIONS_KEY). Stringify non-primitives in both.
+        try:
+            import json as _json
+            from llama_index.core.graph_stores.types import KG_NODES_KEY as _KGN, KG_RELATIONS_KEY as _KGR
+
+            def _prim(_v):
+                return _v is None or isinstance(_v, (str, int, float, bool))
+
+            def _clean_dict(_d):
+                if not isinstance(_d, dict):
+                    return
+                for _k, _v in list(_d.items()):
+                    if _prim(_v):
+                        continue
+                    # Neo4j accepts arrays of primitives but NOT arrays containing null
+                    # ("Collections containing null values can not be stored in properties" —
+                    # e.g. SharePoint's allowed_sharePointGroup_display_names=[null,null,null]).
+                    # Keep only all-non-null-primitive lists; stringify anything else.
+                    if isinstance(_v, (list, tuple)) and all(
+                        isinstance(_x, (str, int, float, bool)) for _x in _v
+                    ):
+                        _d[_k] = list(_v)
+                    else:
+                        try:
+                            _d[_k] = _json.dumps(_v, default=str)
+                        except Exception:
+                            _d[_k] = str(_v)
+
+            for _n in nodes:
+                _md = getattr(_n, "metadata", None)
+                if not isinstance(_md, dict):
+                    continue
+                # (b) extracted entity / relation properties (same objects that get upserted)
+                for _kg_key in (_KGN, _KGR):
+                    for _obj in _md.get(_kg_key, []) or []:
+                        _clean_dict(getattr(_obj, "properties", None))
+                # (a) chunk-node metadata — leave the KG containers (objects) in place
+                for _k in list(_md.keys()):
+                    if _k not in (_KGN, _KGR):
+                        _sub = {_k: _md[_k]}
+                        _clean_dict(_sub)
+                        _md[_k] = _sub[_k]
+        except Exception as _san_err:
+            logger.warning(f"Graph node-metadata sanitization skipped: {_san_err}")
+
         if pg_disabled:
             graph_update_duration = 0.0
             logger.info(

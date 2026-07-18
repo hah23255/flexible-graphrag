@@ -1,6 +1,6 @@
 # Supported File Formats
 
-Flexible GraphRAG supports a wide range of document, image, and audio formats through its two parser options: **Docling** (local, default) and **LlamaParse** (cloud API).
+Flexible GraphRAG supports a wide range of document, image, and audio formats through its three parser options: **Docling** (local, default), **LlamaParse** (cloud API), and **LiteParse** (local, lightweight).
 
 ## Document Formats
 
@@ -43,6 +43,21 @@ Flexible GraphRAG supports a wide range of document, image, and audio formats th
 - Multimodal mode: bring your own API keys (OpenAI GPT-4o, Anthropic Claude, Google Gemini, Azure OpenAI)
 - Output formats: Markdown, plain text, raw JSON, XLSX (extracted tables), PDF, images, structured output (beta)
 - Get your API key at [LlamaCloud](https://cloud.llamaindex.ai/)
+
+### LiteParse (free, local, lightweight)
+
+- Local Rust/PyO3 parser ([run-llama/liteparse](https://github.com/run-llama/liteparse)) — no API key, nothing sent to third parties
+- Fast and lightweight; spatial text extraction with bounding boxes
+- Natively parses **PDFs** (`.pdf`); plain `.txt`/`.md` are read directly
+- **Other formats need external tools** (see the [multi-format guide](https://developers.llamaindex.ai/liteparse/guides/multi-format/)):
+  - **Office / spreadsheets** (`.doc .docx .ppt .pptx .xls .xlsx .odt .rtf .csv .ods …`) require **LibreOffice**
+  - **Image files** (`.jpg .png .gif .bmp .tiff .webp .svg`) require **ImageMagick** (converts image → PDF first)
+  - Install — **Windows (admin terminal):** `choco install libreoffice-fresh` and `choco install imagemagick.app` (you may need to add `C:\Program Files\LibreOffice\program` to PATH and restart); **macOS:** `brew install --cask libreoffice` and `brew install imagemagick`; **Ubuntu/Debian:** `apt-get install libreoffice imagemagick`
+  - Without these tools, such files error and are **skipped** — use **Docling** or **LlamaParse** (below) for Office/image-heavy corpora; both handle those formats natively with no external tools
+- Bundled Tesseract OCR (zero setup); optional external OCR servers; tunable via `LITEPARSE_OCR`, `LITEPARSE_DPI`, `LITEPARSE_NUM_WORKERS`
+- Output: Markdown / plain text
+- Enable with `DOCUMENT_PARSER=liteparse`; install via `uv pip install liteparse`
+- For dense tables or complex multi-column layouts, Docling or LlamaParse may extract more structure
 
 ## Output Format Selection
 

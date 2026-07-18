@@ -136,6 +136,9 @@ class OneDriveSource(BaseDataSource):
                         # Fallback - just use filename from metadata
                         human_path = doc.metadata.get('file_name', doc.metadata.get('name', ''))
                     
+                    # Normalize separators — OneDriveReader/os.path.join can produce mixed slashes
+                    # on Windows (e.g. "/sample-docs\\space-station.txt"); cloud paths use "/".
+                    human_path = (human_path or '').replace('\\', '/')
                     # Set file_path to human-readable version (this is what vector DB will use)
                     doc.metadata['file_path'] = human_path
                     doc.metadata['human_file_path'] = human_path
@@ -268,6 +271,9 @@ class OneDriveSource(BaseDataSource):
                             # Fallback - just use filename from metadata
                             human_path = doc.metadata.get('file_name', doc.metadata.get('name', ''))
                         
+                        # Normalize separators — OneDriveReader/os.path.join can produce mixed
+                        # slashes on Windows (e.g. "/sample-docs\\space-station.txt"); use "/".
+                        human_path = (human_path or '').replace('\\', '/')
                         # Set file_path to human-readable version (this is what vector DB will use)
                         doc.metadata['file_path'] = human_path
                         doc.metadata['human_file_path'] = human_path

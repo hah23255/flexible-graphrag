@@ -54,14 +54,18 @@ uv pip install --native-tls langflow==1.10.1
 uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"   # LlamaIndex + fuller LangChain backends (e.g. Neo4j)
 
 # Point Langflow at the custom components, then run it FROM the flexible-graphrag backend dir
-$env:LANGFLOW_COMPONENTS_PATH = "C:/newdev3/flexible-graphrag-flow/flexible-graphrag/langflow_components"
+# (the relative path resolves because you run from that dir)
+$env:LANGFLOW_COMPONENTS_PATH = "langflow_components"
 langflow run --port 7860 --log-level WARNING --log-file langflow.log
 ```
 
 Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; once that finishes, the **Flexible GraphRAG** category with the 12 `Flexible: *` nodes appears in the sidebar. Open <http://localhost:7860> to confirm.
 
-!!! note "cmd.exe instead of PowerShell"
-    In Command Prompt, set the components path **without quotes** (cmd stores the quotes as part of the value): `set LANGFLOW_COMPONENTS_PATH=C:\newdev3\flexible-graphrag-flow\flexible-graphrag\langflow_components`. Either `/` or `\` works.
+!!! note "Other shells"
+    The block above is **PowerShell**. On **Windows Command Prompt** (cmd.exe, not PowerShell), set the path **without quotes** (cmd stores the quotes as part of the value): `set LANGFLOW_COMPONENTS_PATH=langflow_components`. On **macOS / Linux** (bash/zsh): `export LANGFLOW_COMPONENTS_PATH=langflow_components`. (All relative to the backend dir you run Langflow from.)
+
+!!! warning "In flow mode, the components read the *Langflow* process's `.env` — not the backend's"
+    When `ENABLE_LANGFLOW_FLOWS=true`, ingest/search/AI-query run **inside the Langflow process**, so every backend setting the components read — `DOCUMENT_PARSER`, `CHUNK_SIZE`, the vector/search/graph/RDF DBs, LLM & embeddings — comes from the `.env` **Langflow** loads, which is the `.env` in the folder one level up from `LANGFLOW_COMPONENTS_PATH` (i.e. the flexible-graphrag app dir Langflow runs from). The backend's own `.env` only governs **non-flow** (direct) runs. If the two processes run from the **same** directory (the two-terminal setup above), they share one `.env` and this never surprises you. But if they run from **different** folders — e.g. an installed-wheel backend in one folder and Langflow from a source checkout in another — editing only the backend's `.env` won't change the flow's behavior (a common symptom: you switch `DOCUMENT_PARSER` but the flow keeps using the old parser). Fix: edit the `.env` next to the `langflow_components` Langflow is using. No Langflow restart is needed — the components reload the `.env` on the next run (`load_dotenv(override=True)`).
 
 ### Terminal 2 — backend venv
 
@@ -92,6 +96,8 @@ Then start the backend as usual. Ingest, hybrid search, and AI query now run thr
 | `QUERY_FLOW_PATH` | `flows/fg_query_flow.json` | Combined Hybrid Search + AI Query flow — Langflow **Playground** only (the app doesn't run it). |
 
 All other backend settings (data sources, vector/search/graph/RDF DBs, LLM & embeddings, chunking, KG extraction, LI/LC framework pickers) are read from the same `.env` and apply unchanged.
+
+> **Flow paths when running an installed build.** The `flows/…` defaults above are for a **source checkout**. When you run the installed console command — `flexible-graphrag` (or `flexible-graphrag.exe` on Windows; `python -m start` is equivalent) — the default resolves relative to the installed package (site-packages), **not** your flows, so **set the `*_FLOW_PATH` variables**. A relative path (`flows/fg_ingestion_flow.json`) resolves from the **current working directory** you launch from — the simplest setup is a run folder holding `.env`, a `flows/` copy, and a `schemas/` copy (for `ONTOLOGY_DIR`), and you launch from that folder. Use absolute paths if your working directory varies. (Same cwd rule as `ONTOLOGY_DIR`/`ONTOLOGY_PATH`.)
 
 ---
 

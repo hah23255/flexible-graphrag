@@ -79,10 +79,10 @@ Each query node reuses a **warm cached system** (`run_with_query_system` in `_fg
 
 ## Component loading & Langflow 1.10.1 constraints
 
-Components are loaded by pointing Langflow at the package directory:
+Components are loaded by pointing Langflow at the package directory (relative to the `flexible-graphrag` backend dir you run Langflow from):
 
 ```ini
-LANGFLOW_COMPONENTS_PATH=…/flexible-graphrag/langflow_components
+LANGFLOW_COMPONENTS_PATH=langflow_components
 ```
 
 Langflow's loader (`lfx.custom.validate.prepare_global_scope`) only executes **top-level** `import` / `class` / `def` AST nodes in a component file. Three patterns are required for the components to register on Langflow 1.10.1:

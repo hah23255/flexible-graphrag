@@ -24,6 +24,32 @@ from config import Settings as AppSettings
 logger = logging.getLogger("flexible_graphrag.incremental.engine")
 
 
+def _is_benign_delete_conflict(e: Exception) -> bool:
+    """True when a delete failure just means the doc was already gone — i.e. a concurrent/duplicate
+    delete, which is harmless (idempotent). Periodic deletion-detection is left ON as a missed-delete
+    backstop, so it can race the delta stream's own DELETE for the same doc; the loser hits this. Most
+    targets no-op on no-match, but Elasticsearch `_delete_by_query` raises a 409 version_conflict with
+    "no document was found". Detected by string so it works across ES/OpenSearch client versions."""
+    s = f"{type(e).__name__}: {e}".lower()
+    return (
+        "version_conflict" in s
+        or "conflicterror" in s
+        or "409" in s
+        or "no document was found" in s
+        or "not found" in s
+        or "404" in s
+    )
+
+
+def _log_delete_outcome(label: str, e: Exception) -> None:
+    """Log a per-target delete failure — quietly (INFO) if it's a benign already-deleted conflict from
+    a concurrent/duplicate delete, loudly (WARNING) otherwise."""
+    if _is_benign_delete_conflict(e):
+        logger.info(f"  {label}: already deleted (concurrent/idempotent, harmless) — {type(e).__name__}")
+    else:
+        logger.warning(f"  {label} delete failed: {e}")
+
+
 class IncrementalUpdateEngine:
     """
     Applies document changes to LlamaIndex indexes.
@@ -264,14 +290,14 @@ class IncrementalUpdateEngine:
                 _vector_adapter.delete(doc_id)
                 logger.info(f"  Deleted from LC vector store (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LC vector delete failed: {e}")
+                _log_delete_outcome("LC vector", e)
         elif _vector_adapter is not None and hasattr(_vector_adapter, "delete"):
             # LI adapter: use adapter.delete() which calls self._store.delete()
             try:
                 _vector_adapter.delete(doc_id)
                 logger.info(f"  Deleted from LI vector store (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LI vector delete failed: {e}")
+                _log_delete_outcome("LI vector", e)
         elif self.vector_index:
             # Fallback: use VectorStoreIndex.delete_ref_doc
             try:
@@ -291,7 +317,7 @@ class IncrementalUpdateEngine:
                     self.vector_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 logger.info(f"  Deleted from LI vector index (delete_ref_doc)")
             except Exception as e:
-                logger.warning(f"  LI vector index delete failed: {e}")
+                _log_delete_outcome("LI vector index", e)
 
         # ── Search store delete ───────────────────────────────────────────────
         # LC mode: custom delete using ES/OpenSearch delete_by_query.
@@ -307,7 +333,7 @@ class IncrementalUpdateEngine:
                 _search_adapter.delete(doc_id)
                 logger.info(f"  Deleted from LC search store (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LC search delete failed: {e}")
+                _log_delete_outcome("LC search", e)
         elif _search_adapter is not None:
             # LI mode: prefer the async delete path on the underlying store to avoid
             # "There is no current event loop" errors from asyncio.run() inside sync delete().
@@ -323,14 +349,14 @@ class IncrementalUpdateEngine:
                     _search_adapter.delete(doc_id)
                     logger.info(f"  Deleted from LI search adapter (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LI search delete failed: {e}")
+                _log_delete_outcome("LI search", e)
         elif self.search_index:
             # Final fallback: use delete_ref_doc on the search index
             try:
                 self.search_index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 logger.info(f"  Deleted from LI search index (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LI search delete failed: {e}")
+                _log_delete_outcome("LI search", e)
 
         # ── Property graph delete ─────────────────────────────────────────────
         # LC mode: LangChainPGAdapter.delete() uses Cypher/AQL/etc. with ref_doc_id.
@@ -346,7 +372,7 @@ class IncrementalUpdateEngine:
                 _pg_adapter.delete(doc_id)
                 logger.info(f"  Deleted from LC property graph (ref_doc_id={doc_id})")
             except Exception as e:
-                logger.warning(f"  LC graph delete failed: {e}")
+                _log_delete_outcome("LC graph", e)
         else:
             # LI mode: cascading delete via graph_index.delete_ref_doc + store.delete(properties)
             _li_graph_index = self.graph_index or (getattr(hs, "graph_index", None) if hs else None)
@@ -355,7 +381,7 @@ class IncrementalUpdateEngine:
                     self._delete_from_graph_helper(doc_id, _li_graph_index, "graph")
                     logger.info(f"  Deleted from LI graph index (ref_doc_id={doc_id})")
                 except Exception as e:
-                    logger.warning(f"  LI graph delete failed: {e}")
+                    _log_delete_outcome("LI graph", e)
 
         # Delete from RDF stores (when rdf_graph_db != none)
         if self.hybrid_system is not None:
@@ -519,19 +545,27 @@ class IncrementalUpdateEngine:
             await self.state_manager.mark_target_synced(doc_id, 'search')
         logger.info(f"  Search index updated")
     
-    async def process_change_event(self, event: ChangeEvent, detector, config_id: str):
+    async def process_change_event(self, event: ChangeEvent, detector, config_id: str,
+                                   from_periodic: bool = False):
         """
         Process a single change event.
-        
+
         For CREATE/MODIFY events:
         1. Load and prepare document
         2. Delete from all indexes (if document already exists)
         3. Insert to all indexes
         4. State is preserved with updated sync timestamps
-        
+
         For DELETE events:
         1. Delete from all indexes
         2. Remove state from PostgreSQL (hard delete)
+
+        Args:
+            from_periodic: True when called from periodic_refresh(), False when called for an
+                event-stream event (process_batch). Both paths funnel through this method, so the
+                NEW-file hand-off below MUST know which caller it is serving: MSGraph's delta stream
+                yields its CREATEs *through* here, and skipping those (as the periodic refresh should
+                be skipped) means nothing ingests the file at all.
         """
         metadata = event.metadata
         # Use normalized path for filesystem so path case (e.g. C:\ vs c:\) does not break lookups
@@ -693,13 +727,20 @@ class IncrementalUpdateEngine:
                     logger.info(f"NEW FILE: {metadata.path}: Skipping in periodic refresh (will be processed by event stream)")
                     return
                 
-                # For MicrosoftGraphDetector, only skip if change polling is enabled
+                # MicrosoftGraphDetector is different from the detectors above: its delta stream does
+                # NOT call _process_via_backend directly — it yields ChangeEvents that come back
+                # through THIS method (via process_batch). So only the PERIODIC caller may hand off to
+                # the delta stream; the delta stream's own CREATEs must fall through and be processed.
+                # (Skipping both is why a newly added file was ingested by nothing.)
                 if detector_name == 'MicrosoftGraphDetector':
-                    if hasattr(detector, 'enable_change_polling') and detector.enable_change_polling:
-                        logger.info(f"NEW FILE: {metadata.path}: Skipping in periodic refresh (will be processed by change polling)")
+                    if from_periodic and getattr(detector, 'enable_change_polling', False):
+                        logger.info(f"NEW FILE: {metadata.path}: Skipping in periodic refresh (will be processed by delta stream)")
                         return
-                    else:
+                    elif from_periodic:
                         logger.info(f"NEW FILE: {metadata.path}: Processing via backend (change polling disabled)...")
+                        # Fall through to process via backend
+                    else:
+                        logger.info(f"NEW FILE: {metadata.path}: Processing via backend (from delta stream)...")
                         # Fall through to process via backend
                 
                 # For other detectors without event streams (GCS, Azure, Filesystem), process via backend
@@ -766,7 +807,7 @@ class IncrementalUpdateEngine:
                         is_modify_delete=True,
                         modify_callback=_modify_add_callback,
                     )
-                    await self.process_change_event(delete_event, detector, config_id)
+                    await self.process_change_event(delete_event, detector, config_id, from_periodic=from_periodic)
                     return
 
                 # For detectors with real-time events (Box, Drive, S3, Alfresco), skip —
@@ -991,6 +1032,16 @@ class IncrementalUpdateEngine:
             logger.info(f"   These files are in document_state but NOT in current source listing")
         else:
             logger.info(f"No deletions detected (all document_state files found in source)")
+
+        # NOTE (intentionally NOT gated): the periodic deletion-detection is kept ALWAYS ON, even for
+        # MSGraph with the delta stream active. It is the backstop that guarantees "no missed deletes"
+        # if the delta stream ever drops a delete (e.g. a stale deltaLink resets to a fresh enumeration,
+        # which returns only current items and NO delete markers for anything removed during the gap).
+        # The cost is that periodic + delta can both delete the same doc when they fire close together —
+        # but a repeat delete is idempotent on every target (Neo4j MATCH…DELETE / SPARQL DELETE / Qdrant
+        # delete-by-id all no-op on no-match; only ES _delete_by_query raises a benign 409), so the
+        # duplicate is harmless and is logged quietly below rather than gated out. (Adds are different —
+        # a duplicate INGEST makes double chunks — so the NEW-file branch above IS gated.)
         
         new_max_ordinal = max_ordinal
         processed_count = 0
@@ -1011,7 +1062,7 @@ class IncrementalUpdateEngine:
             )
             
             try:
-                await self.process_change_event(event, detector, config_id)
+                await self.process_change_event(event, detector, config_id, from_periodic=True)
                 processed_count += 1
             except Exception as e:
                 logger.exception(f"Error processing {file_meta.path}: {e}")
@@ -1040,7 +1091,7 @@ class IncrementalUpdateEngine:
                     change_type=ChangeType.DELETE,
                     timestamp=None
                 )
-                await self.process_change_event(delete_event, detector, config_id)
+                await self.process_change_event(delete_event, detector, config_id, from_periodic=True)
                 processed_count += 1
             except Exception as e:
                 logger.exception(f"Error processing deletion of {deleted_id}: {e}")

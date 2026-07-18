@@ -1,6 +1,6 @@
 [project]
 name = "flexible-graphrag"
-version = "0.6.3"
+version = "0.7.0"
 description = "Open source AI context platform: document processing, knowledge graph auto-building, ontologies, GraphRAG/RAG, hybrid search (vector, property graph, RDF/SPARQL, fulltext), 13 LLM providers, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain, FastAPI, MCP server"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -44,6 +44,7 @@ keywords = [
     "document-processing",
     "docling",
     "llamaparse",
+    "liteparse",
     "alfresco",
 ]
 classifiers = [
@@ -74,6 +75,7 @@ dependencies = [
     "python-alfresco-api>=1.1.5",
     "docling-slim[standard]",
     "llama-cloud>=2.1",      # v2 unified SDK — LlamaParse now uses AsyncLlamaCloud from this package
+    "liteparse",             # local Rust/PyO3 PDF/office/image parser (DOCUMENT_PARSER=liteparse), no API key
     "neo4j",
     "numpy",
     "rapidfuzz",
@@ -106,6 +108,12 @@ dependencies = [
     "llama-index-embeddings-fireworks",
     "llama-index-embeddings-openai-like",
     "llama-index-embeddings-litellm",
+    # litellm is a transitive dep of the two llama-index-*-litellm packages above (BASE deps), so its
+    # pin must live here, not in an extra. Ceiling: litellm 1.92.0 added a Rust/PyO3 bridge (litellm-rust)
+    # that fails to build on Python 3.14 (PyO3 0.23.5 caps at 3.13); 1.91.x is pure-Python. Floor: keep
+    # langchain-arangodb (langchain-extras) from transitively downgrading it. Raise the ceiling once
+    # litellm ships a 3.14-capable build.
+    "litellm>=1.81,<1.92",
     "llama-index-vector-stores-neo4jvector",
     "llama-index-vector-stores-qdrant",
     "llama-index-vector-stores-elasticsearch",
@@ -303,7 +311,8 @@ langchain-extras = [
     "pyTigerGraph>=1.0.0",        # TigerGraph (required by langchain_community.graphs.TigerGraph)
     "requests-aws4auth>=1.2.0",   # Neptune bulk loading with IAM auth
     "SPARQLWrapper>=2.0.0",       # Advanced SPARQL queries against RDF stores
-    "litellm>=1.81",              # floor-pin: prevent langchain-arangodb transitive downgrade
+    # (litellm pin moved to BASE dependencies — it's transitive via llama-index-*-litellm and must
+    #  constrain a plain `pip install flexible-graphrag` too, not only the langchain-extras install.)
 ]
 
 # Docling OCR extras — only needed for scanned PDFs or image files (DOCLING_OCR=true).
@@ -382,6 +391,7 @@ py-modules = [
     "backend",
     "config",
     "factories",
+    "flow_service",   # Langflow flow-mode REST client (backend imports it when ENABLE_LANGFLOW_FLOWS)
     "hybrid_system",
     "incremental_system",
     "main",

@@ -791,23 +791,28 @@ except Exception as e:
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
-async def _create_document_states_after_ingestion(processing_id: str, config_id: str, paths: List[str], data_source: str = "filesystem"):
+async def _create_document_states_after_ingestion(processing_id: str, config_id: str, paths: List[str], data_source: str = "filesystem", skip_graph: bool = None):
     """
     Background task to create document_state records after ingestion completes.
     Delegates to PostIngestionStateManager for cleaner code organization.
+
+    skip_graph: pass explicitly so state creation doesn't need the datasource_config row yet
+    (lets it run before the sync detector is started — prevents re-ingest duplicates).
     """
     from post_ingestion_state import PostIngestionStateManager
-    
+
     state_manager = PostIngestionStateManager(incremental_manager.state_manager.postgres_url)
     await state_manager.create_document_states_after_ingestion(
-        processing_id, config_id, paths, data_source
+        processing_id, config_id, paths, data_source, skip_graph
     )
 
 
 @app.post("/api/ingest")
 async def ingest(request: IngestRequest):
     try:
-        logger.info(f"Starting async document ingestion: {request}")
+        # request embeds *_config models with credentials — redact before logging
+        from flow_service import redact_config_for_log
+        logger.info("Starting async document ingestion: %s", redact_config_for_log(request.dict()))
         logger.info(f"Data source: {request.data_source}, Paths: {request.paths}")
         
         data_source = request.data_source or str(settings.data_source)
@@ -875,7 +880,8 @@ async def ingest(request: IngestRequest):
                 _identity_parts += [sc.bucket_name or "", sc.prefix or ""]
             elif data_source == "azure_blob" and request.azure_blob_config:
                 ab = request.azure_blob_config
-                _identity_parts += [ab.connection_string or "", ab.container_name or ""]
+                # AzureBlobConfig has no connection_string field — identify by account + container + prefix
+                _identity_parts += [ab.account_url or "", ab.container_name or "", ab.prefix or ""]
             elif data_source == "gcs" and request.gcs_config:
                 gc = request.gcs_config
                 _identity_parts += [gc.bucket_name or "", gc.prefix or ""]
@@ -884,7 +890,8 @@ async def ingest(request: IngestRequest):
                 _identity_parts += [od.user_principal_name or ""]
             elif data_source == "sharepoint" and request.sharepoint_config:
                 sp = request.sharepoint_config
-                _identity_parts += [sp.site_name or "", sp.site_url or ""]
+                # SharePointConfig has no site_url — identify by site + folder scope
+                _identity_parts += [sp.site_name or "", sp.site_id or "", sp.folder_path or ""]
             elif data_source == "box" and request.box_config:
                 bx = request.box_config
                 _identity_parts += [bx.folder_id or ""]
@@ -893,7 +900,8 @@ async def ingest(request: IngestRequest):
                 _identity_parts += [gd.folder_id or ""]
             elif data_source == "cmis" and request.cmis_config:
                 cm = request.cmis_config
-                _identity_parts += [cm.url or "", cm.repository_id or "", cm.path or ""]
+                # CmisConfig has url + folder_path (no repository_id/path attrs)
+                _identity_parts += [cm.url or "", cm.folder_path or ""]
             _identity_str = "|".join(_identity_parts)
             config_id = str(_uuid_mod.uuid5(_DS_NAMESPACE, _identity_str))
             kwargs['config_id'] = config_id
@@ -966,7 +974,28 @@ async def ingest(request: IngestRequest):
                     
                 # Add datasource for incremental sync
                 if connection_params and config_id:
-                    # Use the config_id we already generated (for stable doc_id)
+                    # ORDER MATTERS: create document_state records SYNCHRONOUSLY *before* starting the
+                    # sync detector. Otherwise the detector's first periodic refresh / watchdog runs
+                    # while these rows don't exist yet, sees the just-ingested files as NEW, and
+                    # re-ingests them → duplicate chunks. This is acute in Langflow flow mode, where the
+                    # ingest flow (and its doc_states) complete well after /api/ingest returns, so the
+                    # detector would otherwise scan mid-ingest. (_create_document_states_after_ingestion
+                    # polls the processing_id until the flow completes, then writes the rows; skip_graph
+                    # is passed explicitly so it doesn't need the datasource_config row that
+                    # add_datasource_for_sync creates below.)
+                    processing_id = result['processing_id']
+                    logger.info(f"Creating document_state records synchronously for {data_source} before starting sync monitoring...")
+                    await _create_document_states_after_ingestion(
+                        processing_id=processing_id,
+                        config_id=config_id,  # Same config_id used throughout
+                        paths=paths or [],
+                        data_source=data_source,  # Pass data source type for proper handling
+                        skip_graph=request.skip_graph
+                    )
+                    logger.info(f"Document_state records created synchronously for {data_source}")
+
+                    # NOW start monitoring — the detector's first scan finds these files already tracked
+                    # (in document_state) and won't re-ingest them.
                     await incremental_manager.add_datasource_for_sync(
                         source_type=data_source,
                         source_name=f"{data_source}_{int(time.time())}",
@@ -974,23 +1003,10 @@ async def ingest(request: IngestRequest):
                         config_id=config_id,  # Pass our pre-generated config_id
                         skip_graph=request.skip_graph  # Pass skip_graph flag
                     )
-                    
+
                     logger.info(f"SUCCESS: Enabled incremental sync for {data_source}: {config_id}, skip_graph={request.skip_graph}")
                     result['sync_enabled'] = True
                     result['config_id'] = config_id
-                    
-                    # CRITICAL: Create document_state records SYNCHRONOUSLY (not background task)
-                    # This ensures records exist BEFORE periodic refresh runs, preventing race condition duplicates
-                    # We must await this to block periodic refresh from processing these files
-                    processing_id = result['processing_id']
-                    logger.info(f"Creating document_state records synchronously for {data_source} to prevent duplicates...")
-                    await _create_document_states_after_ingestion(
-                        processing_id=processing_id,
-                        config_id=config_id,  # Same config_id used throughout
-                        paths=paths or [],
-                        data_source=data_source  # Pass data source type for proper handling
-                    )
-                    logger.info(f"Document_state records created synchronously for {data_source}")
                 else:
                     logger.warning(f"Could not enable sync for {data_source}: missing configuration")
                     result['sync_enabled'] = False

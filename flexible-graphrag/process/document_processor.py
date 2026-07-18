@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def get_parser_type_from_env() -> str:
     """Get parser type from environment variable, defaulting to docling"""
     parser = os.getenv('DOCUMENT_PARSER', 'docling').lower()
-    if parser not in ['docling', 'llamaparse']:
+    if parser not in ['docling', 'llamaparse', 'liteparse']:
         logger.warning(f"Unknown DOCUMENT_PARSER value '{parser}', defaulting to 'docling'")
         return 'docling'
     return parser
@@ -27,18 +27,20 @@ class DocumentProcessor:
         
         Args:
             config: Configuration object with timeout and API key settings
-            parser_type: "docling" or "llamaparse" - which parser to use
+            parser_type: "docling", "llamaparse", or "liteparse" - which parser to use
         """
         self.config = config
         self.parser_type = parser_type.lower()
-        
+
         # Store configuration for timeouts
         if self.parser_type == "docling":
             self._init_docling()
         elif self.parser_type == "llamaparse":
             self._init_llamaparse()
+        elif self.parser_type == "liteparse":
+            self._init_liteparse()
         else:
-            raise ValueError(f"Unknown parser type: {parser_type}. Must be 'docling' or 'llamaparse'")
+            raise ValueError(f"Unknown parser type: {parser_type}. Must be 'docling', 'llamaparse', or 'liteparse'")
         
         logger.info(f"DocumentProcessor initialized with {self.parser_type} parser")
     
@@ -117,7 +119,7 @@ class DocumentProcessor:
                 )
                 if str(ocr_engine_str).lower().strip() == "auto":
                     logger.info(
-                        "Docling OCR: requested_engine=auto — Docling chooses an installed "
+                        "Docling OCR: requested_engine=auto - Docling chooses an installed "
                         "backend at conversion time; its log line "
                         "\"Auto OCR model selected ...\" is the effective engine."
                     )
@@ -292,6 +294,371 @@ class DocumentProcessor:
         
         return await future
     
+    def _init_liteparse(self):
+        """Initialize LiteParse — a local (Rust/PyO3) PDF/office/image parser, no API key.
+        See https://github.com/run-llama/liteparse . All knobs are optional and come from settings:
+        ocr (bool), ocr_language, ocr_server_url, tessdata_path, dpi (float), num_workers (int),
+        max_pages (int), output_format ('markdown'/'text'/'json'), image_mode, extract_links (bool).
+        Unset options fall back to LiteParse's own defaults. Default in-app output_format is 'markdown'."""
+        try:
+            from liteparse import LiteParse
+        except ImportError:
+            raise ImportError("Please install liteparse: uv pip install liteparse")
+
+        kwargs = {"quiet": True, "output_format": "markdown"}  # quiet=suppress stdout timing; markdown output by default
+        if self.config is not None:
+            # (settings attr, LiteParse kwarg, caster) — only forwarded when the setting is provided
+            _opts = [
+                ('liteparse_ocr', 'ocr_enabled', bool),
+                ('liteparse_ocr_language', 'ocr_language', str),
+                ('liteparse_ocr_server_url', 'ocr_server_url', str),
+                ('liteparse_tessdata_path', 'tessdata_path', str),
+                ('liteparse_dpi', 'dpi', float),
+                ('liteparse_num_workers', 'num_workers', int),
+                ('liteparse_max_pages', 'max_pages', int),
+                ('liteparse_output_format', 'output_format', str),
+                ('liteparse_image_mode', 'image_mode', str),
+                ('liteparse_extract_links', 'extract_links', bool),
+            ]
+            for _attr, _kw, _cast in _opts:
+                _v = getattr(self.config, _attr, None)
+                if _v is not None and _v != "":
+                    kwargs[_kw] = _cast(_v)
+
+        self.liteparse = LiteParse(**kwargs)
+        # Remember the effective OCR verdict for the pre-parse complexity check (default on)
+        self._liteparse_ocr_enabled = bool(kwargs.get("ocr_enabled", True))
+        logger.info(
+            "LiteParse initialized (local parser; ocr_enabled=%s, ocr_language=%s, dpi=%s, "
+            "output_format=%s, ocr_server=%s)",
+            kwargs.get("ocr_enabled", "default"), kwargs.get("ocr_language", "default"),
+            kwargs.get("dpi", "default"), kwargs.get("output_format"),
+            "custom" if kwargs.get("ocr_server_url") else "local-tesseract",
+        )
+
+    @staticmethod
+    def _norm_reason(r) -> str:
+        """Normalize a reason flag for matching: lowercase, hyphens (so 'embedded_images' == 'embedded-images')."""
+        return str(r).strip().lower().replace('_', '-')
+
+    @staticmethod
+    def _has_markdown_table(md: str) -> bool:
+        """True only when the markdown has a real table delimiter row (two+ dash columns joined by a pipe,
+        e.g. '| --- | --- |' or '--- | ---'). Tighter than 'contains | and --- anywhere', which
+        false-positives on prose/OCR text that merely has both characters. Used by PARSER_FORMAT_FOR_EXTRACTION
+        'auto' (Docling / LlamaParse / LiteParse) to decide markdown-vs-plaintext for extraction."""
+        import re
+        return bool(re.search(r':?-{3,}:?\s*\|\s*:?-{3,}:?', md or ""))
+
+    @staticmethod
+    def _safe_log(s, limit: int = None) -> str:
+        """Make text safe to log under any handler encoding. The Windows cp1252 console (e.g. Langflow's,
+        which hosts our component code) raises UnicodeEncodeError when a log record contains characters it
+        can't encode — e.g. \\u200b (zero-width space), em-dashes, CJK — as happens when we log raw document
+        content. Non-ASCII is rendered as backslash escapes so the log record never crashes the handler."""
+        s = str(s)
+        if limit is not None:
+            s = s[:limit]
+        return s.encode('ascii', 'backslashreplace').decode('ascii')
+
+    @staticmethod
+    def _select_extraction_content(markdown: str, plaintext: str, format_config: str):
+        """Pick which text (markdown vs plaintext) feeds KG extraction / embeddings / search, per
+        PARSER_FORMAT_FOR_EXTRACTION. Shared by Docling / LlamaParse / LiteParse.
+        Returns (content, format_used, has_tables).
+        'auto' (default): markdown when a real table is present, else plaintext — BUT if a table is
+        detected while the markdown is *shorter* than the plaintext, the markdown likely dropped
+        content (lossy OCR / xlsx markdown), so prefer the more-complete plaintext."""
+        markdown = markdown or ""
+        plaintext = plaintext or ""
+        has_tables = DocumentProcessor._has_markdown_table(markdown)
+        fc = (format_config or "auto").lower()
+        if fc == "markdown":
+            return (markdown or plaintext), "markdown (config)", has_tables
+        if fc == "plaintext":
+            return (plaintext or markdown), "plaintext (config)", has_tables
+        # auto
+        if has_tables:
+            if len(markdown) < len(plaintext):
+                return (plaintext or markdown), "plaintext (table detected but markdown shorter - likely lossy)", has_tables
+            return (markdown or plaintext), "markdown (tables detected)", has_tables
+        return (plaintext or markdown), "plaintext (no tables)", has_tables
+
+    def _analyze_liteparse_complexity(self, file_path: str, trigger_reasons=None):
+        """Cheap pre-parse OCR analysis via LiteParse.is_complex() (no full parse / no OCR run).
+        Logs a status line for how many pages need OCR and why; warns instead if pages need OCR
+        but OCR is disabled. `trigger_reasons` selects which pages count as 'complex' for routing:
+        None → the needs_ocr verdict; a set of normalized reason flags → pages whose reasons match
+        any of them (OR). Returns {total, needs_ocr, reasons(Counter), matched, matched_fraction} or
+        None if the check could not run. Best-effort — any failure is swallowed at debug so it never
+        blocks parsing. See https://developers.llamaindex.ai/liteparse/guides/complexity/ ."""
+        try:
+            pages = self.liteparse.is_complex(file_path)
+        except Exception as e:
+            logger.debug(f"LiteParse complexity check skipped for {file_path}: {e}")
+            return None
+
+        total = len(pages)
+        if total == 0:
+            return None
+
+        from collections import Counter
+        ocr_pages = [p for p in pages if getattr(p, 'needs_ocr', False)]
+        n = len(ocr_pages)
+        # 'reasons' is an open-ended flag list (scanned / no-text / sparse-text / embedded-images /
+        # garbled / vector-text / ...) and is non-empty exactly when needs_ocr is true; aggregate
+        # counts across those pages.
+        reason_counts = Counter()
+        for p in ocr_pages:
+            for r in (getattr(p, 'reasons', None) or []):
+                reason_counts[self._norm_reason(r)] += 1
+        summary = ", ".join(f"{r}: {c}" for r, c in reason_counts.most_common()) or "unspecified"
+
+        if n == 0:
+            logger.info(f"LiteParse complexity: 0/{total} pages need OCR (text-native) - {file_path}")
+        elif self._liteparse_ocr_enabled:
+            logger.info(f"LiteParse complexity: {n}/{total} pages will have OCR done ({summary}) - {file_path}")
+        else:
+            logger.warning(
+                f"LiteParse complexity: {n}/{total} pages need OCR but LITEPARSE_OCR is OFF - these pages "
+                f"may extract poorly ({summary}). Set LITEPARSE_OCR=true to OCR them. File: {file_path}"
+            )
+        # Per-page detail at DEBUG (avoids info-log spam on large/garbled docs)
+        for p in ocr_pages:
+            reasons = ", ".join(str(r) for r in (getattr(p, 'reasons', None) or [])) or "?"
+            logger.debug(f"  LiteParse page {getattr(p, 'page_number', '?')}: {reasons}")
+
+        # Pages that count as 'complex' for routing, per the configured trigger.
+        if trigger_reasons:
+            matched = sum(
+                1 for p in ocr_pages
+                if trigger_reasons & {self._norm_reason(r) for r in (getattr(p, 'reasons', None) or [])}
+            )
+        else:
+            matched = n  # needs_ocr verdict
+        return {"total": total, "needs_ocr": n, "reasons": reason_counts,
+                "matched": matched, "matched_fraction": (matched / total)}
+
+    async def _process_with_fallback_parser(self, name: str, file_paths: List[Union[str, Path]],
+                                            check_cancellation, original_metadata: Dict[str, Dict]) -> List[Document]:
+        """Route complex documents to a heavier parser (docling / llamaparse) for LiteParse
+        complex-routing. Lazily initializes the chosen fallback parser the first time it's needed."""
+        name = (name or "docling").lower()
+        if name not in ("docling", "llamaparse"):
+            logger.warning(f"Unknown LiteParse complex-routing fallback '{name}'; using docling")
+            name = "docling"
+        if not hasattr(self, "_fallback_inited"):
+            self._fallback_inited = set()
+
+        if name == "docling":
+            if not getattr(self, "converter", None):
+                logger.info("Initializing docling for LiteParse complex-routing fallback")
+                self._init_docling()
+            return await self._process_with_docling(file_paths, check_cancellation, {}, original_metadata)
+        else:  # llamaparse
+            if "llamaparse" not in self._fallback_inited:
+                logger.info("Initializing llamaparse for LiteParse complex-routing fallback")
+                self._init_llamaparse()  # validates API key / logs tier (client is resolved per-call)
+                self._fallback_inited.add("llamaparse")
+            return await self._process_with_llamaparse(file_paths, check_cancellation, {}, original_metadata)
+
+    async def _process_with_liteparse(self, file_paths: List[Union[str, Path]], check_cancellation,
+                                      original_filenames: Dict[str, str] = None,
+                                      original_metadata: Dict[str, Dict] = None) -> List[Document]:
+        """Parse documents with LiteParse (local). PDFs/office/images go through liteparse.parse()
+        (synchronous → run in an executor); plain text/markdown is read directly since LiteParse
+        targets rich documents. Before parsing each rich doc, a cheap is_complex() pass logs the
+        OCR outlook; when LITEPARSE_COMPLEX_ROUTING is on, docs whose page-OCR fraction meets the
+        threshold are routed to the configured heavier parser (docling / llamaparse) instead."""
+        original_metadata = original_metadata or {}
+        loop = asyncio.get_event_loop()
+
+        cfg = self.config
+        routing_on = bool(getattr(cfg, "liteparse_complex_routing", False)) if cfg else False
+        fallback_name = ((getattr(cfg, "liteparse_complex_fallback", None) or "docling").lower()) if cfg else "docling"
+        threshold = float(getattr(cfg, "liteparse_complex_threshold", 0.0) or 0.0) if cfg else 0.0
+        # Trigger: 'needs_ocr' (verdict) OR a comma-separated list of reason flags matched with OR.
+        trigger_raw = str((getattr(cfg, "liteparse_complex_trigger", None) or "needs_ocr") if cfg else "needs_ocr").strip().lower()
+        if trigger_raw in ("", "needs_ocr", "needs-ocr", "ocr"):
+            trigger_reasons = None
+            trigger_desc = "needs_ocr"
+        else:
+            trigger_reasons = {self._norm_reason(r) for r in trigger_raw.split(",") if r.strip()}
+            trigger_desc = "reasons " + "/".join(sorted(trigger_reasons))
+
+        liteparse_files: List[Union[str, Path]] = []
+        route_files: List[Union[str, Path]] = []
+
+        for file_path in file_paths:
+            if check_cancellation():
+                logger.info("LiteParse processing cancelled")
+                break
+            path_obj = Path(file_path)
+            if not path_obj.exists():
+                logger.warning(f"File does not exist: {file_path}")
+                continue
+            # Plain text/markdown never needs OCR/complexity analysis — read directly.
+            if path_obj.suffix.lower() in ['.txt', '.md']:
+                liteparse_files.append(file_path)
+                continue
+            # Cheap pre-parse OCR analysis (status/warning) — runs regardless of routing.
+            stats = await loop.run_in_executor(None, self._analyze_liteparse_complexity, str(file_path), trigger_reasons)
+            if routing_on and stats and stats["matched"] > 0 and stats["matched_fraction"] >= threshold:
+                logger.info(
+                    f"LiteParse routing: '{file_path}' is complex "
+                    f"({stats['matched']}/{stats['total']} pages match {trigger_desc}, fraction "
+                    f"{stats['matched_fraction']:.2f} >= threshold {threshold:g}) -> routing to {fallback_name}"
+                )
+                route_files.append(file_path)
+            else:
+                liteparse_files.append(file_path)
+
+        documents = await self._liteparse_parse_files(liteparse_files, check_cancellation, original_metadata)
+
+        if route_files:
+            fallback_docs: List[Document] = []
+            try:
+                fallback_docs = await self._process_with_fallback_parser(
+                    fallback_name, route_files, check_cancellation, original_metadata)
+            except Exception as e:
+                logger.error(f"LiteParse complex-routing to {fallback_name} failed ({e})")
+            documents.extend(fallback_docs)
+            # Safety net: the fallback parser catches per-file errors internally and can return fewer
+            # (or zero) docs WITHOUT raising. Re-parse any routed file it didn't produce a doc for with
+            # LiteParse so complex-routing never silently drops a document.
+            produced = set()
+            for d in fallback_docs:
+                for _k in ("source", "file_path"):
+                    _v = d.metadata.get(_k)
+                    if _v:
+                        produced.add(str(_v))
+            missing = [f for f in route_files if str(f) not in produced]
+            if missing:
+                logger.warning(
+                    f"{fallback_name} returned no document for {len(missing)} routed file(s) "
+                    f"(parser error/empty); parsing them with LiteParse instead: {[str(m) for m in missing]}"
+                )
+                documents.extend(await self._liteparse_parse_files(missing, check_cancellation, original_metadata))
+
+        return documents
+
+    async def _liteparse_parse_files(self, file_paths: List[Union[str, Path]], check_cancellation,
+                                     original_metadata: Dict[str, Dict]) -> List[Document]:
+        """Actually parse the given files with LiteParse (no complexity/routing) → Documents.
+        PDFs/office/images go through liteparse.parse() in an executor; plain text/markdown is read
+        directly. Honors PARSER_FORMAT_FOR_EXTRACTION (auto/markdown/plaintext) for which text goes to
+        extraction, and SAVE_PARSING_OUTPUT (writes markdown + plaintext + metadata to ./parsing_output/),
+        matching Docling/LlamaParse. Produces the same Document metadata shape as the other parsers,
+        including file_path (needed for the stable filesystem doc_id)."""
+        documents: List[Document] = []
+        loop = asyncio.get_event_loop()
+        format_config = getattr(self.config, 'parser_format_for_extraction', 'auto') if self.config else 'auto'
+        save_output = bool(getattr(self.config, 'save_parsing_output', False)) if self.config else False
+
+        for file_path in file_paths:
+            if check_cancellation():
+                logger.info("LiteParse processing cancelled")
+                break
+            path_obj = Path(file_path)
+            if not path_obj.exists():
+                logger.warning(f"File does not exist: {file_path}")
+                continue
+
+            orig_meta = original_metadata.get(str(file_path), {})
+            suffix = path_obj.suffix.lower()
+            try:
+                if suffix in ['.txt', '.md']:
+                    logger.info(f"Reading text file directly (LiteParse targets rich docs): {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        raw = f.read()
+                    # The file *is* the content; treat .md as markdown, .txt as plaintext.
+                    markdown_content = raw if suffix == '.md' else ""
+                    plaintext_content = raw
+                    conversion = "direct"
+                else:
+                    logger.info(f"Parsing with LiteParse: {file_path}")
+                    result = await loop.run_in_executor(None, self.liteparse.parse, str(file_path))
+                    # LiteParse exposes per-page markdown (populated when output_format=markdown, our
+                    # default) AND per-page text — build both so PARSER_FORMAT_FOR_EXTRACTION can choose
+                    # and SAVE_PARSING_OUTPUT can write both.
+                    md_parts = [p.markdown for p in result.pages if getattr(p, 'markdown', '')]
+                    txt_parts = [p.text for p in result.pages if getattr(p, 'text', '')]
+                    markdown_content = "\n\n".join(md_parts)
+                    plaintext_content = "\n\n".join(txt_parts) or (result.text or "")
+                    conversion = "liteparse"
+
+                # --- choose extraction format (shared policy: Docling/LlamaParse/LiteParse) ---
+                content, format_used, has_tables = self._select_extraction_content(
+                    markdown_content, plaintext_content, format_config)
+                logger.info(
+                    f"Table detection [liteparse]: {path_obj.name} -> has_table={has_tables} "
+                    f"(md={len(markdown_content)}, txt={len(plaintext_content)} chars); extraction={format_used}"
+                )
+
+                if not content.strip():
+                    logger.warning(f"LiteParse produced no content for {file_path}")
+                    continue
+
+                # --- optional save-to-disk (./parsing_output/) ---
+                if save_output:
+                    self._save_liteparse_output(path_obj, str(file_path), markdown_content, plaintext_content, conversion)
+
+                doc = Document(
+                    text=content,
+                    metadata={
+                        **orig_meta,  # Include original metadata first (cloud file id, etc.)
+                        "source": str(file_path),
+                        "file_path": orig_meta.get("file_path") or str(file_path),
+                        "conversion_method": conversion,
+                        "file_type": path_obj.suffix,
+                        "file_name": orig_meta.get("file_name") or path_obj.name,
+                    },
+                )
+                documents.append(doc)
+                logger.info(
+                    f"LiteParse extracted {len(content)} chars from {file_path} "
+                    f"({conversion}, {format_used}; md={len(markdown_content)}, txt={len(plaintext_content)})"
+                )
+            except Exception as e:
+                logger.error(f"Error processing {file_path} with LiteParse: {e}")
+
+        return documents
+
+    def _save_liteparse_output(self, path_obj: Path, file_path_str: str,
+                               markdown_content: str, plaintext_content: str, conversion: str):
+        """Write LiteParse markdown + plaintext + metadata to ./parsing_output/ (SAVE_PARSING_OUTPUT).
+        Mirrors the Docling/LlamaParse save layout ({name-with-ext}_liteparse_output.md/.txt + _metadata.json;
+        the extension is kept in the base name so foo.pdf and foo.txt don't overwrite each other). Only
+        non-empty outputs are written — e.g. a plain .txt has no markdown, so no 0-byte .md is created."""
+        try:
+            import json as _json
+            output_dir = Path("./parsing_output") / "liteparse"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            base_name = path_obj.name.replace('.', '_')  # include extension so e.g. foo.pdf / foo.txt don't collide
+            meta_file = output_dir / f"{base_name}_liteparse_metadata.json"
+            saved = []
+            if markdown_content:
+                md_file = output_dir / f"{base_name}_liteparse_output.md"
+                with open(md_file, 'w', encoding='utf-8') as fh:
+                    fh.write(markdown_content)
+                saved.append(md_file.name)
+            if plaintext_content:
+                txt_file = output_dir / f"{base_name}_liteparse_output.txt"
+                with open(txt_file, 'w', encoding='utf-8') as fh:
+                    fh.write(plaintext_content)
+                saved.append(txt_file.name)
+            with open(meta_file, 'w', encoding='utf-8') as fh:
+                _json.dump({
+                    "source": file_path_str,
+                    "parser": "liteparse",
+                    "conversion_method": conversion,
+                    "markdown_chars": len(markdown_content),
+                    "plaintext_chars": len(plaintext_content),
+                }, fh, indent=2)
+            logger.info(f"Saved LiteParse output to: {', '.join(saved) if saved else '(metadata only)'}")
+        except Exception as e:
+            logger.warning(f"Failed to save LiteParse parsing output for {path_obj.name}: {e}")
+
     async def process_documents(self, file_paths: List[Union[str, Path]], processing_id: str = None, original_metadata: Dict[str, Dict] = None) -> List[Document]:
         """Convert documents to markdown using selected parser, then create LlamaIndex Documents
         
@@ -320,6 +687,8 @@ class DocumentProcessor:
             return await self._process_with_docling(file_paths, _check_cancellation, {}, original_metadata)
         elif self.parser_type == "llamaparse":
             return await self._process_with_llamaparse(file_paths, _check_cancellation, {}, original_metadata)
+        elif self.parser_type == "liteparse":
+            return await self._process_with_liteparse(file_paths, _check_cancellation, {}, original_metadata)
     
     async def _process_with_docling(self, file_paths: List[Union[str, Path]], check_cancellation, original_filenames: Dict[str, str] = None, original_metadata: Dict[str, Dict] = None) -> List[Document]:
         """Process documents using Docling
@@ -404,34 +773,23 @@ class DocumentProcessor:
                     markdown_content = result.document.export_to_markdown()
                     plain_text = result.document.export_to_text()
                     
-                    # Smart format selection: use markdown if tables detected, otherwise plain text
-                    has_tables = "|" in markdown_content and "---" in markdown_content  # Simple table detection
-                    
-                    # Determine which format to use for extraction
+                    # Smart format selection (shared policy: Docling/LlamaParse/LiteParse)
                     format_config = getattr(self.config, 'parser_format_for_extraction', 'auto') if self.config else 'auto'
-                    
-                    if format_config == 'markdown':
-                        content_to_use = markdown_content
-                        format_used = "markdown (forced by config)"
-                    elif format_config == 'plaintext':
-                        content_to_use = plain_text
-                        format_used = "plaintext (forced by config)"
-                    else:  # auto
-                        if has_tables:
-                            content_to_use = markdown_content
-                            format_used = "markdown (tables detected)"
-                        else:
-                            content_to_use = plain_text
-                            format_used = "plaintext (no tables)"
+                    content_to_use, format_used, has_tables = self._select_extraction_content(
+                        markdown_content, plain_text, format_config)
+                    logger.info(
+                        f"Table detection [docling]: {path_obj.name} -> has_table={has_tables} "
+                        f"(md={len(markdown_content)}, txt={len(plain_text)} chars); extraction={format_used}"
+                    )
                     
                     # Save parsing output if configured (works for both Docling and LlamaParse)
                     if self.config and getattr(self.config, 'save_parsing_output', False):
                         try:
-                            output_dir = Path("./parsing_output")
-                            output_dir.mkdir(exist_ok=True)
+                            output_dir = Path("./parsing_output") / "docling"
+                            output_dir.mkdir(parents=True, exist_ok=True)
                             
                             # Create output filename
-                            base_name = path_obj.stem
+                            base_name = path_obj.name.replace('.', '_')  # include extension so e.g. foo.pdf / foo.txt don't collide
                             markdown_file = output_dir / f"{base_name}_docling_markdown.md"
                             plaintext_file = output_dir / f"{base_name}_docling_plaintext.txt"
                             metadata_file = output_dir / f"{base_name}_docling_metadata.json"
@@ -455,7 +813,7 @@ class DocumentProcessor:
                                 "markdown_length": len(markdown_content),
                                 "plaintext_length": len(plain_text),
                                 "has_tables": has_tables,
-                                "format_used_for_processing": "markdown" if has_tables else "plaintext",
+                                "format_used_for_processing": "markdown" if format_used.startswith("markdown") else "plaintext",
                             }
                             with open(metadata_file, 'w', encoding='utf-8') as f:
                                 json.dump(docling_metadata, f, indent=2, ensure_ascii=False)
@@ -480,7 +838,7 @@ class DocumentProcessor:
                     
                     # Log content length for debugging
                     logger.info(f"Docling extracted {len(content_to_use)} characters from {file_path}")
-                    logger.debug(f"First 200 chars: {content_to_use[:200]}...")
+                    logger.debug(f"First 200 chars: {self._safe_log(content_to_use, 200)}...")
                     
                     # Get original metadata if available (from cloud sources)
                     orig_meta = original_metadata.get(str(file_path), {})
@@ -491,6 +849,11 @@ class DocumentProcessor:
                         metadata={
                             **orig_meta,  # Include original metadata first (contains file id, etc.)
                             "source": str(file_path),  # Then override with processing metadata
+                            # Set file_path (used for the stable filesystem doc_id) — but keep the
+                            # cloud source's own file_path (bucket/key etc.) when provided. Without
+                            # this, flow-mode filesystem docs got a filename-only doc_id that didn't
+                            # match the filesystem detector's full-path doc_id → broken sync.
+                            "file_path": orig_meta.get("file_path") or str(file_path),
                             "conversion_method": "docling",
                             "file_type": path_obj.suffix,
                             "file_name": orig_meta.get("file_name") or path_obj.name  # Prefer original name
@@ -506,7 +869,7 @@ class DocumentProcessor:
                     
                     # Log content length for debugging
                     logger.info(f"Direct read extracted {len(content)} characters from {file_path}")
-                    logger.debug(f"First 200 chars: {content[:200]}...")
+                    logger.debug(f"First 200 chars: {self._safe_log(content, 200)}...")
                     
                     # Get original metadata if available (from cloud sources)
                     orig_meta = original_metadata.get(str(file_path), {})
@@ -517,13 +880,51 @@ class DocumentProcessor:
                         metadata={
                             **orig_meta,  # Include original metadata first (contains file id, etc.)
                             "source": str(file_path),  # Then override with processing metadata
+                            # See docling branch above — set file_path for the stable filesystem
+                            # doc_id, preserving a cloud source's own file_path when provided.
+                            "file_path": orig_meta.get("file_path") or str(file_path),
                             "conversion_method": "direct",
                             "file_type": path_obj.suffix,
                             "file_name": orig_meta.get("file_name") or path_obj.name  # Prefer original name
                         }
                     )
+
+                    # Save parsing output if configured — consistency with the docling-extensions branch
+                    # (previously text files produced no parsing_output). .md is markdown, .txt is plaintext;
+                    # empty outputs are skipped so a .txt doesn't create a 0-byte markdown file.
+                    if self.config and getattr(self.config, 'save_parsing_output', False):
+                        try:
+                            import json as _json
+                            output_dir = Path("./parsing_output") / "docling"
+                            output_dir.mkdir(parents=True, exist_ok=True)
+                            base_name = path_obj.name.replace('.', '_')
+                            md_text = content if path_obj.suffix.lower() == '.md' else ""
+                            saved = []
+                            if md_text:
+                                mf = output_dir / f"{base_name}_docling_markdown.md"
+                                with open(mf, 'w', encoding='utf-8') as f:
+                                    f.write(md_text)
+                                saved.append(mf.name)
+                            if content:
+                                pf = output_dir / f"{base_name}_docling_plaintext.txt"
+                                with open(pf, 'w', encoding='utf-8') as f:
+                                    f.write(content)
+                                saved.append(pf.name)
+                            with open(output_dir / f"{base_name}_docling_metadata.json", 'w', encoding='utf-8') as f:
+                                _json.dump({
+                                    "source": str(file_path),
+                                    "file_type": path_obj.suffix,
+                                    "file_name": path_obj.name,
+                                    "conversion_method": "direct",
+                                    "markdown_length": len(md_text),
+                                    "plaintext_length": len(content),
+                                }, f, indent=2, ensure_ascii=False)
+                            logger.info(f"Saved Docling output (direct text) to: {', '.join(saved) if saved else '(metadata only)'}")
+                        except Exception as _e:
+                            logger.warning(f"Failed to save Docling parsing output for {path_obj.name}: {_e}")
+
                     return doc
-                
+
                 else:
                     logger.warning(f"Unsupported file type: {file_path}")
                     return None
@@ -708,38 +1109,26 @@ class DocumentProcessor:
                     logger.warning(f"LlamaParse v2 extracted empty content for {path_obj.name} - skipping")
                     continue
 
-                # --- Step 4: choose content format ---
+                # --- Step 4: choose content format (shared policy: Docling/LlamaParse/LiteParse) ---
                 if fast_tier:
-                    content_to_use = plaintext_content
-                    format_used = "plaintext (fast tier - no markdown)"
-                elif format_config == 'plaintext':
-                    content_to_use = plaintext_content
-                    format_used = "plaintext (config)"
-                elif format_config == 'markdown':
-                    content_to_use = markdown_content
-                    format_used = "markdown (config)"
+                    # fast tier returns text only — no markdown available
+                    content_to_use, format_used, has_tables = plaintext_content, "plaintext (fast tier - no markdown)", False
                 else:
-                    # auto: prefer markdown when tables are present
-                    has_tables = "|" in markdown_content and "---" in markdown_content
-                    if has_tables:
-                        content_to_use = markdown_content
-                        format_used = "markdown (tables detected)"
-                    else:
-                        content_to_use = plaintext_content
-                        format_used = "plaintext (no tables)"
-
+                    content_to_use, format_used, has_tables = self._select_extraction_content(
+                        markdown_content, plaintext_content, format_config)
                 logger.info(
-                    f"Using {format_used} format for document processing (config: {format_config})"
+                    f"Table detection [llamaparse]: {path_obj.name} -> has_table={has_tables} "
+                    f"(md={len(markdown_content)}, txt={len(plaintext_content)} chars); extraction={format_used}"
                 )
 
                 # --- Step 5: optional save-to-disk ---
                 if self.config and getattr(self.config, 'save_parsing_output', False):
                     try:
                         import json as _json
-                        output_dir = Path("./parsing_output")
-                        output_dir.mkdir(exist_ok=True)
+                        output_dir = Path("./parsing_output") / "llamaparse"
+                        output_dir.mkdir(parents=True, exist_ok=True)
 
-                        base_name = path_obj.stem
+                        base_name = path_obj.name.replace('.', '_')  # include extension so e.g. foo.pdf / foo.txt don't collide
                         markdown_file = output_dir / f"{base_name}_llamaparse_output.md"
                         plaintext_file = output_dir / f"{base_name}_llamaparse_output.txt"
                         metadata_file = output_dir / f"{base_name}_llamaparse_metadata.json"
@@ -796,6 +1185,8 @@ class DocumentProcessor:
                     metadata={
                         **orig_meta,
                         "source": file_path_str,
+                        # Stable filesystem doc_id needs file_path; keep cloud's own when provided.
+                        "file_path": orig_meta.get("file_path") or file_path_str,
                         "conversion_method": "llamaparse",
                         "file_type": path_obj.suffix,
                         "file_name": orig_meta.get("file_name") or path_obj.name,

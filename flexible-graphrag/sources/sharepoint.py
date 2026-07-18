@@ -127,7 +127,25 @@ class SharePointSource(BaseDataSource):
             return False
         
         return True
-    
+
+    @staticmethod
+    def _strip_permission_metadata(documents):
+        """Remove SharePoint permission metadata (allowed_* arrays) that the SharePointReader
+        attaches. They're access-control noise — already excluded from embeddings/LLM, but they
+        also flow into vector (_node_content), search, and graph node/entity properties. Strip
+        them EARLY (before chunking) so they aren't stored anywhere; also drop them from the
+        excluded-keys lists so those don't reference removed keys."""
+        for doc in documents or []:
+            md = getattr(doc, "metadata", None)
+            if not isinstance(md, dict):
+                continue
+            for _k in [k for k in md if str(k).startswith("allowed_")]:
+                md.pop(_k, None)
+            for _ex in ("excluded_embed_metadata_keys", "excluded_llm_metadata_keys"):
+                if isinstance(md.get(_ex), list):
+                    md[_ex] = [k for k in md[_ex] if not str(k).startswith("allowed_")]
+        return documents
+
     def get_documents(self) -> List[Document]:
         """
         Retrieve documents from Microsoft SharePoint using PassthroughExtractor.
@@ -257,6 +275,7 @@ class SharePointSource(BaseDataSource):
                 doc.metadata.update(updates)
             
             logger.info(f"SharePointSource created {len(documents)} placeholder documents for processing")
+            self._strip_permission_metadata(documents)
             return documents
             
         except Exception as e:
@@ -371,6 +390,7 @@ class SharePointSource(BaseDataSource):
                         logger.warning(f"Failed to download file {file_id} from SharePoint")
                 
                 logger.info(f"Downloaded and processed {len(documents)} file(s) from SharePoint")
+                self._strip_permission_metadata(documents)
                 return documents
             
             # Normal folder scanning path
@@ -549,6 +569,7 @@ class SharePointSource(BaseDataSource):
                 doc.metadata.update(updates)
             
             logger.info(f"SharePointSource created {len(documents)} placeholder documents for processing")
+            self._strip_permission_metadata(documents)
             return documents
             
         except Exception as e:

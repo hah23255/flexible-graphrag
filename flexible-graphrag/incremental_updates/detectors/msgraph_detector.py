@@ -368,11 +368,14 @@ class MicrosoftGraphDetector(ChangeDetector):
         except Exception as e:
             logger.error(f"Error fetching items from Microsoft Graph: {e}", exc_info=True)
             # Return empty list on error - detector will continue
-        
-        # For basic polling, we don't have a delta link yet
-        # Just use the endpoint as the "link" for next poll
-        self.delta_link = endpoint
-        
+
+        # NOTE: do NOT touch self.delta_link here. This method is a plain lister (called by
+        # list_all_files(), i.e. every periodic refresh) and used to stash the RELATIVE endpoint
+        # path here as a leftover of the old basic-polling design. self.delta_link now holds Graph's
+        # absolute @odata.deltaLink URL for _run_delta_cycle(); overwriting it with a relative path
+        # made every delta cycle fail with "Valid url scheme and host required" and fall back to a
+        # full re-enumeration (once per periodic refresh).
+
         return items
     
     async def stop(self):
@@ -555,98 +558,289 @@ class MicrosoftGraphDetector(ChangeDetector):
                 logger.warning(f"Item {item_name} is neither file nor folder - skipping")
     
     async def get_changes(self) -> AsyncGenerator[ChangeEvent, None]:
-        """
-        Stream change events from Microsoft Graph (polling every 60s).
-        Detects new files and deletions by comparing current list with known_file_ids.
-        
-        NOTE: This is a simplified implementation that lists all files each poll.
-        For production, this should use the true Microsoft Graph /delta endpoint
-        which only returns changes since last poll (much more efficient).
-        
-        Currently DISABLED by default (enable_change_polling=False) to avoid
-        redundant API calls with the 5-minute periodic refresh.
-        Set enable_change_polling=True in config to enable for testing.
+        """Stream change events from Microsoft Graph using the ``/delta`` endpoint.
+
+        This is a true incremental delta stream: each cycle asks Graph only for
+        items that changed since the last ``deltaLink`` (persisted per
+        ``config_id``).  The very first cycle enumerates the drive and returns a
+        ``deltaLink``; subsequent cycles return just adds / updates / removals.
+
+        Each returned drive item is routed through :meth:`_parse_drive_item`
+        which classifies it as CREATE / UPDATE / DELETE.  The ``deltaLink`` is
+        persisted after every cycle so a restart resumes exactly where it left
+        off.
+
+        If the delta call fails (SDK/version issue, transient error), the cycle
+        falls back to the legacy full-list comparison so change detection keeps
+        working.
+
+        Disabled by default (``enable_change_polling=False``) so it does not
+        duplicate the 5-minute periodic refresh; set
+        ``enable_change_polling: true`` in the datasource config to enable.
         """
         if not self._running or not self.graph_client:
             return
-        
-        # Check if change polling is enabled
+
         if not self.enable_change_polling:
             logger.info(f"Change polling disabled for {self.data_source} (enable_change_polling=False)")
             logger.info(f"  Relying on periodic refresh (every 5 minutes) for change detection")
-            logger.info(f"  Set 'enable_change_polling': true in datasource config to enable 60-second polling")
+            logger.info(f"  Set 'enable_change_polling': true in datasource config to enable delta polling")
             return
-        
-        logger.info("Starting Microsoft Graph polling for changes...")
+
+        logger.info("Starting Microsoft Graph DELTA polling for changes...")
         logger.info(f"Polling interval: {self.polling_interval} seconds")
-        
+
+        # Resume from a persisted deltaLink if one exists for this config.
+        if self.delta_link is None:
+            self.delta_link = await self._load_delta_link()
+            if self.delta_link:
+                logger.info("Resumed Microsoft Graph delta stream from persisted deltaLink")
+
         while self._running:
             try:
-                # List all current files
-                current_files = await self.list_all_files()
-                
-                # Build set of current file IDs
-                current_file_ids = set()
-                current_files_by_id = {}
-                for file_meta in current_files:
-                    file_id = file_meta.extra.get('file_id') if file_meta.extra else None
-                    if file_id:
-                        current_file_ids.add(file_id)
-                        current_files_by_id[file_id] = file_meta
-                
-                # Detect deletions: files in known_file_ids but not in current_file_ids
-                deleted_file_ids = self.known_file_ids - current_file_ids
-                
-                # Yield DELETE events for deleted files
-                for deleted_id in deleted_file_ids:
-                    logger.info(f"Microsoft Graph EVENT: DELETE detected for file_id {deleted_id}")
-                    
-                    # deleted_id is RAW file ID (no prefix)
-                    # Need to create stable_path with prefix for document_state lookup
-                    prefix = "sharepoint" if self.data_source == 'sharepoint' else "onedrive"
-                    stable_path = f"{prefix}://{deleted_id}"
-                    
-                    delete_metadata = FileMetadata(
-                        source_type='msgraph',
-                        path=stable_path,
-                        ordinal=int(datetime.now(timezone.utc).timestamp() * 1_000_000),
-                        extra={'file_id': deleted_id}
-                    )
-                    delete_event = ChangeEvent(
-                        metadata=delete_metadata,
-                        change_type=ChangeType.DELETE,
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    
-                    self.known_file_ids.remove(deleted_id)
-                    self.events_processed += 1
-                    yield delete_event
-                
-                # Detect new files
-                new_file_ids = current_file_ids - self.known_file_ids
-                for new_id in new_file_ids:
-                    file_meta = current_files_by_id[new_id]
-                    file_name = file_meta.extra.get('file_name', new_id)
-                    file_path = file_meta.extra.get('file_path')
-                    folder_path = file_meta.extra.get('folder_path')
-                    
-                    logger.info(f"Microsoft Graph EVENT: CREATE for {file_name}")
-                    self.known_file_ids.add(new_id)
-                    self.events_processed += 1
-                    
-                    try:
-                        await self._process_via_backend(new_id, file_name, file_path, folder_path)
-                        logger.info(f"SUCCESS: Processed CREATE for {file_name}")
-                    except Exception as e:
-                        logger.error(f"ERROR: Failed to process CREATE for {file_name}: {e}")
-                
-                # Wait before next poll
+                async for event in self._run_delta_cycle():
+                    yield event
                 await asyncio.sleep(self.polling_interval)
-                
             except Exception as e:
-                logger.error(f"Error polling Microsoft Graph: {e}")
+                logger.error(f"Error in Microsoft Graph delta cycle: {e}", exc_info=True)
                 self.errors_count += 1
+                # Fall back to a full-list comparison for this cycle so we don't
+                # miss changes while the delta stream recovers.
+                try:
+                    async for event in self._run_fulllist_cycle():
+                        yield event
+                except Exception as fe:
+                    logger.error(f"Fallback full-list cycle also failed: {fe}")
                 await asyncio.sleep(self.polling_interval)
+
+    async def _run_delta_cycle(self) -> AsyncGenerator[ChangeEvent, None]:
+        """Run one delta query cycle: fetch changes, yield events, persist deltaLink."""
+        drive_id = await self._resolve_drive_id()
+        if not drive_id:
+            raise RuntimeError("Could not resolve drive_id for delta query")
+
+        # Build the delta request builder — start from persisted deltaLink when
+        # available, otherwise a fresh /root/delta enumeration.
+        # NOTE: in msgraph-sdk (1.58.0) `delta` is NOT on `.items` (ItemsRequestBuilder) nor on
+        # `.root` — it hangs off an individual item builder, so the root enumeration is
+        # `.items.by_drive_item_id("root").delta` -> GET /drives/{drive-id}/items/root/delta.
+        # Using `.items.delta` raises AttributeError: 'ItemsRequestBuilder' object has no attribute 'delta'.
+        delta_builder = self.graph_client.drives.by_drive_id(drive_id).items.by_drive_item_id("root").delta
+
+        page = None
+        if self.delta_link:
+            try:
+                page = await delta_builder.with_url(self.delta_link).get()
+            except Exception as e:
+                logger.warning(f"deltaLink stale/invalid ({e}) — restarting delta enumeration")
+                self.delta_link = None
+        if page is None:
+            page = await delta_builder.get()
+
+        # Iterate all pages (nextLink) until we reach the final deltaLink.
+        while page is not None:
+            for item in (getattr(page, "value", None) or []):
+                item_dict = self._drive_item_to_dict(item)
+                event = self._parse_drive_item(item_dict)
+                if event is None:
+                    continue  # folder or unparseable
+
+                self.events_processed += 1
+                if event.change_type == ChangeType.DELETE:
+                    yield event
+                else:
+                    # CREATE / UPDATE — the CocoIndex map view (or engine) pulls
+                    # the file; we surface the event either way.
+                    yield event
+
+            next_link = getattr(page, "odata_next_link", None)
+            delta_link = getattr(page, "odata_delta_link", None)
+            if next_link:
+                page = await delta_builder.with_url(next_link).get()
+            else:
+                if delta_link:
+                    self.delta_link = delta_link
+                    await self._save_delta_link(delta_link)
+                page = None
+
+    async def _run_fulllist_cycle(self) -> AsyncGenerator[ChangeEvent, None]:
+        """Legacy fallback: list all files and diff against known IDs."""
+        current_files = await self.list_all_files()
+        current_file_ids = set()
+        current_files_by_id = {}
+        for file_meta in current_files:
+            file_id = file_meta.extra.get('file_id') if file_meta.extra else None
+            if file_id:
+                current_file_ids.add(file_id)
+                current_files_by_id[file_id] = file_meta
+
+        deleted_file_ids = self.known_file_ids - current_file_ids
+        for deleted_id in deleted_file_ids:
+            logger.info(f"Microsoft Graph EVENT (fallback): DELETE for file_id {deleted_id}")
+            prefix = "sharepoint" if self.data_source == 'sharepoint' else "onedrive"
+            stable_path = f"{prefix}://{deleted_id}"
+            delete_metadata = FileMetadata(
+                source_type='msgraph',
+                path=stable_path,
+                ordinal=int(datetime.now(timezone.utc).timestamp() * 1_000_000),
+                extra={'file_id': deleted_id},
+            )
+            self.known_file_ids.discard(deleted_id)
+            self.events_processed += 1
+            yield ChangeEvent(
+                metadata=delete_metadata,
+                change_type=ChangeType.DELETE,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+        new_file_ids = current_file_ids - self.known_file_ids
+        for new_id in new_file_ids:
+            file_meta = current_files_by_id[new_id]
+            self.known_file_ids.add(new_id)
+            self.events_processed += 1
+            yield ChangeEvent(
+                metadata=file_meta,
+                change_type=ChangeType.CREATE,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+    async def _resolve_drive_id(self) -> Optional[str]:
+        """Resolve and cache the drive id for the configured drive/site/user."""
+        if getattr(self, "_cached_drive_id", None):
+            return self._cached_drive_id
+
+        if self.drive_id:
+            self._cached_drive_id = self.drive_id
+        elif self.site_id or self.site_name:
+            if self.site_name and not self.site_id:
+                await self._resolve_site_id()
+            drive = await self.graph_client.sites.by_site_id(self.site_id).drive.get()
+            self._cached_drive_id = getattr(drive, "id", None)
+        else:
+            if self.user_id and self.user_id != 'me':
+                drive = await self.graph_client.users.by_user_id(self.user_id).drive.get()
+            else:
+                drive = await self.graph_client.me.drive.get()
+            self._cached_drive_id = getattr(drive, "id", None)
+        return self._cached_drive_id
+
+    @staticmethod
+    def _paths_from_parent_ref(item_data: Dict, file_name: str) -> tuple:
+        """Derive (folder_path, file_path) from a drive item's parentReference.
+
+        Graph formats ``parentReference.path`` as ``/drive/root:/test`` or
+        ``/drives/{drive-id}/root:/test`` (URL-encoded), and just ``/drive/root:`` at the drive root.
+        Returns the same shape the OneDrive/SharePoint sources produce on the initial ingest:
+        ``("/test", "/test/cmispress.txt")`` — or ``("/", "/cmispress.txt")`` at the root — so a
+        delta-added file records the same path as the same file ingested initially.
+        """
+        from urllib.parse import unquote
+        raw = ((item_data.get('parentReference') or {}).get('path') or '')
+        folder_path = '/'
+        if 'root:' in raw:
+            folder_path = unquote(raw.split('root:', 1)[1]) or '/'
+        if not folder_path.startswith('/'):
+            folder_path = '/' + folder_path
+        file_path = f"{folder_path.rstrip('/')}/{file_name}" if file_name else folder_path
+        return folder_path, file_path
+
+    @staticmethod
+    def _drive_item_to_dict(item) -> Dict:
+        """Convert an msgraph SDK ``DriveItem`` to the dict :meth:`_parse_drive_item` expects."""
+        additional = getattr(item, "additional_data", None) or {}
+        d: Dict = {
+            'id': getattr(item, "id", None),
+            'name': getattr(item, "name", None),
+            'size': getattr(item, "size", None),
+            'webUrl': getattr(item, "web_url", None),
+            'eTag': getattr(item, "e_tag", None),
+        }
+        _created = getattr(item, "created_date_time", None)
+        _modified = getattr(item, "last_modified_date_time", None)
+        d['createdDateTime'] = _created.isoformat() if _created else None
+        d['lastModifiedDateTime'] = _modified.isoformat() if _modified else None
+        # Deletion markers: the delta stream sets a `deleted` facet and the raw
+        # payload carries an `@removed` annotation in additional_data.
+        if getattr(item, "deleted", None) is not None:
+            d['deleted'] = True
+        if '@removed' in additional:
+            d['@removed'] = additional['@removed']
+        if getattr(item, "folder", None) is not None:
+            d['folder'] = {'childCount': getattr(item.folder, "child_count", None)}
+        elif getattr(item, "file", None) is not None:
+            d['file'] = {'mimeType': getattr(item.file, "mime_type", None)}
+        # parentReference carries the containing folder — Graph formats `path` as
+        # "/drive/root:/test" (or "/drives/{drive-id}/root:/test"). Without it, _parse_drive_item
+        # can't report a folder and the engine falls back to file_path="/{name}", folder_path="/",
+        # so a delta-added file loses its folder vs the same file from the initial ingest.
+        _parent = getattr(item, "parent_reference", None)
+        if _parent is not None:
+            d['parentReference'] = {
+                'path': getattr(_parent, "path", None),
+                'id': getattr(_parent, "id", None),
+                'driveId': getattr(_parent, "drive_id", None),
+            }
+        return d
+
+    async def _delta_state_pool(self):
+        """Return the asyncpg pool used to persist deltaLinks, or None."""
+        sm = self.state_manager
+        if sm is not None and getattr(sm, "pool", None) is not None:
+            return sm.pool
+        return None
+
+    async def _ensure_delta_state_table(self, pool) -> None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS msgraph_delta_state (
+                    config_id  TEXT PRIMARY KEY,
+                    delta_link TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+
+    async def _load_delta_link(self) -> Optional[str]:
+        """Load the persisted deltaLink for this config_id (if any)."""
+        if not self.config_id:
+            return None
+        pool = await self._delta_state_pool()
+        if pool is None:
+            return None
+        try:
+            await self._ensure_delta_state_table(pool)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT delta_link FROM msgraph_delta_state WHERE config_id = $1",
+                    self.config_id,
+                )
+                return row['delta_link'] if row else None
+        except Exception as e:
+            logger.debug(f"Could not load msgraph deltaLink: {e}")
+            return None
+
+    async def _save_delta_link(self, delta_link: str) -> None:
+        """Persist the deltaLink for this config_id so restarts resume in place."""
+        if not self.config_id:
+            return
+        pool = await self._delta_state_pool()
+        if pool is None:
+            return
+        try:
+            await self._ensure_delta_state_table(pool)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO msgraph_delta_state (config_id, delta_link, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (config_id)
+                    DO UPDATE SET delta_link = EXCLUDED.delta_link, updated_at = NOW()
+                    """,
+                    self.config_id, delta_link,
+                )
+        except Exception as e:
+            logger.debug(f"Could not save msgraph deltaLink: {e}")
     
     def _parse_drive_item(self, item_data: Dict) -> Optional[ChangeEvent]:
         """Parse Microsoft Graph drive item into ChangeEvent"""
@@ -704,7 +898,13 @@ class MicrosoftGraphDetector(ChangeDetector):
             # Get file size and MIME type
             size_bytes = item_data.get('size')
             mime_type = item_data.get('file', {}).get('mimeType')
-            
+
+            # Derive the human-readable folder/file path from parentReference so delta events carry
+            # the SAME shape the sources produce on the initial ingest (folder_path="/test",
+            # file_path="/test/cmispress.txt"). Without these in `extra`, engine.py falls back to
+            # file_path=f"/{file_name}" and folder_path="/", losing the folder.
+            folder_path, file_path = self._paths_from_parent_ref(item_data, file_name)
+
             metadata = FileMetadata(
                 source_type='msgraph',
                 path=stable_path,  # Use stable onedrive:// path
@@ -715,6 +915,8 @@ class MicrosoftGraphDetector(ChangeDetector):
                 extra={
                     'file_id': file_id,
                     'file_name': file_name,  # Store original filename for reference
+                    'file_path': file_path,      # e.g. /test/cmispress.txt
+                    'folder_path': folder_path,  # e.g. /test  (or "/" at the drive root)
                     'web_url': item_data.get('webUrl'),
                     'etag': item_data.get('eTag'),
                 }

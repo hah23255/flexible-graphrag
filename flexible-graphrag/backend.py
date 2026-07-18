@@ -125,8 +125,10 @@ class FlexibleGraphRAGBackend:
         )
         source_config = self._source_config_for_flow(data_source, paths, kwargs)
         config_id = kwargs.get("config_id")
-        logger.info("Flow ingest: source=%s paths=%s config_id=%s source_config=%s",
-                    data_source, paths, config_id, source_config)
+        logger.info("Flow ingest: source=%s paths=%s config_id=%s", data_source, paths, config_id)
+        # Config can hold credentials — DEBUG only, secrets masked / long values truncated.
+        from flow_service import redact_config_for_log
+        logger.debug("Flow ingest: source_config=%s", redact_config_for_log(source_config))
         try:
             fsvc = await self._get_flow_service()
             result = await fsvc.run_ingestion_flow(
@@ -426,8 +428,9 @@ class FlexibleGraphRAGBackend:
         logger.info(f"  config_id: {config_id}")
         logger.info(f"=== END _process_modular_data_source DEBUG ===")
         
-        # Log the config for debugging
-        logger.info(f"Processing {data_source} with config: {config}")
+        # Log the config for debugging — config may hold credentials, so redact
+        from flow_service import redact_config_for_log
+        logger.info("Processing %s with config: %s", data_source, redact_config_for_log(config))
         
         # Initialize progress tracking
         file_progress = self._initialize_data_source_progress(processing_id, data_source, display_name)

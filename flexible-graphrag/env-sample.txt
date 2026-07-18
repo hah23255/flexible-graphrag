@@ -27,14 +27,14 @@ PG_GRAPH_DB=neo4j
 
 # RDF graph store
 # (can have both a rdf and a property graph store)
+#RDF_GRAPH_DB=graphdb
 #RDF_GRAPH_DB=fuseki
 #RDF_GRAPH_DB=oxigraph
-#RDF_GRAPH_DB=graphdb
 #RDF_GRAPH_DB=neptune_rdf
 RDF_GRAPH_DB=none
 
-#VECTOR_DB=neo4j
 VECTOR_DB=qdrant
+#VECTOR_DB=neo4j
 #VECTOR_DB=elasticsearch
 #VECTOR_DB=opensearch
 #VECTOR_DB=chroma
@@ -45,8 +45,8 @@ VECTOR_DB=qdrant
 #VECTOR_DB=lancedb
 #VECTOR_DB=none
 
-#SEARCH_DB=bm25
 SEARCH_DB=elasticsearch
+#SEARCH_DB=bm25
 #SEARCH_DB=opensearch
 #SEARCH_DB=none
 
@@ -93,22 +93,28 @@ RETRIEVAL_FUSION=llamaindex
 # =============================================================================
 
 # Document Parser Configuration
-# DOCUMENT_PARSER can be "docling" (default, open-source) or "llamaparse" (cloud-based, requires API key)
-# Docling: Free, open-source, runs locally, good for most document types
-# LlamaParse: Cloud-based parsing service from LlamaIndex, advanced multimodal parsing, requires API key
+# DOCUMENT_PARSER can be "docling" (default), "llamaparse" (cloud), or "liteparse" (local, lightweight)
+# Docling:    Free, open-source, runs locally; good for most document types
+# LlamaParse: Cloud parsing service from LlamaIndex; advanced multimodal parsing; requires API key
+# LiteParse:  Free, local Rust/PyO3 parser (https://github.com/run-llama/liteparse); no API key;
+#             fast/lightweight for PDFs, office docs, and images (bundled Tesseract OCR).
+#             Plain .txt/.md are read directly. `uv pip install liteparse`.
 DOCUMENT_PARSER=docling
 #DOCUMENT_PARSER=llamaparse
+#DOCUMENT_PARSER=liteparse
 
-# Save parsing results to files for inspection (works for both Docling and LlamaParse)
+# Save parsing results to files for inspection (works for Docling, LlamaParse, and LiteParse)
 # When enabled, saves parsing outputs to ./parsing_output/
-# - Docling: Saves both markdown (.md) and plaintext (.txt) outputs + metadata JSON
+# - Docling:    Saves both markdown (.md) and plaintext (.txt) outputs + metadata JSON
 # - LlamaParse: Saves both markdown (.md) and plaintext (.txt) outputs + metadata JSON
+# - LiteParse:  Saves both markdown (.md) and plaintext (.txt) outputs + metadata JSON
+#               (markdown requires LITEPARSE_OUTPUT_FORMAT=markdown, the default)
 # Useful for debugging and understanding how parsers interpret documents
 #SAVE_PARSING_OUTPUT=false
 #SAVE_PARSING_OUTPUT=true
 
 # Format to use for knowledge graph extraction (what gets sent to LLM for entity/relation extraction)
-# Applies to both Docling and LlamaParse
+# Applies to Docling, LlamaParse, and LiteParse
 # Options:
 #   "auto" (default) - Use markdown if tables detected, otherwise use plaintext
 #   "markdown" - Always use markdown format (better for documents with tables/structure)
@@ -120,6 +126,11 @@ DOCUMENT_PARSER=docling
 
 # =============================================================================
 # Docling Config
+
+# NOTE: Docling downloads its models from HuggingFace on first use. If a model download
+# fails with "403 Forbidden / AccessDenied" from HuggingFace's Xet CDN (cas-bridge.xethub.hf.co)
+# — e.g. docling-project/DocumentFigureClassifier — install the Xet client:  uv pip install hf_xet
+# (do_picture_classification / do_formula_enrichment pull extra models; these need Xet too.)
 
 # Docling Device Configuration (only used if DOCUMENT_PARSER=docling)
 # Options:
@@ -151,7 +162,11 @@ DOCUMENT_PARSER=docling
 #                   then: uv pip install -e ".[docling-ocr-tesserocr]"
 #   ocrmac        — macOS only; install: uv pip install -e ".[docling-ocr-ocrmac]"
 #DOCLING_OCR=false
-#DOCLING_OCR_ENGINE=auto
+DOCLING_OCR=true
+DOCLING_OCR_ENGINE=auto
+#DOCLING_OCR_ENGINE=easyocr
+#DOCLING_OCR_ENGINE=rapidocr
+#DOCLING_OCR_ENGINE=tesseract_cli
 
 # DOCLING_TIMEOUT=600  # Docling conversion timeout per document (seconds, default: 10 minutes)
 # DOCLING_CANCEL_CHECK_INTERVAL=0.5  # How often to check for cancellation (seconds)
@@ -187,6 +202,79 @@ LLAMAPARSE_MODE=cost_effective
 # LlamaParse Custom Prompt (agentic / agentic_plus / cost_effective tiers only)
 # Maps to v2 agentic_options.custom_prompt; replaces v1 parsing_instruction / system_prompt
 #LLAMAPARSE_CUSTOM_PROMPT=Extract all tables and headings as structured markdown.
+
+
+# =============================================================================
+# LiteParse Config
+
+# LiteParse (https://github.com/run-llama/liteparse) — free, local Rust/PyO3 parser, no API key.
+# Natively parses PDFs (bundled Tesseract OCR for scanned pages); plain .txt/.md are read directly.
+# Other formats need external tools — see the multi-format guide:
+#   https://developers.llamaindex.ai/liteparse/guides/multi-format/
+#   - Office/spreadsheets (.doc .docx .ppt .pptx .xls .xlsx .odt .rtf .csv .ods ...) -> LibreOffice
+#   - Image files (.jpg .png .gif .bmp .tiff .webp .svg) -> ImageMagick (converts image->PDF first)
+#   Windows (run in an ADMIN terminal): choco install libreoffice-fresh   &&   choco install imagemagick.app
+#     macOS:  brew install --cask libreoffice  ;  brew install imagemagick
+#     Ubuntu: apt-get install libreoffice imagemagick
+#   (Windows: you may need to add  C:\Program Files\LibreOffice\program  to PATH and restart.)
+#   Without these tools, such files error and are skipped — or use DOCUMENT_PARSER=docling / llamaparse,
+#   which handle Office & images natively (no LibreOffice/ImageMagick needed).
+# Install: uv pip install liteparse. Docs: https://developers.llamaindex.ai/liteparse/
+# All options below apply only when DOCUMENT_PARSER=liteparse; unset = LiteParse's own default.
+
+# OCR for scanned/image PDFs (default: true; bundled Tesseract, applied only to image/text-sparse pages)
+#LITEPARSE_OCR=false
+#LITEPARSE_OCR=true
+
+# OCR language — Tesseract ISO 639-3 code (default: eng). e.g. fra, deu, jpn, spa
+# Language data auto-downloads to ~/.tesseract-rs/tessdata on first use.
+#LITEPARSE_OCR_LANGUAGE=eng
+
+# External OCR server URL (EasyOCR / PaddleOCR / custom / GPU). Uses local Tesseract if unset.
+#LITEPARSE_OCR_SERVER_URL=http://localhost:8828/ocr
+
+# Path to tessdata (.traineddata files) for offline/air-gapped OCR. Else TESSDATA_PREFIX env / auto-download.
+#LITEPARSE_TESSDATA_PATH=C:\\Program Files\\Tesseract-OCR\\tessdata
+
+# OCR render DPI — higher = more accurate, slower. Default: LiteParse's own.
+#LITEPARSE_DPI=200
+
+# Concurrent OCR workers. Default: CPU cores - 1.
+#LITEPARSE_NUM_WORKERS=4
+
+# Max pages to process per document. Default: all pages.
+#LITEPARSE_MAX_PAGES=50
+
+# Output format: markdown (default in-app), text, or json.
+#LITEPARSE_OUTPUT_FORMAT=markdown
+
+# Image handling in output: off, placeholder (default), or embed.
+#LITEPARSE_IMAGE_MODE=placeholder
+
+# Render hyperlinks as markdown links (default: true).
+#LITEPARSE_EXTRACT_LINKS=true
+
+# --- Complex-document routing (optional) ---
+# LiteParse always logs a per-file OCR outlook first ("N/total pages need OCR" + reasons like
+# scanned/garbled/embedded-images) using its cheap is_complex() pre-check, and WARNS if pages need
+# OCR while LITEPARSE_OCR is off. Optionally, route those complex docs to a heavier parser instead
+# of parsing them with LiteParse. Docs: https://developers.llamaindex.ai/liteparse/guides/complexity/
+#LITEPARSE_COMPLEX_ROUTING=false
+#LITEPARSE_COMPLEX_ROUTING=true
+
+# Which parser to route complex docs to: docling (default) or llamaparse
+#LITEPARSE_COMPLEX_FALLBACK=docling
+#LITEPARSE_COMPLEX_FALLBACK=llamaparse
+
+# What marks a page "complex" for routing: needs_ocr (default — LiteParse's own OCR verdict) OR a
+# comma-separated list of reason flags matched with OR semantics. Reasons (open-ended list):
+# scanned, no-text, sparse-text, embedded-images, garbled, vector-text. e.g. only scanned/garbled:
+#LITEPARSE_COMPLEX_TRIGGER=needs_ocr
+#LITEPARSE_COMPLEX_TRIGGER=scanned,garbled
+
+# Fraction of pages (0-1) matching the trigger before a doc is routed. 0 = any single page triggers;
+# e.g. 0.5 = route only when at least half the pages match.
+#LITEPARSE_COMPLEX_THRESHOLD=0
 
 
 # =============================================================================
@@ -1278,8 +1366,13 @@ LANGFLOW_URL=http://localhost:7860
 #LANGFLOW_API_KEY=
 
 # Optional paths to the flow JSON files the app uploads/runs.
-# Leave unset to use the bundled defaults under flexible-graphrag/flows/.
-# To customize: duplicate + export a flow from Langflow, then point these at
+# Leave unset to use the bundled defaults under flexible-graphrag/flows/ (source checkout only).
+# INSTALLED WHEEL (flexible-graphrag / flexible-graphrag.exe): the default resolves relative to the
+# installed package (site-packages), NOT your flows — so SET these when running from a pip install.
+# A relative path resolves from the CURRENT WORKING DIRECTORY where you launch the app (e.g. keep a
+# flows/ subfolder next to your .env and run from that folder); use an absolute path if the cwd varies.
+# (Same cwd rule as ONTOLOGY_DIR above.)
+# To customize a flow: duplicate + export it from Langflow, then point these at
 # your exported copy (see LANGFLOW_IMPORT_GUIDE.md).
 # INGEST_FLOW_PATH  = the ingestion pipeline flow.
 # QUERY_FLOW_PATH   = the combined Hybrid Search + AI Query flow (Langflow Playground only).

@@ -173,8 +173,12 @@ class IncrementalSystemManager:
         # Auto-detect enable_change_stream based on source_type if not explicitly set
         if enable_change_stream is None:
             # Sources WITH event streams (polling-based, not real-time push)
-            # Note: onedrive/sharepoint removed until Microsoft Graph delta endpoint is fully implemented
-            sources_with_events = ['google_drive', 'box', 'alfresco', 'filesystem']
+            # onedrive/sharepoint use the Microsoft Graph delta query (resumable deltaLink, polled every
+            # polling_interval s) — enabled by default now that the delta endpoint is implemented.
+            # This flag drives BOTH the orchestrator's event-stream task AND the detector's
+            # enable_change_polling, which must stay in step: the engine skips NEW files in the periodic
+            # refresh whenever enable_change_polling is on, so if the stream weren't drained they'd be missed.
+            sources_with_events = ['google_drive', 'box', 'alfresco', 'filesystem', 'onedrive', 'sharepoint']
             
             # S3 has events only if sqs_queue_url is configured
             if source_type == 's3' and connection_params.get('sqs_queue_url'):

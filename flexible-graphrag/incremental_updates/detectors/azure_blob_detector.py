@@ -103,6 +103,9 @@ class AzureBlobDetector(ChangeDetector):
         
         # Track known blobs for CREATE vs MODIFY detection
         self.known_blob_names = set()
+        # Blobs currently being ingested — dedups a concurrent periodic-refresh + event-stream overlap
+        # (both call _process_via_backend during the window before document_state is written).
+        self._in_flight = set()
         # Track when each blob was last processed (for debounce)
         # Azure Change Feed often emits 2-3 events per operation (BlobCreated + BlobPropertiesUpdated)
         self._last_processed: dict = {}  # full_path -> datetime
@@ -258,7 +261,27 @@ class AzureBlobDetector(ChangeDetector):
             raise
         
         return files
-    
+
+    async def _already_ingested_unchanged(self, full_path: str, ordinal) -> bool:
+        """True if this blob is already in document_state with an unchanged ordinal — i.e. the
+        periodic refresh (or a prior event) already ingested it. The event stream and the periodic
+        refresh track state separately (known_blob_names vs document_state), so without this a
+        just-refreshed blob gets re-ingested by the CREATE event → duplicate chunks."""
+        if not self.state_manager or not self.config_id:
+            return False
+        try:
+            st = await self.state_manager.get_state(f"{self.config_id}:{full_path}")
+        except Exception as e:
+            logger.debug(f"document_state check failed for {full_path}: {e}")
+            return False
+        # Present in document_state → the periodic refresh (or a prior event) already ingested it,
+        # so this is_new CREATE event is a duplicate. We deliberately do NOT compare ordinals: the
+        # event ordinal is the change-feed eventTime while document_state stores the blob's
+        # last_modified, so they don't line up (that's why the earlier ordinal check never skipped).
+        # A genuine later modify is caught by the periodic refresh; and because the caller adds this
+        # path to known_blob_names on skip, subsequent modifies route through the UPDATE branch.
+        return st is not None
+
     async def get_changes(self) -> AsyncGenerator[ChangeEvent, None]:
         """
         Stream change events from Azure Blob Change Feed.
@@ -333,7 +356,16 @@ class AzureBlobDetector(ChangeDetector):
                                 full_path = event.metadata.path
                                 blob_name = full_path.split('/', 1)[-1] if '/' in full_path else full_path
                                 is_new = full_path not in self.known_blob_names
-                                
+
+                                # Skip if the periodic refresh (or a prior event) already ingested this
+                                # blob unchanged — the two paths track state separately, so without this
+                                # the CREATE event re-ingests it → duplicate chunks (periodic + event).
+                                if is_new and await self._already_ingested_unchanged(full_path, event.metadata.ordinal):
+                                    logger.info(f"Azure Blob EVENT: CREATE for {blob_name} already in document_state (unchanged) — skipping duplicate (periodic+event)")
+                                    self.known_blob_names.add(full_path)
+                                    self._last_processed[full_path] = datetime.now(timezone.utc)
+                                    continue
+
                                 if is_new:
                                     # Truly new - CREATE
                                     logger.info(f"Azure Blob EVENT: CREATE for {blob_name}")
@@ -397,7 +429,14 @@ class AzureBlobDetector(ChangeDetector):
                                 
                                 # Check if truly known (might be false positive)
                                 is_new = full_path not in self.known_blob_names
-                                
+
+                                # Same periodic+event dedup as the CREATE branch above.
+                                if is_new and await self._already_ingested_unchanged(full_path, event.metadata.ordinal):
+                                    logger.info(f"Azure Blob EVENT: UPDATE(as CREATE) for {blob_name} already in document_state (unchanged) — skipping duplicate (periodic+event)")
+                                    self.known_blob_names.add(full_path)
+                                    self._last_processed[full_path] = datetime.now(timezone.utc)
+                                    continue
+
                                 if is_new:
                                     # Actually new - treat as CREATE
                                     logger.info(f"Azure Blob EVENT: CREATE (reported as UPDATE) for {blob_name}")
@@ -569,13 +608,12 @@ class AzureBlobDetector(ChangeDetector):
             return
         
         logger.info(f"Processing {blob_path} via backend (direct download)")
-        
+
+        full_path = None
+        _added_inflight = False
         try:
-            import tempfile
-            import os
-            
             skip_graph = getattr(self, 'skip_graph', False)
-            
+
             # Extract blob name from full path if needed
             # Full path format: container/blob_name
             if blob_path.startswith(f"{self.container_name}/"):
@@ -586,126 +624,90 @@ class AzureBlobDetector(ChangeDetector):
                 blob_name = blob_path
                 full_path = f"{self.container_name}/{blob_path}"
                 logger.info(f"Processing {blob_path} (constructed full path: {full_path})")
-            
+
+            # In-flight guard: the periodic refresh AND the change-feed event stream both call this
+            # method, and either can trigger for the same blob during the ~15-30s ingest window
+            # before document_state is written — so a document_state check alone can't dedup a
+            # concurrent overlap (that's the observed periodic+event double). Skip the second
+            # concurrent trigger. asyncio is single-threaded, so this check-then-add is atomic.
+            if full_path in self._in_flight:
+                logger.info(f"Azure Blob: {full_path} already being ingested (periodic/event overlap) — skipping duplicate")
+                return
+            self._in_flight.add(full_path)
+            _added_inflight = True
+
             processing_id = f"incremental_az_{blob_name.replace('/', '_').replace('.', '_')[:16]}"
-            
-            # Download blob to temporary location
-            container_client = self.blob_service_client.get_container_client(self.container_name)
-            blob_client = container_client.get_blob_client(blob_name)  # Use blob_name, not full path
-            
-            # Get blob properties for metadata
-            blob_properties = blob_client.get_blob_properties()
-            
-            # Get original filename
-            filename = os.path.basename(blob_name)
-            
-            # Create temp file with original extension
-            suffix = os.path.splitext(filename)[1]
-            with tempfile.NamedTemporaryFile(mode='wb', suffix=suffix, delete=False) as tmp_file:
-                temp_path = tmp_file.name
-                logger.info(f"Downloading {blob_name} to {temp_path}...")
-                
-                # Download blob content
-                download_stream = blob_client.download_blob()
-                tmp_file.write(download_stream.readall())
-            
-            logger.info(f"Downloaded {blob_name} ({blob_properties.size} bytes)")
-            
-            try:
-                # Get blob metadata for document_state creation
-                updated = blob_properties.last_modified
-                ordinal = int(updated.timestamp() * 1_000_000)
-                content_hash = StateManager.compute_content_hash(updated.isoformat())
-                
-                # Create a placeholder Document with Azure Blob metadata
-                # This ensures the doc_id is set correctly (container/blob_name instead of temp path)
-                from llama_index.core import Document
-                
-                placeholder_doc = Document(
-                    text="",  # Will be filled by DocumentProcessor
-                    metadata={
-                        "file_path": temp_path,  # ACTUAL temp file location for DocumentProcessor
-                        "file_name": filename,
-                        "source": "azure_blob",
-                        "container": self.container_name,
-                        "container_name": self.container_name,
-                        "name": blob_name,  # Raw blob name for identification
-                        "blob_path": full_path,  # Store the full Azure Blob path for reference
-                        "last_modified_date": updated.isoformat(),
-                        "size": blob_properties.size,
-                        "content_type": blob_properties.content_settings.content_type if blob_properties.content_settings else None,
-                    }
-                )
-                
-                # Process the document via DocumentProcessor
-                # This will parse the temp file but preserve Azure Blob metadata
-                doc_processor = self.backend.system.document_processor
-                processed_docs = await doc_processor.process_documents_from_metadata([placeholder_doc])
-                
-                # Restore Azure Blob metadata (in case DocumentProcessor overwrote it)
-                for doc in processed_docs:
-                    doc.metadata.update({
-                        "file_path": full_path,  # Use full Azure Blob path for doc_id generation
-                        "file_name": filename,   # Restore correct filename (not temp name)
-                        "source": "azure_blob",
-                        "container": self.container_name,
-                        "container_name": self.container_name,
-                        "name": blob_name,
-                    })
-                
-                # Index the processed documents via backend
-                await self.backend.system._ingest_source_documents(
-                    processed_docs,
-                    processing_id=processing_id,
-                    skip_graph=skip_graph,
-                    config_id=self.config_id
-                )
-                
-                logger.info(f"Successfully processed {blob_name} via backend pipeline")
-                
-                # Create document_state record directly from Azure Blob metadata
-                # Use full_path (container/blob_name) for document_state
-                if self.state_manager:
-                    try:
-                        from incremental_updates.state_manager import DocumentState
-                        
-                        now = datetime.now(timezone.utc)
-                        skip_graph_flag = getattr(self, 'skip_graph', False)
-                        
-                        # doc_id format: config_id:container/blob_path
-                        doc_id = f"{self.config_id}:{full_path}"
-                        
-                        doc_state = DocumentState(
-                            doc_id=doc_id,
-                            config_id=self.config_id,
-                            source_path=full_path,
-                            ordinal=ordinal,
-                            content_hash=content_hash,
-                            source_id=full_path,  # Use full path as source_id
-                            modified_timestamp=updated,  # datetime required by PostgreSQL TIMESTAMPTZ
-                            vector_synced_at=now,
-                            search_synced_at=now,
-                            graph_synced_at=now if not skip_graph_flag else None
-                        )
-                        
-                        await self.state_manager.save_state(doc_state)
-                        logger.info(f"Created document_state for {full_path}: {doc_id}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to create document_state for {full_path}: {e}")
-            
-            finally:
-                # Clean up temp file
+
+            # Route ingestion through the backend's data-source pipeline — the SAME path used by
+            # the initial ingest — instead of calling system.document_processor /
+            # system._ingest_source_documents directly. _process_documents_async() checks
+            # settings.enable_langflow_flows and runs the Langflow ingest flow when enabled, so
+            # incremental updates now honor regular-vs-Langflow routing (mirrors S3Detector).
+            # Scope to just this one blob via the reader's exact "blob" key.
+            azure_blob_config = dict(self.config or {})
+            azure_blob_config["container_name"] = self.container_name
+            azure_blob_config["blob"] = blob_name  # single-blob scope (exact)
+
+            await self.backend._process_documents_async(
+                processing_id=processing_id,
+                data_source="azure_blob",
+                config_id=self.config_id,
+                skip_graph=skip_graph,
+                azure_blob_config=azure_blob_config,
+            )
+
+            # Don't record state if the ingest did not complete successfully.
+            from backend import PROCESSING_STATUS
+            if PROCESSING_STATUS.get(processing_id, {}).get("status") == "failed":
+                logger.error(f"Backend ingest failed for {blob_name}; not recording document_state")
+                return
+
+            logger.info(f"Successfully processed {blob_name} via backend pipeline (flow-aware routing)")
+
+            # Create document_state directly from Azure Blob metadata. doc_id/source_path use
+            # full_path (container/blob_name) to match list_all_files() and process_change_event() —
+            # the keys change detection uses — and the doc_id from the initial post-ingestion state.
+            if self.state_manager:
                 try:
-                    os.unlink(temp_path)
-                    logger.debug(f"Cleaned up temp file: {temp_path}")
+                    from incremental_updates.state_manager import DocumentState
+
+                    container_client = self.blob_service_client.get_container_client(self.container_name)
+                    blob_client = container_client.get_blob_client(blob_name)
+                    blob_properties = blob_client.get_blob_properties()  # metadata only, no download
+                    updated = blob_properties.last_modified
+                    ordinal = int(updated.timestamp() * 1_000_000)
+                    content_hash = StateManager.compute_content_hash(updated.isoformat())
+
+                    now = datetime.now(timezone.utc)
+                    skip_graph_flag = getattr(self, 'skip_graph', False)
+                    doc_id = f"{self.config_id}:{full_path}"
+
+                    doc_state = DocumentState(
+                        doc_id=doc_id,
+                        config_id=self.config_id,
+                        source_path=full_path,
+                        ordinal=ordinal,
+                        content_hash=content_hash,
+                        source_id=full_path,  # Use full path as source_id
+                        modified_timestamp=updated,  # datetime required by PostgreSQL TIMESTAMPTZ
+                        vector_synced_at=now,
+                        search_synced_at=now,
+                        graph_synced_at=now if not skip_graph_flag else None
+                    )
+
+                    await self.state_manager.save_state(doc_state)
+                    logger.info(f"Created document_state for {full_path}: {doc_id}")
+
                 except Exception as e:
-                    logger.warning(f"Failed to delete temp file {temp_path}: {e}")
-            
+                    logger.error(f"Failed to create document_state for {full_path}: {e}")
+
         except Exception as e:
             logger.error(f"Failed to process {blob_path} via backend: {e}")
             raise
-    
+        finally:
+            if _added_inflight and full_path is not None:
+                self._in_flight.discard(full_path)
+
     async def _create_document_state_from_processing_status(
         self, processing_id: str, blob_path: str
     ):

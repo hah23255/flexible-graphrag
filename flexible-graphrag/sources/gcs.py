@@ -22,7 +22,11 @@ class GCSSource(BaseDataSource):
         
         # Get configuration
         self.bucket = config.get("bucket_name", "") or config.get("bucket", "")
-        self.prefix = config.get("prefix", "") or config.get("key", "")
+        # 'prefix' scopes to a folder (empty = whole bucket); 'key' reads ONE exact object.
+        # The dialog only ever sets 'prefix'; incremental single-object ingest sets 'key'.
+        # GCSReader treats prefix as a directory (ls), so a single file path must go via key.
+        self.prefix = config.get("prefix", "")
+        self.key = config.get("key", "")
         self.project_id = config.get("project_id")
         self.service_account_key_path = config.get("service_account_key_path")
         
@@ -40,7 +44,7 @@ class GCSSource(BaseDataSource):
                 logger.error(f"Invalid JSON in GCS credentials: {e}")
                 raise ValueError("Invalid JSON format in GCS service account credentials")
         
-        logger.info(f"GCSSource initialized for bucket: {self.bucket}, prefix: '{self.prefix}'")
+        logger.info(f"GCSSource initialized for bucket: {self.bucket}, prefix: '{self.prefix}', key: '{self.key}'")
     
     def validate_config(self) -> bool:
         """Validate the GCS source configuration."""
@@ -85,8 +89,10 @@ class GCSSource(BaseDataSource):
             "recursive": True,  # Recursively descend into subdirectories to find all files
         }
         
-        # Use 'prefix' parameter (not 'key') to filter objects in the bucket
-        if self.prefix:
+        # 'key' reads a single exact object; 'prefix' filters a folder. Key wins when both set.
+        if self.key:
+            reader_kwargs["key"] = self.key
+        elif self.prefix:
             reader_kwargs["prefix"] = self.prefix
         
         if self.service_account_key:
@@ -181,7 +187,7 @@ class GCSSource(BaseDataSource):
                 # This is not an error - just means no files to process right now
                 # The incremental detector will handle discovery via periodic refresh
                 logger.warning(f"GCS initial scan found no matching files")
-                logger.info(f"  Bucket: {self.bucket}, Prefix: '{self.prefix or '(none)'}', Recursive: {reader_kwargs.get('recursive', False)}")
+                logger.info(f"  Bucket: {self.bucket}, Prefix: '{self.prefix or '(none)'}', Key: '{self.key or '(none)'}'")
                 logger.info(f"  Files will be discovered via incremental detector's periodic refresh")
                 logger.debug(f"  Exception details: {ve}")
                 if progress_callback:

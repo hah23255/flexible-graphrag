@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-07-16] — v0.7.0: Langflow integration + LiteParse document parser
+
+Release rolling up the **Langflow integration** ([2026-07-06]) and the new **LiteParse** document parser ([2026-07-12]), plus the cloud incremental-sync work ([2026-07-09]) and the Microsoft Graph delta query. Version bumped to **0.7.0** across the backend, the MCP server, and the React/Vue/Angular frontends.
+
+### Added
+
+- **MS Graph delta query for OneDrive/SharePoint auto-sync** (`incremental_updates/detectors/msgraph_detector.py`) — incremental sync now uses a true Microsoft Graph **delta stream** (a resumable `deltaLink` persisted per config) instead of re-listing everything, so each cycle asks Graph only for what changed. **Now on by default** for OneDrive/SharePoint — they were previously excluded from the `enable_change_stream` auto-detect ("until the Microsoft Graph delta endpoint is fully implemented"); with the delta stream in place they join the other event-stream sources (`incremental_system.py`). The delta endpoint is polled every `polling_interval` seconds (default 60). Adds are gated so only the delta stream ingests a new file (no double chunks), while the periodic refresh stays on as a delete backstop (a duplicate delete is idempotent, so no missed deletes); delta-added files also carry their real folder path (from `parentReference`), matching the initial ingest. Verified end-to-end for OneDrive + SharePoint across Qdrant, Elasticsearch, Neo4j, and Ontotext GraphDB, in both normal and Langflow-flow modes. README auto-sync table updated (Detection Method: **MS Graph delta query**; still rated *near real-time*, like Google Drive's Changes API, since it polls rather than pushes).
+- **LiteParse option set + complex-document routing** — full env coverage for OCR (`LITEPARSE_OCR`, `_OCR_LANGUAGE`, `_OCR_SERVER_URL`, `_TESSDATA_PATH`, `_DPI`, `_NUM_WORKERS`), page limits (`_MAX_PAGES`) and output shaping (`_OUTPUT_FORMAT`, `_IMAGE_MODE`, `_EXTRACT_LINKS`), documented in a dedicated **LiteParse Config** section of `env-sample.txt`. Each file now gets a logged OCR outlook (how many pages need OCR and why), with a warning if pages need OCR while `LITEPARSE_OCR` is off. `LITEPARSE_COMPLEX_ROUTING` optionally hands scanned/complex documents to a heavier parser (`LITEPARSE_COMPLEX_FALLBACK` = docling or llamaparse, with `_TRIGGER` / `_THRESHOLD` to tune what counts as complex); if the fallback fails, the document is re-parsed with LiteParse so nothing is dropped.
+- **LiteParse honors `SAVE_PARSING_OUTPUT` and `PARSER_FORMAT_FOR_EXTRACTION`** — previously docling/llamaparse only.
+- **LiteParse external-tool requirements documented** — PDFs are native; MS Office/spreadsheets need **LibreOffice** and image files need **ImageMagick**. Listed with per-platform install commands in `env-sample.txt` and `docs/DATA-SOURCES/DOC-PROCESSING/SUPPORTED-FILE-FORMATS.md`; the root `README.md` parser and "Supported File Formats" sections now cover all three parsers (details linked to the docs rather than inlined).
+
+### Fixed
+
+- **Parsing output** (`SAVE_PARSING_OUTPUT`) — same-stem files of different types (`cmispress.pdf` vs `cmispress.txt`) no longer overwrite each other, empty files are no longer written, docling now saves output for text files (it previously saved none), and every parser writes into its own subfolder: `parsing_output/{docling,liteparse,llamaparse}/`.
+- **Extraction-format selection** (`PARSER_FORMAT_FOR_EXTRACTION=auto`, all three parsers) — table detection no longer treats any prose containing a pipe and a `---` as a table, and now prefers plaintext when a parser's markdown is lossy (drops content). Each parser logs a per-file table-detection line.
+- **Langflow console `UnicodeEncodeError`** — document text containing characters the Windows cp1252 console can't encode (e.g. a zero-width space in a pptx) spammed `--- Logging error ---` tracebacks. Ingest was never affected; content previews are now escaped before logging.
+
+---
+
+## [2026-07-12] — LiteParse document parser
+
+### Added
+
+- **LiteParse as a third document parser** (`DOCUMENT_PARSER=liteparse`) — a free, **local**, no-API-key parser ([run-llama/liteparse](https://github.com/run-llama/liteparse)) for PDFs and images with bundled Tesseract OCR; plain `.txt`/`.md` are read directly. Joins `docling` (default) and `llamaparse` (cloud). Wired through `process/document_processor.py` and added to `pyproject.toml`. Verified on `.txt`, a text PDF, and an OCR'd image PDF.
+
+### Fixed
+
+- **Duplicate chunks on auto-sync initial ingest** (`main.py`, `post_ingestion_state.py`) — `/api/ingest` started the sync detector before `document_state` was written, so the detector saw the just-ingested files as new and re-ingested them (e.g. 4–6 chunks instead of 2). Most visible in Langflow flow mode. The ingest now completes and `document_state` is written *before* the detector starts. Applies to normal and flow mode, all sources.
+- **Duplicate chunks on ADD** (`incremental_updates/detectors/{gcs,azure_blob,filesystem}_detector.py`) — for detectors that run both a periodic refresh and an event stream (Pub/Sub / change feed / watchdog), a newly-added file could be ingested by both (e.g. 4 points instead of 2). Both paths now dedup, via `document_state` for the sequential case and an in-flight guard for the concurrent one. *(S3, Box, Google Drive, Alfresco and MSGraph never ran both, so are unaffected.)*
+- **Flow-mode filesystem doc_id was filename-only** (`process/document_processor.py`) — mismatched the detector's full-path doc_id and broke sync (wrong-file deletes). Verified: filesystem flow sync ingest/add/delete/modify with correct `document_state`.
+
+---
+
+## [2026-07-09] — Cloud incremental sync (GCS/Azure) routing + config redaction
+
+### Fixed
+
+- **GCS/Azure incremental sync now honors regular-vs-Langflow routing** (`gcs_detector.py`, `azure_blob_detector.py`) — a single-object add/modify re-ingests through the same backend path as the initial ingest (like S3/Box) instead of a direct route, so it runs the Langflow ingest flow when `ENABLE_LANGFLOW_FLOWS` is on.
+- **GCS single-object reads** (`sources/gcs.py`) — added exact-object `key` support; single-object incremental ingest no longer fails by treating a file path as a directory.
+- **Query crash on `LANGCHAIN_PG_VECTOR_SEARCH=true` with the llamaindex backend** (`config.py`) — the flag only applies to the LangChain PG backend, and otherwise made queries hit a Neo4j `entity` index that was never created. It is now force-disabled (with a warning) unless `graph_backend=langchain`, so a stray `.env` value no longer errors at query time.
+- **SharePoint permission metadata** (`sources/sharepoint.py`) — the reader's 8 `allowed_*` permission arrays flowed into vector `_node_content`, search, and graph properties (and one tripped Neo4j). Now stripped in the source **before chunking**, so they aren't stored in any target.
+- **Azure metadata bloat → excessive chunking** (`sources/azure_blob.py`) — the reader attached the full ~40-field blob-properties dump to every doc, which ate chunk budget (a 2-chunk file became ~12) and polluted graph entity properties. Reader metadata is now replaced with a clean subset.
+- **Neo4j rejects dict and null-array properties** (`ingest/update_pg_graph.py`) — dict-valued reader metadata (e.g. Azure's custom-metadata map) and arrays containing null (e.g. SharePoint's permission arrays) crashed property-graph upsert. Both are now stringified before graph write, on chunk nodes and extracted entity/relation properties alike.
+- **`asyncio.run()` in a running loop** (`sources/passthrough_extractor.py`) — immediate-mode processing (Azure/Box/Drive readers) threw when called from the async pipeline during incremental sync.
+- **`enable_sync` config-identity crash** (`main.py`) — the stable `config_id` builder read fields that don't exist on the refactored Azure/SharePoint/CMIS models, throwing `AttributeError` when starting sync for those sources.
+- **Duplicate `document_state` on Windows** (`post_ingestion_state.py`) — filesystem path normalization was applied to cloud paths, so a cloud file got two `document_state` rows (`\` on initial ingest vs `/` on sync). Now normalized for `filesystem`/`local` only. *(Windows-only; vector/search/graph stores were unaffected.)*
+
+### Security
+
+- **Datasource credentials no longer exposed in the UI or logs** — the per-run config (service-account key, connection string, account key, S3 secret, …) was echoed into the Langflow "ingestion complete" status in the UI, and logged in plaintext by `/api/ingest` (`main.py`), the data-source and flow ingest paths (`backend.py`, `flow_service.py`), and the S3 source (`sources/s3.py`). All are now redacted via `flow_service.redact_config_for_log()` (masks secret-ish keys, keeps `*_path`, truncates long values), with verbose config detail moved to DEBUG and the S3 source logging config **keys only**.
+
+---
+
 ## [2026-07-06] — Langflow integration + backend fixes
 
 ### Added

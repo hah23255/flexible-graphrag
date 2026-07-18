@@ -230,6 +230,8 @@ gcs.json
 flexible-graphrag/gen-lang-client.json
 gen-lang-client.json
 
-
 # pyright
 pyrightconfig.json
+
+# Internal planning docs (not published)
+planning/

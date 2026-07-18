@@ -40,7 +40,8 @@ class PostIngestionStateManager:
         processing_id: str,
         config_id: str,
         paths: List[str],
-        data_source: str = "filesystem"
+        data_source: str = "filesystem",
+        skip_graph: Optional[bool] = None
     ):
         """
         Background task to create document_state records after ingestion completes.
@@ -85,7 +86,8 @@ class PostIngestionStateManager:
                             config_id,
                             paths,
                             data_source,
-                            status_dict
+                            status_dict,
+                            skip_graph
                         )
                         
                         logger.info(f"SUCCESS: Created {created_count} document_state records for config {config_id}")
@@ -114,7 +116,8 @@ class PostIngestionStateManager:
         config_id: str,
         paths: List[str],
         data_source: str,
-        status_dict: dict
+        status_dict: dict,
+        skip_graph: Optional[bool] = None
     ) -> int:
         """
         Create document_state records for all processed files.
@@ -124,12 +127,16 @@ class PostIngestionStateManager:
         """
         from incremental_updates.state_manager import DocumentState, StateManager
         from incremental_updates.config_manager import ConfigManager
-        
-        # Get datasource config for skip_graph setting
-        config_mgr = ConfigManager(self.postgres_url)
-        await config_mgr.initialize()
-        datasource_config = await config_mgr.get_config(config_id)
-        await config_mgr.close()
+
+        # skip_graph: prefer an explicitly-passed value so this can run BEFORE the datasource_config
+        # row is registered (see main.py enable_sync ordering — state must exist before the detector
+        # starts, or it re-ingests the just-ingested files). Fall back to reading it from the config.
+        if skip_graph is None:
+            config_mgr = ConfigManager(self.postgres_url)
+            await config_mgr.initialize()
+            datasource_config = await config_mgr.get_config(config_id)
+            await config_mgr.close()
+            skip_graph = bool(datasource_config.skip_graph) if datasource_config else False
         
         # Extract processed files and their metadata
         processed_files, documents_dict = self._extract_processed_files(status_dict, paths)
@@ -177,7 +184,7 @@ class PostIngestionStateManager:
                 now = datetime.now(timezone.utc)
                 
                 # Determine if graph was synced based on skip_graph setting
-                graph_synced = now if datasource_config and not datasource_config.skip_graph else None
+                graph_synced = now if not skip_graph else None
                 logger.info(f"Document state sync timestamps: vector={now}, search={now}, graph={'synced' if graph_synced else 'null (skip_graph=True)'}")
                 
                 # Create document state with all targets marked as synced
@@ -369,14 +376,23 @@ class PostIngestionStateManager:
         
         elif data_source in ["onedrive", "sharepoint"]:
             # For OneDrive/SharePoint:
-            # - source_path (human-readable) = filename for display
+            # - source_path (human-readable) = /test/cmispress.txt (for display)
             # - stable_path (for doc_id) = onedrive://file_id (stable across renames/moves)
             if filename in documents_dict:
                 doc = documents_dict[filename]
                 if hasattr(doc, 'metadata'):
-                    # Get human-readable filename for source_path (display in database/queries)
-                    # Use just the filename since OneDrive doesn't provide reliable folder paths
-                    source_path = doc.metadata.get('file_name') or filename
+                    # Prefer the source's human_file_path (e.g. "/test/cmispress.txt"), matching the
+                    # alfresco/cmis/box/azure branches which all store a human-readable PATH.
+                    # This used to store the bare file_name ("OneDrive doesn't provide reliable folder
+                    # paths") — no longer true: OneDriveSource/SharePointSource both set human_file_path,
+                    # and the incremental delta stream reports the same shape, so both ingest paths now
+                    # agree. NOTE: do NOT fall back to metadata['file_path'] — during processing that can
+                    # hold the local TEMP path (e.g. C:\...\Temp\tmp32raz2xv.txt).
+                    source_path = (
+                        doc.metadata.get('human_file_path')
+                        or doc.metadata.get('file_name')
+                        or filename
+                    )
                     
                     # Get stable file_id path for doc_id (identity)
                     stable_file_path = doc.metadata.get('stable_file_path')
@@ -398,10 +414,14 @@ class PostIngestionStateManager:
         # lowercase paths produced by the filesystem detector (normalize_filesystem_path).
         # Without this, an initial REST ingest stores "C:\..." but the detector compares
         # "c:\..." → false "deleted" detection → phantom delete+re-ingest cycle every sync.
-        if data_source in ("filesystem", "local") or (
-            "://" not in stable_path and not stable_path.startswith("alfresco://")
-            and not stable_path.startswith("onedrive://") and not stable_path.startswith("sharepoint://")
-        ):
+        #
+        # ONLY filesystem/local: normalize_filesystem_path runs os.path.normpath (flips '/'→'\'
+        # on Windows) + lowercases. Cloud sources (gcs/s3/azure/box, CMIS repo paths, and Drive's
+        # case-sensitive file IDs) use forward slashes and must NOT be mangled — doing so made the
+        # initial-ingest doc_id "config_id:bucket\a\b.txt" while the sync path kept
+        # "config_id:bucket/a/b.txt", so the sync never matched and wrote a DUPLICATE document_state
+        # (Windows-only; indexes were unaffected since ingest-side ids stay forward-slashed).
+        if data_source in ("filesystem", "local"):
             try:
                 from incremental_updates.path_utils import normalize_filesystem_path
                 stable_path = normalize_filesystem_path(stable_path)

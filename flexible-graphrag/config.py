@@ -80,6 +80,7 @@ class LLMProvider(str, Enum):
 class DocumentParser(str, Enum):
     DOCLING = "docling"
     LLAMAPARSE = "llamaparse"
+    LITEPARSE = "liteparse"
 
 class ObservabilityBackend(str, Enum):
     """Observability backend mode for telemetry producers"""
@@ -433,8 +434,24 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
         "'tesserocr' (pip compiles bindings; fragile on Windows; Linux needs libtesseract-dev etc.), "
         "'ocrmac' (macOS only, install docling-ocr-ocrmac extra)"
     ))
-    save_parsing_output: bool = Field(False, description="Save intermediate parsing results (markdown/text) from both Docling and LlamaParse to files for inspection")
-    parser_format_for_extraction: str = Field("auto", description="Format to use for knowledge graph extraction: 'auto' (markdown if tables, else plaintext), 'markdown' (always), 'plaintext' (always)")
+    # LiteParse (local Rust/PyO3 parser — https://github.com/run-llama/liteparse; no API key)
+    liteparse_ocr: bool = Field(True, description="Enable OCR in LiteParse for scanned/image PDFs (default: True; bundled Tesseract, applied only to image/text-sparse pages). Set LITEPARSE_OCR=false to disable.")
+    liteparse_ocr_language: Optional[str] = Field(None, description="LiteParse OCR language — Tesseract ISO 639-3 code (default 'eng'); e.g. fra, deu, jpn, spa. LITEPARSE_OCR_LANGUAGE")
+    liteparse_ocr_server_url: Optional[str] = Field(None, description="LiteParse external OCR server URL (EasyOCR/PaddleOCR/GPU); local Tesseract if unset. LITEPARSE_OCR_SERVER_URL")
+    liteparse_tessdata_path: Optional[str] = Field(None, description="LiteParse path to tessdata (.traineddata) for offline/air-gapped OCR; else TESSDATA_PREFIX / auto-download. LITEPARSE_TESSDATA_PATH")
+    liteparse_dpi: Optional[float] = Field(None, description="Render DPI for LiteParse OCR (higher = better accuracy, slower). Default: LiteParse's own default.")
+    liteparse_num_workers: Optional[int] = Field(None, description="Concurrent OCR workers for LiteParse. Default: CPU cores - 1.")
+    liteparse_max_pages: Optional[int] = Field(None, description="Max pages LiteParse processes per document. Default: all. LITEPARSE_MAX_PAGES")
+    liteparse_output_format: Optional[str] = Field(None, description="LiteParse output format: 'markdown' (default in-app), 'text', or 'json'. LITEPARSE_OUTPUT_FORMAT")
+    liteparse_image_mode: Optional[str] = Field(None, description="LiteParse image handling: 'off', 'placeholder' (default), or 'embed'. LITEPARSE_IMAGE_MODE")
+    liteparse_extract_links: Optional[bool] = Field(None, description="LiteParse: render hyperlinks as markdown links (default true). LITEPARSE_EXTRACT_LINKS")
+    # LiteParse complex-document routing — use is_complex() to send hard docs to a heavier parser
+    liteparse_complex_routing: bool = Field(False, description="Route 'complex' documents (LiteParse is_complex() → pages need OCR) to a heavier parser instead of parsing them with LiteParse. LITEPARSE_COMPLEX_ROUTING")
+    liteparse_complex_fallback: str = Field("docling", description="Parser to route complex docs to when LITEPARSE_COMPLEX_ROUTING=true: 'docling' or 'llamaparse'. LITEPARSE_COMPLEX_FALLBACK")
+    liteparse_complex_trigger: str = Field("needs_ocr", description="What marks a page 'complex' for routing: 'needs_ocr' (LiteParse's OCR verdict, default) OR a comma-separated list of reason flags to match with OR semantics (scanned, no-text, sparse-text, embedded-images, garbled, vector-text, …). LITEPARSE_COMPLEX_TRIGGER")
+    liteparse_complex_threshold: float = Field(0.0, description="Fraction of pages (0-1) matching the trigger for a doc to route to the fallback parser. 0 = any single page triggers routing. LITEPARSE_COMPLEX_THRESHOLD")
+    save_parsing_output: bool = Field(False, description="Save intermediate parsing results (markdown/text + metadata) from Docling, LlamaParse, and LiteParse to ./parsing_output/ for inspection")
+    parser_format_for_extraction: str = Field("auto", description="Format to use for knowledge graph extraction (Docling, LlamaParse, LiteParse): 'auto' (markdown if tables, else plaintext), 'markdown' (always), 'plaintext' (always)")
     
     # Knowledge graph extraction timeouts and progress
     kg_extraction_timeout: int = Field(3600, description="Timeout for knowledge graph extraction per document in seconds (default: 1 hour for large documents)")
@@ -897,6 +914,17 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
             self.langchain_pg_vector_search = False
         import logging as _logging
         _cfg_log = _logging.getLogger(__name__)
+        # LANGCHAIN_PG_VECTOR_SEARCH only applies to the LangChain PG backend — entity embeddings
+        # (and the Neo4j 'entity' vector index) are written ONLY by the LangChain ingest path. On the
+        # llamaindex backend, force it off so query time doesn't call db.index.vector.queryNodes on an
+        # index that was never created ("There is no such vector schema index: entity").
+        if self.langchain_pg_vector_search and (self.graph_backend or "llamaindex").strip().lower() != "langchain":
+            _cfg_log.warning(
+                "LANGCHAIN_PG_VECTOR_SEARCH=true ignored on graph_backend=%s (LangChain PG backend "
+                "not active); forcing it off so queries don't hit a missing Neo4j 'entity' index.",
+                self.graph_backend,
+            )
+            self.langchain_pg_vector_search = False
         _cfg_log.debug(
             "Property graph fusion flags: graph_backend=%s use_langchain_pg=%s "
             "langchain_pg_store_type=%s pg_graph_db=%s",

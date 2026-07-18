@@ -20,8 +20,8 @@ class S3Source(BaseDataSource):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         
-        # Log the raw config for debugging
-        logger.debug(f"S3Source received config: {config}")
+        # Log the config KEYS only for debugging — values include access/secret keys
+        logger.debug(f"S3Source received config keys: {sorted(config.keys())}")
         
         # Get configuration from UI config or environment variables
         # Support both "bucket_name" (standard) and "bucket" (S3Reader compatible) for flexibility

@@ -21,7 +21,7 @@
 [![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling or LlamaParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
+**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
 
 <p align="center">
   <a href="./screen-shots/auto-sync/auto-sync.png">
@@ -47,7 +47,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 - **LLM providers (KG extraction & chat)**: Ollama, OpenAI, Azure OpenAI, Google Gemini, Anthropic Claude, Google Vertex AI, Amazon Bedrock, Groq, Fireworks AI, OpenAI-compatible endpoints (`openai_like`), OpenRouter, LiteLLM proxy, and vLLM — configurable via `LLM_PROVIDER`; see [Supported LLM Providers](#supported-llm-providers)
 - **Embedding providers**: OpenAI, Ollama, Azure OpenAI, Google GenAI, Vertex AI, Bedrock, Fireworks, OpenAI-like (`EMBEDDING_KIND=openai_like`), and LiteLLM — see [LLM Configuration](#llm-configuration)
 - **Dual-framework pipeline**: **LlamaIndex** and **LangChain** are first-class choices for chunking, vector and search adapters, property graphs, KG extraction, RDF text-to-SPARQL retrieval, and hybrid fusion—each stage can be set independently (**LlamaIndex** defaults). See [Framework Configuration](#framework-configuration).
-- **Multi-Source Ingestion**: Processes documents from 13 data sources (9 with incremental auto sync): (file upload, cloud storage, enterprise repositories, web sources) with Docling (default) or LlamaParse (cloud API) document parsing.
+- **Multi-Source Ingestion**: Processes documents from 13 data sources (9 with incremental auto sync): (file upload, cloud storage, enterprise repositories, web sources) with Docling (default), LlamaParse (cloud API), or LiteParse (local, lightweight) document parsing.
 - **Observability**: Built-in OpenTelemetry instrumentation with automatic LlamaIndex tracing, Prometheus metrics, Jaeger traces, and Grafana dashboards for production monitoring
 - **FastAPI Server with REST API**: Python based FastAPI server with REST APIs for document ingesting, hybrid search, AI query, and AI chat.
 - **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 13 data sources with 9 supporting incremental auto sync), hybrid search, and AI query. Uses FastAPI backend REST APIs. 
@@ -104,7 +104,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 ### FastAPI Backend (`/flexible-graphrag`)
 - **REST API Server**: Provides endpoints for document ingestion, search, and AI query/chat
 - **Hybrid Search Engine**: Combines vector similarity (RAG), fulltext (BM25), and graph traversal (GraphRAG)
-- **Document Processing**: Advanced document conversion with Docling and LlamaParse integration
+- **Document Processing**: Advanced document conversion with Docling, LlamaParse, and LiteParse integration
 - **Configurable Architecture**: Environment-based configuration for all components
 - **Async Processing**: Background task processing with real-time progress updates
 
@@ -174,13 +174,13 @@ Each data source includes:
 
 | Data Source | Auto-Sync Support | Detection Method | Status | Notes |
 |-------------|-------------------|------------------|--------|-------|
-| **Alfresco** | ✅ Real-time | Community ActiveMQ | Ready | Enterprise Event Gateway planned |
+| **Alfresco** | ✅ Real-time | Apache ActiveMQ | Ready | |
 | **Amazon S3** | ✅ Real-time | SQS event notifications | Ready | |
 | **Azure Blob Storage** | ✅ Real-time | Change feed | Ready | |
 | **Google Cloud Storage** | ✅ Real-time | Pub/Sub notifications | Ready | |
 | **Google Drive** | ✅ Near real-time | Changes API (polling) | Ready | |
-| **OneDrive** | ✅ Near real-time | Polling | Ready | Delta query support planned |
-| **SharePoint** | ✅ Near real-time | Polling | Ready | Delta query support planned |
+| **OneDrive** | ✅ Near real-time | MS Graph delta query | Ready | |
+| **SharePoint** | ✅ Near real-time | MS Graph delta query | Ready | |
 | **Box** | ✅ Near real-time | Events API (polling) | Ready | |
 | **Local Filesystem** | ✅ Real-time | OS events (watchdog) | Ready | REST API and MCP Server only |
 | **File Upload UI, CMIS, Web Pages, Wikipedia, YouTube** | ➖ Not supported | - | - | No support for incremental updates |
@@ -229,7 +229,7 @@ The `docker/includes/postgres-pgvector.yaml` sets up two databases automatically
 
 ### Document Processing Options
 
-All data sources support two document parser options:
+All data sources support three document parser options (full per-parser format matrix in [Supported File Formats](docs/DATA-SOURCES/DOC-PROCESSING/SUPPORTED-FILE-FORMATS.md)):
 
 **Docling (Default)**:
 - Open-source, local processing
@@ -239,7 +239,7 @@ All data sources support two document parser options:
 - Multi-language support (English, German, French, Spanish, Czech, Russian, Chinese, Japanese, etc.)
 - Configured via: `DOCUMENT_PARSER=docling`
 - `DOCLING_DEVICE=auto|cpu|cuda|mps` — control GPU vs CPU processing
-- `SAVE_PARSING_OUTPUT=true` — save intermediate parsing results for inspection (works for both parsers)
+- `SAVE_PARSING_OUTPUT=true` — save intermediate parsing results for inspection (works for all three parsers)
 - `PARSER_FORMAT_FOR_EXTRACTION=auto|markdown|plaintext` — control format used for knowledge graph extraction
 - See [Docling GPU + OCR Configuration Guide](docs/DATA-SOURCES/DOC-PROCESSING/DOCLING-GPU-CONFIGURATION.md) for setup details | [Quick Reference](docs/DATA-SOURCES/DOC-PROCESSING/DOCLING-GPU-CONFIGURATION.md#quick-reference-installation-commands)
 
@@ -255,44 +255,25 @@ All data sources support two document parser options:
 - **New**: `SAVE_PARSING_OUTPUT=true` - Save parsed output and metadata for inspection
 - **New**: `PARSER_FORMAT_FOR_EXTRACTION=auto|markdown|plaintext` - Control format used for knowledge graph extraction
 
+**LiteParse**:
+- Open-source, local processing (Rust/PyO3) — free, no API key
+- Natively parses PDFs with bundled Tesseract OCR; `.txt`/`.md` read directly
+- Office formats need **LibreOffice**, images need **ImageMagick** — see [Supported File Formats](docs/DATA-SOURCES/DOC-PROCESSING/SUPPORTED-FILE-FORMATS.md#liteparse-free-local-lightweight)
+- Optional complexity-based routing of scanned/complex docs to Docling or LlamaParse via `LITEPARSE_COMPLEX_ROUTING`
+- Configured via: `DOCUMENT_PARSER=liteparse`; install `uv pip install liteparse`
+- Supports `SAVE_PARSING_OUTPUT` and `PARSER_FORMAT_FOR_EXTRACTION` like the other parsers
+
 ## Supported File Formats
 
-### Document Formats
-- **PDF**: `.pdf`
-  - **Docling**: Advanced layout analysis, table extraction, formula recognition, configurable OCR (EasyOCR, Tesseract, RapidOCR)
-  - **LlamaParse**: Automatic OCR within parsing pipeline, multimodal vision processing
-- **Microsoft Office**: `.docx`, `.xlsx`, `.pptx` and legacy formats (`.doc`, `.xls`, `.ppt`)
-  - **Docling**: DOCX, XLSX, PPTX structure preservation and content extraction
-  - **LlamaParse**: Full Office suite support including legacy formats and hundreds of variants
-- **Web Formats**: `.html`, `.htm`, `.xhtml`
-  - **Docling**: HTML/XHTML markup structure analysis
-  - **LlamaParse**: HTML/XHTML content extraction and formatting
-- **Data Formats**: `.csv`, `.tsv`, `.json`, `.xml`
-  - **Docling**: CSV structured data processing
-  - **LlamaParse**: CSV, TSV, JSON, XML with enhanced table understanding
-- **Documentation**: `.md`, `.markdown`, `.asciidoc`, `.adoc`, `.rtf`, `.txt`, `.epub`
-  - **Docling**: Markdown, AsciiDoc technical documentation with markup preservation
-  - **LlamaParse**: Extended format support including RTF, EPUB, and hundreds of text format variants
+Flexible GraphRAG processes **documents, images, and audio** across its three parsers:
 
-### Image Formats
-- **Standard Images**: `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tiff`, `.tif`
-  - **Docling**: OCR text extraction with configurable OCR backends (EasyOCR, Tesseract, RapidOCR)
-  - **LlamaParse**: Automatic OCR with multimodal vision processing and context understanding
+- **Documents:** PDF (`.pdf`); Microsoft Office + legacy (`.docx`/`.xlsx`/`.pptx`, `.doc`/`.xls`/`.ppt`); web (`.html`/`.htm`/`.xhtml`); data (`.csv`/`.tsv`/`.json`/`.xml`); documentation (`.md`/`.markdown`/`.asciidoc`/`.rtf`/`.txt`/`.epub`)
+- **Images:** `.png`/`.jpg`/`.jpeg`/`.gif`/`.bmp`/`.webp`/`.tiff`/`.tif`
+- **Audio:** `.wav`/`.mp3`/`.mp4`/`.m4a` (speech recognition / transcription)
 
-### Audio Formats
-- **Audio Files**: `.wav`, `.mp3`, `.mp4`, `.m4a`
-  - **Docling**: Automatic speech recognition (ASR) support
-  - **LlamaParse**: Transcription and content extraction for MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM
+Capabilities vary by parser — **Docling** and **LlamaParse** handle all of the above natively (advanced layout/table/formula analysis, configurable OCR, VLM/multimodal, ASR); **LiteParse** parses PDFs natively and needs LibreOffice for Office formats / ImageMagick for images. Both markdown and plaintext are saved, and the best is auto-selected for knowledge-graph extraction, embeddings, and search (markdown for tables, plaintext for text-heavy docs; override with `PARSER_FORMAT_FOR_EXTRACTION`).
 
-### Processing Intelligence
-- **Parser Selection**: 
-  - **Docling** (default, free): Local processing with specialized CV models (DocLayNet layout analysis, TableFormer for tables), configurable OCR backends (EasyOCR/Tesseract/RapidOCR), optional local VLM support (Granite-Docling, SmolDocling, Qwen2.5-VL, Pixtral)
-  - **LlamaParse** (cloud API, 3 credits/page): Automatic OCR in parsing pipeline, supports hundreds of file formats, fast mode (OCR-only), default mode (proprietary LlamaCloud model), premium mode (proprietary VLM mixture), multimodal mode (bring your own API keys: OpenAI GPT-4o, Anthropic Claude 3.5/4.5 Sonnet, Google Gemini 1.5/2.0, Azure OpenAI)
-- **Output Formats**: 
-  - **Flexible GraphRAG** saves both markdown and plaintext, then automatically selects which to use for processing (knowledge graph extraction, vector embeddings, and search indexing) - defaults to markdown for tables, plaintext for text-heavy docs - override with `PARSER_FORMAT_FOR_EXTRACTION`
-  - **Docling** supports: Markdown, JSON (lossless with bounding boxes and provenance), HTML, plain text, and DocTags (specialized markup preserving multi-column layouts, mathematical formulas, and code blocks)
-  - **LlamaParse** supports: Markdown, plain text, raw JSON, XLSX (extracted tables), PDF, images (extracted separately), and structured output (beta - enforces custom JSON schema for strict data model extraction)
-- **Format Detection**: Automatic routing based on file extension and content analysis
+**Full per-parser matrix, OCR/VLM options, and output formats: [Supported File Formats](docs/DATA-SOURCES/DOC-PROCESSING/SUPPORTED-FILE-FORMATS.md).**
 
 ## Database Configuration
 
@@ -1236,8 +1217,8 @@ The main requirement is a **separate venv for Langflow** — Langflow runs the f
 ```powershell
 uv pip install --native-tls langflow==1.10.1
 uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"
-$env:LANGFLOW_COMPONENTS_PATH = "…/flexible-graphrag/langflow_components"
-# from the flexible-graphrag backend dir:
+# from the flexible-graphrag backend dir (so the relative components path resolves):
+$env:LANGFLOW_COMPONENTS_PATH = "langflow_components"
 langflow run --port 7860 --log-level WARNING --log-file langflow.log
 ```
 
@@ -1450,7 +1431,7 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
     - `llamaindex/search/adapters/`: Elasticsearch, OpenSearch search adapters
     - `llamaindex/vector/adapters/`: Qdrant, Elasticsearch, OpenSearch, pgvector, Chroma, and others
   - `observability/`: OpenTelemetry instrumentation, Prometheus metrics, tracing setup
-  - `process/`: Core document processing — `document_processor.py` (Docling/LlamaParse), `kg_extractor.py`, `node_pipeline.py`
+  - `process/`: Core document processing — `document_processor.py` (Docling/LlamaParse/LiteParse), `kg_extractor.py`, `node_pipeline.py`
   - `rdf/`: RDF/ontology support — ontology manager, KG-to-RDF converter, SPARQL tools, bundled schemas (`rdf/schemas/`)
     - `rdf/store/`: RDF store adapters — Fuseki, GraphDB, Oxigraph, store factory
   - `sources/`: Data source connectors — filesystem, CMIS/Alfresco, Azure Blob, S3, GCS, OneDrive, SharePoint, Google Drive, Box, web, Wikipedia, YouTube, etc.

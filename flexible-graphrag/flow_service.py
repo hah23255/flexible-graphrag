@@ -22,6 +22,34 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Substrings that mark a config value as a secret (matched case-insensitively against the key).
+# "_path" keys (e.g. service_account_key_path) are file references, not secrets — kept for debug.
+_SECRET_KEY_MARKERS = (
+    "credential", "service_account_key", "account_key", "connection_string",
+    "secret", "password", "api_key", "apikey", "client_secret", "token", "private_key",
+)
+
+
+def redact_config_for_log(cfg: Any, max_len: int = 60) -> Any:
+    """Return a copy of a config dict safe to write to logs.
+
+    Secret-looking keys are masked; long string values are truncated. Nested dicts (e.g.
+    run_cfg -> source_config) are handled recursively. Used for DEBUG-level config logging so
+    ingest config can be inspected without dumping credentials or huge key blobs to disk.
+    """
+    if isinstance(cfg, dict):
+        out: Dict[str, Any] = {}
+        for k, v in cfg.items():
+            kl = str(k).lower()
+            if not kl.endswith("_path") and any(m in kl for m in _SECRET_KEY_MARKERS):
+                out[k] = "***redacted***"
+            else:
+                out[k] = redact_config_for_log(v, max_len)
+        return out
+    if isinstance(cfg, str) and len(cfg) > max_len:
+        return f"{cfg[:max_len]}…(+{len(cfg) - max_len} chars)"
+    return cfg
+
 
 class FlowService:
     """Service for executing Langflow flows."""
@@ -162,8 +190,8 @@ class FlowService:
         out_type = "debug" if config_id else "text"
         payload = {"input_value": json.dumps(run_cfg), "input_type": "chat",
                    "output_type": out_type, "tweaks": dict(tweaks or {})}
-        logger.info("FlowService: run ingest flow %s output=%s input_value=%s",
-                    self.ingestion_flow_id, out_type, json.dumps(run_cfg)[:600])
+        logger.info("FlowService: run ingest flow %s output=%s", self.ingestion_flow_id, out_type)
+        logger.debug("FlowService: run_cfg=%s", redact_config_for_log(run_cfg))
         response = await self._request("POST", f"/api/v1/run/{self.ingestion_flow_id}", json=payload)
         return response.json()
 
@@ -279,7 +307,18 @@ class FlowService:
 
     @staticmethod
     def extract_message(run_result: Dict[str, Any]) -> str:
-        """Pull the chat/text message out of a Langflow run response (best-effort)."""
+        """Pull the chat/text message out of a Langflow run response (best-effort).
+
+        In debug output mode (used for incremental sync) the run result also contains the
+        echoed ChatInput payload — our run_cfg JSON, which embeds source_config CREDENTIALS.
+        We must NOT surface that to the caller/UI, so skip any message that looks like the
+        input echo, and never fall back to dumping the raw run_result.
+        """
+        def _is_input_echo(s: str) -> bool:
+            t = (s or "").lstrip()
+            # run_cfg is a JSON object that always carries the "source_config" key
+            return t.startswith("{") and '"source_config"' in t
+
         try:
             outputs = run_result.get("outputs", [])
             for o in outputs:
@@ -287,16 +326,23 @@ class FlowService:
                     res = inner.get("results", {})
                     msg = res.get("message") or res.get("text")
                     if isinstance(msg, dict):
-                        return msg.get("text") or msg.get("message") or str(msg)
+                        text = msg.get("text") or msg.get("message") or str(msg)
+                        if text and not _is_input_echo(text):
+                            return text
+                        continue
                     if isinstance(msg, str):
-                        return msg
+                        if msg and not _is_input_echo(msg):
+                            return msg
+                        continue
                     # some shapes: inner["messages"][0]["message"]
                     for m in inner.get("messages", []) or []:
-                        if m.get("message"):
-                            return m["message"]
+                        mm = m.get("message")
+                        if mm and not _is_input_echo(mm):
+                            return mm
         except Exception:
             pass
-        return json.dumps(run_result)[:2000]
+        # Safe fallback — do NOT dump run_result; it embeds the echoed source_config credentials.
+        return "Ingestion flow completed."
 
     async def list_flows(self) -> List[Dict[str, Any]]:
         return (await self._request("GET", "/api/v1/flows/")).json()

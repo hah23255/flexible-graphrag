@@ -107,6 +107,9 @@ class GCSDetector(ChangeDetector):
         
         # Track known objects for CREATE vs MODIFY detection
         self.known_object_names = set()
+        # Objects currently being ingested — dedups a concurrent periodic-refresh + Pub/Sub-event
+        # overlap (both call _process_via_backend during the window before document_state is written).
+        self._in_flight = set()
         
         logger.info(f"GCSDetector initialized - bucket={self.bucket}, prefix={self.prefix}, "
                    f"event_mode={self.use_event_mode}, project_id={self.project_id}")
@@ -350,6 +353,26 @@ class GCSDetector(ChangeDetector):
             logger.error(f"Error downloading {object_key} from GCS: {e}")
             raise
     
+    async def _already_ingested_unchanged(self, full_path: str, ordinal) -> bool:
+        """True if this object is already in document_state with an unchanged ordinal — i.e. the
+        periodic refresh (or a prior event) already ingested it. The Pub/Sub event stream and the
+        periodic refresh track state separately (known_object_names vs document_state), so without
+        this a just-refreshed object gets re-ingested by the CREATE event → duplicate chunks."""
+        if not self.state_manager or not self.config_id:
+            return False
+        try:
+            st = await self.state_manager.get_state(f"{self.config_id}:{full_path}")
+        except Exception as e:
+            logger.debug(f"document_state check failed for {full_path}: {e}")
+            return False
+        # Present in document_state → the periodic refresh (or a prior event) already ingested it,
+        # so this is_new CREATE event is a duplicate. We deliberately do NOT compare ordinals: the
+        # event ordinal is the Pub/Sub event time while document_state stores the object's updated
+        # time, so they don't line up. A genuine later modify is caught by the periodic refresh; and
+        # because the caller adds this path to known_object_names on skip, subsequent modifies route
+        # through the UPDATE branch.
+        return st is not None
+
     async def get_changes(self) -> AsyncGenerator[ChangeEvent, None]:
         """
         Stream change events from GCS via Pub/Sub.
@@ -440,7 +463,15 @@ class GCSDetector(ChangeDetector):
                     # Check if truly new (using known_object_names)
                     object_name = event.metadata.path
                     is_new = object_name not in self.known_object_names
-                    
+
+                    # Skip if the periodic refresh (or a prior event) already ingested this object
+                    # unchanged — the two paths track state separately, so without this the CREATE
+                    # event re-ingests it → duplicate chunks (periodic + Pub/Sub event).
+                    if is_new and await self._already_ingested_unchanged(object_name, event.metadata.ordinal):
+                        logger.info(f"GCS EVENT: CREATE for {object_name} already in document_state (unchanged) — skipping duplicate (periodic+event)")
+                        self.known_object_names.add(object_name)
+                        continue
+
                     if is_new:
                         # Truly new - CREATE
                         logger.info(f"GCS EVENT: CREATE for {object_name}")
@@ -484,7 +515,13 @@ class GCSDetector(ChangeDetector):
                     
                     # Check if truly known (might be false positive)
                     is_new = object_name not in self.known_object_names
-                    
+
+                    # Same periodic+event dedup as the CREATE branch above.
+                    if is_new and await self._already_ingested_unchanged(object_name, event.metadata.ordinal):
+                        logger.info(f"GCS EVENT: UPDATE(as CREATE) for {object_name} already in document_state (unchanged) — skipping duplicate (periodic+event)")
+                        self.known_object_names.add(object_name)
+                        continue
+
                     if is_new:
                         # Actually new - treat as CREATE
                         logger.info(f"GCS EVENT: CREATE (reported as UPDATE) for {object_name}")
@@ -638,124 +675,95 @@ class GCSDetector(ChangeDetector):
         else:
             object_key = object_name
             logger.info(f"Processing {object_name} via backend (direct download)")
-        
+
+        full_path = f"{self.bucket}/{object_key}"
+        _added_inflight = False
         try:
-            import tempfile
-            import os
-            
             skip_graph = getattr(self, 'skip_graph', False)
             processing_id = f"incremental_gcs_{object_key.replace('/', '_').replace('.', '_')[:16]}"
-            
-            # Download file to temporary location
-            bucket = self.storage_client.bucket(self.bucket)
-            blob = bucket.blob(object_key)
-            
-            # Get original filename
-            filename = os.path.basename(object_key)
-            
-            # Create temp file with original extension
-            suffix = os.path.splitext(filename)[1]
-            with tempfile.NamedTemporaryFile(mode='wb', suffix=suffix, delete=False) as tmp_file:
-                temp_path = tmp_file.name
-                logger.info(f"Downloading {object_key} to {temp_path}...")
-                blob.download_to_file(tmp_file)
-            
-            logger.info(f"Downloaded {object_key} ({blob.size} bytes)")
-            
-            try:
-                # Get blob metadata for document_state creation
-                updated = blob.updated or datetime.now(timezone.utc)
-                ordinal = int(updated.timestamp() * 1_000_000)
-                content_hash = StateManager.compute_content_hash(updated.isoformat())
-                
-                # Create a placeholder Document with GCS metadata
-                # This ensures the doc_id is set correctly (bucket/object_key instead of temp path)
-                from llama_index.core import Document
-                
-                full_path = f"{self.bucket}/{object_key}"
-                
-                placeholder_doc = Document(
-                    text="",  # Will be filled by DocumentProcessor
-                    metadata={
-                        "file_path": temp_path,  # ACTUAL temp file location for DocumentProcessor
-                        "file_name": filename,
-                        "source": "gcs",
-                        "bucket_name": self.bucket,
-                        "object_key": object_key,  # Store the GCS object key
-                        "gcs_path": full_path,  # Store the full GCS path for reference
-                        "last_modified_date": updated.isoformat(),
-                        "size": blob.size,
-                        "content_type": blob.content_type,
-                    }
-                )
-                
-                # Process the document via DocumentProcessor
-                # This will parse the temp file but preserve GCS metadata
-                doc_processor = self.backend.system.document_processor
-                processed_docs = await doc_processor.process_documents_from_metadata([placeholder_doc])
-                
-                # Restore GCS metadata (in case DocumentProcessor overwrote it)
-                for doc in processed_docs:
-                    doc.metadata.update({
-                        "file_path": object_key,  # Use object key for doc_id generation
-                        "file_name": filename,    # Restore correct filename (not temp name)
-                        "source": "gcs",
-                        "bucket_name": self.bucket,
-                    })
-                
-                # Index the processed documents via backend
-                await self.backend.system._ingest_source_documents(
-                    processed_docs,
-                    processing_id=processing_id,
-                    skip_graph=skip_graph,
-                    config_id=self.config_id
-                )
-                
-                logger.info(f"Successfully processed {object_key} via backend pipeline")
-                
-                # Create document_state record directly from GCS metadata
-                # Don't try to extract from filesystem processing (temp files have wrong metadata)
-                if self.state_manager:
-                    try:
-                        from incremental_updates.state_manager import DocumentState
-                        
-                        now = datetime.now(timezone.utc)
-                        skip_graph_flag = getattr(self, 'skip_graph', False)
-                        
-                        # doc_id format: config_id:source_path
-                        doc_id = f"{self.config_id}:{full_path}"
-                        
-                        doc_state = DocumentState(
-                            doc_id=doc_id,
-                            config_id=self.config_id,
-                            source_path=full_path,
-                            ordinal=ordinal,
-                            content_hash=content_hash,
-                            source_id=full_path,  # Use full path as source_id
-                            modified_timestamp=updated.isoformat(),
-                            vector_synced_at=now,
-                            search_synced_at=now,
-                            graph_synced_at=now if not skip_graph_flag else None
-                        )
-                        
-                        await self.state_manager.save_state(doc_state)
-                        logger.info(f"Created document_state for {full_path}: {doc_id}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to create document_state for {full_path}: {e}")
-            
-            finally:
-                # Clean up temp file
+
+            # In-flight guard: the periodic refresh AND the Pub/Sub event stream both call this
+            # method, and either can trigger for the same object during the ingest window before
+            # document_state is written — a document_state check alone can't dedup a concurrent
+            # overlap. Skip the second concurrent trigger (asyncio → check-then-add is atomic).
+            if full_path in self._in_flight:
+                logger.info(f"GCS: {full_path} already being ingested (periodic/event overlap) — skipping duplicate")
+                return
+            self._in_flight.add(full_path)
+            _added_inflight = True
+
+            # Route ingestion through the backend's data-source pipeline — the SAME path used by
+            # the initial ingest — instead of calling system.document_processor /
+            # system._ingest_source_documents directly. _process_documents_async() checks
+            # settings.enable_langflow_flows and runs the Langflow ingest flow when enabled, so
+            # incremental updates now honor regular-vs-Langflow routing (mirrors S3Detector).
+            # Scope to just this one object via GCSReader's exact-object "key" param.
+            # (NOT "prefix" — prefix is treated as a folder/directory and fails on a file path.)
+            gcs_config = dict(self.config or {})
+            gcs_config["bucket_name"] = self.bucket
+            gcs_config.pop("prefix", None)   # ignore any dialog folder prefix for single-object ingest
+            gcs_config["key"] = object_key   # single-object scope (exact)
+
+            await self.backend._process_documents_async(
+                processing_id=processing_id,
+                data_source="gcs",
+                config_id=self.config_id,
+                skip_graph=skip_graph,
+                gcs_config=gcs_config,
+            )
+
+            # Don't record state if the ingest did not complete successfully.
+            from backend import PROCESSING_STATUS
+            if PROCESSING_STATUS.get(processing_id, {}).get("status") == "failed":
+                logger.error(f"Backend ingest failed for {object_key}; not recording document_state")
+                return
+
+            logger.info(f"Successfully processed {object_key} via backend pipeline (flow-aware routing)")
+
+            # Create document_state directly from GCS metadata. doc_id/source_path use full_path
+            # (bucket/object_key) to match list_all_files() and process_change_event() — the keys
+            # change detection uses — and the doc_id produced by the initial post-ingestion state.
+            if self.state_manager:
                 try:
-                    os.unlink(temp_path)
-                    logger.debug(f"Cleaned up temp file: {temp_path}")
+                    from incremental_updates.state_manager import DocumentState
+
+                    bucket = self.storage_client.bucket(self.bucket)
+                    blob = bucket.blob(object_key)
+                    blob.reload()  # fetch metadata (updated/size) without downloading content
+                    updated = blob.updated or datetime.now(timezone.utc)
+                    ordinal = int(updated.timestamp() * 1_000_000)
+                    content_hash = StateManager.compute_content_hash(updated.isoformat())
+
+                    now = datetime.now(timezone.utc)
+                    skip_graph_flag = getattr(self, 'skip_graph', False)
+                    doc_id = f"{self.config_id}:{full_path}"
+
+                    doc_state = DocumentState(
+                        doc_id=doc_id,
+                        config_id=self.config_id,
+                        source_path=full_path,
+                        ordinal=ordinal,
+                        content_hash=content_hash,
+                        source_id=full_path,  # Use full path as source_id
+                        modified_timestamp=updated.isoformat(),
+                        vector_synced_at=now,
+                        search_synced_at=now,
+                        graph_synced_at=now if not skip_graph_flag else None
+                    )
+
+                    await self.state_manager.save_state(doc_state)
+                    logger.info(f"Created document_state for {full_path}: {doc_id}")
+
                 except Exception as e:
-                    logger.warning(f"Failed to delete temp file {temp_path}: {e}")
-            
+                    logger.error(f"Failed to create document_state for {full_path}: {e}")
+
         except Exception as e:
             logger.error(f"Failed to process {object_name} via backend: {e}")
             raise
-    
+        finally:
+            if _added_inflight and full_path is not None:
+                self._in_flight.discard(full_path)
+
     async def _create_document_state_from_processing_status(
         self, processing_id: str, object_name: str
     ):

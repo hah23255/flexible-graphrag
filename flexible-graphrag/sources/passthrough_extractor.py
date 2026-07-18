@@ -193,9 +193,20 @@ class PassthroughExtractor(BaseReader):
                 # Process the file right now while it still exists in temp directory
                 # process_documents is async and takes a list of paths + optional metadata
                 import asyncio
-                processed_docs = asyncio.run(
-                    self.doc_processor.process_documents([str(actual_file_path)], original_metadata=metadata_dict)
+                _coro = self.doc_processor.process_documents(
+                    [str(actual_file_path)], original_metadata=metadata_dict
                 )
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    processed_docs = asyncio.run(_coro)  # no running loop — safe
+                else:
+                    # Already inside an event loop (e.g. incremental sync calls this from the
+                    # async pipeline) — asyncio.run() would raise "cannot be called from a running
+                    # event loop", so run the coroutine in a worker thread with its own loop.
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+                        processed_docs = _pool.submit(lambda: asyncio.run(_coro)).result()
                 
                 # Rename back to original ugly name so reader's cleanup works
                 if renamed_path:

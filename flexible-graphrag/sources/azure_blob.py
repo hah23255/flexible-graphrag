@@ -229,35 +229,48 @@ class AzureBlobSource(BaseDataSource):
             # processes each file immediately while the temp file still exists)
             documents = placeholder_docs
             
-            # Add Azure Blob Storage metadata to processed documents and CORRECT file_path
+            # Replace metadata with a clean, useful subset and CORRECT file_path.
+            # AzStorageBlobReader dumps the ENTIRE blob-properties dict (~40 fields, several nested
+            # dicts: content_settings / copy / lease / immutability_policy / metadata) onto each doc.
+            # Left as-is that (a) bloats chunk metadata so LlamaIndex splits the text into far too
+            # many tiny chunks (e.g. a 2-chunk file became 12), (b) pollutes graph node/entity
+            # properties, and (c) trips Neo4j on the dict values. Keep only what downstream reads.
             for doc in documents:
-                file_name = doc.metadata.get('file_name', '')
-                # After our PassthroughExtractor fix, file_path in doc.metadata should already
-                # be the blob name (e.g. 'cmispress.txt').  Construct container/blob_name path.
-                blob_path = doc.metadata.get('file_path', '')
+                _md = doc.metadata or {}
+                file_name = _md.get('file_name', '')
+                # After our PassthroughExtractor fix, file_path is the blob name (e.g. 'cmispress.txt').
+                blob_path = _md.get('file_path', '')
                 if blob_path and not blob_path.startswith(self.container_name + '/'):
-                    # Blob path is relative (blob name only); prefix with container
                     correct_azure_path = f"{self.container_name}/{blob_path}"
                 else:
-                    # Fallback to the pre-built mapping keyed by file_name
                     correct_azure_path = azure_path_mapping.get(file_name, None)
-                
-                # Update metadata with correct Azure path and metadata
-                update_dict = {
+
+                _cs = _md.get('content_settings')
+                content_type = _cs.get('content_type') if isinstance(_cs, dict) else _md.get('content_type')
+
+                # 'name' (raw blob name) + container_name are read by doc_id / document_state creation
+                clean = {
                     "source": "azure_blob",
+                    "source_type": "azure_blob_object",
                     "container_name": self.container_name,
                     "account_name": self.account_name,
-                    "source_type": "azure_blob_object"
+                    "name": _md.get('name') or file_name,
+                    "file_name": file_name,
+                    "file_path": correct_azure_path or blob_path,
+                    "file_type": _md.get('file_type'),
+                    "file_size": _md.get('file_size') or _md.get('size'),
+                    "last_modified": _md.get('last_modified'),
+                    "content_type": content_type,
+                    "conversion_method": _md.get('conversion_method'),
                 }
-                
-                # CRITICAL: Override file_path with correct Azure path (container/blob_name format)
+                if _md.get('doc_id'):
+                    clean['doc_id'] = _md['doc_id']
+                doc.metadata = {k: v for k, v in clean.items() if v is not None}
+
                 if correct_azure_path:
-                    update_dict["file_path"] = correct_azure_path
                     logger.debug(f"Corrected file_path for '{file_name}' to '{correct_azure_path}'")
                 else:
                     logger.warning(f"Could not find Azure path mapping for file_name: {file_name}")
-                
-                doc.metadata.update(update_dict)
             
             logger.info(f"AzureBlobSource processed {len(documents)} documents from Azure Blob Storage")
             return (len(documents), documents)  # Return tuple: (file_count, documents)

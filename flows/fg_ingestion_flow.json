@@ -663,7 +663,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -671,7 +671,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -777,7 +777,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -785,7 +785,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -891,7 +891,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -899,7 +899,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1005,7 +1005,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -1013,7 +1013,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1119,7 +1119,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -1127,7 +1127,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1254,7 +1254,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -1262,11 +1262,11 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "process",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1372,7 +1372,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -1380,7 +1380,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1507,7 +1507,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
@@ -1515,7 +1515,7 @@
                   },
                   {
                     "name": "ingest",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   }
                 ]
               }
@@ -1713,7 +1713,7 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.6.3"
+                    "version": "0.7.0"
                   },
                   {
                     "name": "langflow",
