@@ -29,7 +29,9 @@ The backend and Langflow communicate **only over HTTP** (`LANGFLOW_URL`), which 
 
 ---
 
-## Setup: two venvs, two terminals
+## Setup — all on the host (standalone backend + standalone Langflow)
+
+This is **shape 1** (non-Docker): both the app and Langflow run on the host, in **two venvs, two terminals**. For **shape 2** (everything containerized), see [Running Langflow in Docker](#running-langflow-in-docker) below. Keep the backend and Langflow on the *same* side (both host, or both Docker) so they share a filesystem — needed for file-upload ingest.
 
 Langflow executes the flow's component code **in its own process**, so it needs Flexible GraphRAG installed in its environment. The app runs in its own environment and just talks to Langflow over REST. Use **two virtual environments in two terminal windows**:
 
@@ -50,22 +52,23 @@ uv venv --python 3.14.5 venv-langflow
 
 # Two-step install (the combined flexible-graphrag[langflow] extra is unsatisfiable).
 # --native-tls is needed behind an SSL-inspecting corporate proxy.
-uv pip install --native-tls langflow==1.10.1
+uv pip install --native-tls langflow==1.10.2
 uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"   # LlamaIndex + fuller LangChain backends (e.g. Neo4j)
 
-# Point Langflow at the custom components, then run it FROM the flexible-graphrag backend dir
-# (the relative path resolves because you run from that dir)
-$env:LANGFLOW_COMPONENTS_PATH = "langflow_components"
+# Run Langflow from the flexible-graphrag backend dir. The "Flexible GraphRAG" palette
+# auto-registers via the extension bundle (shipped with flexible-graphrag ≥ 0.7.1), so no
+# LANGFLOW_COMPONENTS_PATH is needed; running from the backend dir keeps the flow's .env,
+# flows/, and schemas/ alongside it (see the warning below).
 langflow run --port 7860 --log-level WARNING --log-file langflow.log
 ```
 
-Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; once that finishes, the **Flexible GraphRAG** category with the 12 `Flexible: *` nodes appears in the sidebar. Open <http://localhost:7860> to confirm.
+Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; once that finishes, the **Flexible GraphRAG** category with the 12 `Flexible: *` nodes appears in the sidebar (auto-registered by the extension bundle). Open <http://localhost:7860> to confirm. Then **create an API key** for the backend — **Settings → Langflow API Keys → Add New** (copy it, shown once); the backend uses it in Terminal 2. (Prefer no key for local dev? See [Authentication](#authentication) for the auto-login shortcut.)
 
-!!! note "Other shells"
-    The block above is **PowerShell**. On **Windows Command Prompt** (cmd.exe, not PowerShell), set the path **without quotes** (cmd stores the quotes as part of the value): `set LANGFLOW_COMPONENTS_PATH=langflow_components`. On **macOS / Linux** (bash/zsh): `export LANGFLOW_COMPONENTS_PATH=langflow_components`. (All relative to the backend dir you run Langflow from.)
+!!! note "No `LANGFLOW_COMPONENTS_PATH` needed — and don't set it"
+    **Changed in v0.7.1.** In **0.7.0** you set `LANGFLOW_COMPONENTS_PATH=langflow_components` (and ran Langflow from a dir where that path resolved). As of **0.7.1** the palette is registered by the **Langflow Extension bundle** as long as `flexible-graphrag` is installed in the **same venv** as Langflow (the editable install above) — Langflow discovers it at startup via `importlib.metadata`, independent of the working directory. So you **no longer set `LANGFLOW_COMPONENTS_PATH`**; if you do, Langflow logs a harmless `bundle-shadowed` warning because the installed extension outranks the inline path.
 
 !!! warning "In flow mode, the components read the *Langflow* process's `.env` — not the backend's"
-    When `ENABLE_LANGFLOW_FLOWS=true`, ingest/search/AI-query run **inside the Langflow process**, so every backend setting the components read — `DOCUMENT_PARSER`, `CHUNK_SIZE`, the vector/search/graph/RDF DBs, LLM & embeddings — comes from the `.env` **Langflow** loads, which is the `.env` in the folder one level up from `LANGFLOW_COMPONENTS_PATH` (i.e. the flexible-graphrag app dir Langflow runs from). The backend's own `.env` only governs **non-flow** (direct) runs. If the two processes run from the **same** directory (the two-terminal setup above), they share one `.env` and this never surprises you. But if they run from **different** folders — e.g. an installed-wheel backend in one folder and Langflow from a source checkout in another — editing only the backend's `.env` won't change the flow's behavior (a common symptom: you switch `DOCUMENT_PARSER` but the flow keeps using the old parser). Fix: edit the `.env` next to the `langflow_components` Langflow is using. No Langflow restart is needed — the components reload the `.env` on the next run (`load_dotenv(override=True)`).
+    When `ENABLE_LANGFLOW_FLOWS=true`, ingest/search/AI-query run **inside the Langflow process**, so every backend setting the components read — `DOCUMENT_PARSER`, `CHUNK_SIZE`, the vector/search/graph/RDF DBs, LLM & embeddings — comes from the `.env` **Langflow** loads. The components resolve that `.env` from their **own installed location** — the flexible-graphrag app dir that is the parent of `langflow_components` (for an editable install, your source checkout; this is *not* the current working directory). The backend's own `.env` only governs **non-flow** (direct) runs. If the backend and Langflow use the **same** flexible-graphrag install (the two-terminal setup above), they share one `.env` and this never surprises you. But if they use **different** installs — e.g. an installed-wheel backend in one place and an editable Langflow checkout in another — editing only the backend's `.env` won't change the flow's behavior (a common symptom: you switch `DOCUMENT_PARSER` but the flow keeps using the old parser). Fix: edit the `.env` next to the `langflow_components` Langflow's install uses. No Langflow restart is needed — the components reload the `.env` on the next run (`load_dotenv(override=True)`).
 
 ### Terminal 2 — backend venv
 
@@ -74,9 +77,11 @@ Enable flow mode in the backend `.env`:
 ```ini
 ENABLE_LANGFLOW_FLOWS=true
 LANGFLOW_URL=http://localhost:7860
-# LANGFLOW_API_KEY=            # only if your Langflow has auth enabled (see below)
-# INGEST_FLOW_PATH=flows/fg_ingestion_flow.json   # defaults shown; override to customize
-# QUERY_FLOW_PATH=flows/fg_query_flow.json
+LANGFLOW_API_KEY=<the key from the Langflow UI>   # how the backend authenticates to Langflow (see Authentication)
+# Flow paths the app runs — defaults shown, override to customize:
+# INGEST_FLOW_PATH=flows/fg_ingestion_flow.json
+# SEARCH_FLOW_PATH=flows/fg_search_flow.json
+# AIQUERY_FLOW_PATH=flows/fg_aiquery_flow.json
 ```
 
 Then start the backend as usual. Ingest, hybrid search, and AI query now run through the Langflow flows.
@@ -89,7 +94,7 @@ Then start the backend as usual. Ingest, hybrid search, and AI query now run thr
 |---|---|---|
 | `ENABLE_LANGFLOW_FLOWS` | `false` | Run ingest/search/AI-query through Langflow instead of calling the system directly. |
 | `LANGFLOW_URL` | `http://localhost:7860` | URL of the running Langflow server. |
-| `LANGFLOW_API_KEY` | *(unset)* | Only needed if Langflow has authentication enabled. Not required for a default local single-user Langflow (`AUTO_LOGIN` on = no auth). Create one in the Langflow UI under **Settings → Langflow API Keys → Add New**, or via the `langflow api-key` CLI. |
+| `LANGFLOW_API_KEY` | *(unset)* | **Recommended** — how the backend authenticates to Langflow. Create one in the Langflow UI under **Settings → Langflow API Keys → Add New** (or the `langflow api-key` CLI). Can be left unset only if you use the no-key auto-login shortcut (see [Authentication](#authentication)). |
 | `INGEST_FLOW_PATH` | `flows/fg_ingestion_flow.json` | Path to the ingestion flow JSON. |
 | `SEARCH_FLOW_PATH` | `flows/fg_search_flow.json` | Dedicated search-only flow the app runs (no AI Query branch). |
 | `AIQUERY_FLOW_PATH` | `flows/fg_aiquery_flow.json` | Dedicated AI-query-only flow the app runs (no Hybrid Search branch). |
@@ -98,6 +103,67 @@ Then start the backend as usual. Ingest, hybrid search, and AI query now run thr
 All other backend settings (data sources, vector/search/graph/RDF DBs, LLM & embeddings, chunking, KG extraction, LI/LC framework pickers) are read from the same `.env` and apply unchanged.
 
 > **Flow paths when running an installed build.** The `flows/…` defaults above are for a **source checkout**. When you run the installed console command — `flexible-graphrag` (or `flexible-graphrag.exe` on Windows; `python -m start` is equivalent) — the default resolves relative to the installed package (site-packages), **not** your flows, so **set the `*_FLOW_PATH` variables**. A relative path (`flows/fg_ingestion_flow.json`) resolves from the **current working directory** you launch from — the simplest setup is a run folder holding `.env`, a `flows/` copy, and a `schemas/` copy (for `ONTOLOGY_DIR`), and you launch from that folder. Use absolute paths if your working directory varies. (Same cwd rule as `ONTOLOGY_DIR`/`ONTOLOGY_PATH`.)
+
+---
+
+## Authentication
+
+Langflow's API needs a token on every request. The end-user way to give the backend one is an **API key**.
+
+**Recommended (any deployment) — an API key.** In the Langflow UI, open **Settings → Langflow API Keys → Add New**, name it, and **copy the key** (shown once — it's stored hashed; lost it → delete and add another). Set it in the backend `.env`:
+
+```ini
+LANGFLOW_API_KEY=<the key from the UI>
+```
+`flow_service` then sends it as `x-api-key`, which authenticates **both** binding and running flows — no `LANGFLOW_SKIP_AUTH_AUTO_LOGIN` needed. It works under the default single-user `AUTO_LOGIN` and when you later require real auth, and you **don't need to set `LANGFLOW_SECRET_KEY`** for this path (Langflow auto-generates a valid one).
+
+!!! warning "A stale `LANGFLOW_API_KEY` is the most common flow-mode 403"
+    A key minted against a *previous* Langflow database — e.g. after recreating the Langflow venv or wiping/replacing `langflow.db` — is unknown to the new instance, so the bind returns **`403 Forbidden`** ("Could not bind Langflow flows"). Mint a fresh key for the current instance, and persist `langflow.db` (the `langflow_data` volume in Docker) so a key survives restarts. (Programmatic key creation: see the [developer doc](../DEVELOPER/DEVELOPER-LANGFLOW-COMPONENTS.md#creating-a-langflow-api-key-programmatically).)
+
+**Local-dev shortcut — no key (auto-login).** To skip the UI step on a trusted machine, let auto-login also *run* flows. Set these where Langflow runs and leave `LANGFLOW_API_KEY` unset:
+
+```ini
+LANGFLOW_AUTO_LOGIN=true            # default
+LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true  # since Langflow v1.5, /run needs this (or an API key) under auto-login
+LANGFLOW_SECRET_KEY=<valid-fernet-key>   # required for this path — see the note below
+```
+Trade-off: the API (including `/run`) is then **unauthenticated** to anyone who can reach the port — fine on a trusted network, not an exposed one. The compose Langflow service ships this shortcut pre-set; a bare `docker run` needs `-e LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true`.
+
+!!! note "`LANGFLOW_SECRET_KEY` — mostly a developer concern"
+    Langflow uses it for JWT signing (the auto-login token) **and** Fernet encryption of stored secrets, so it must be a **valid Fernet key** = 32 url-safe base64-encoded bytes; a plain string throws `Fernet key must be 32 url-safe base64-encoded bytes` at startup and breaks secret storage / API-key creation (blank key field). The **API-key path above doesn't need it** (Langflow auto-generates a valid one). It matters for the **no-key shortcut**, and for **multi-worker / cross-restart** consistency (unset → a random per-worker key → the auto-login token fails elsewhere with `InvalidSignatureError`). Generate one: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+
+**Production hardening — require login.** Set `LANGFLOW_AUTO_LOGIN=false` + a superuser (`LANGFLOW_SUPERUSER` / `LANGFLOW_SUPERUSER_PASSWORD` — the password default is empty, so set one) wherever Langflow runs; the superuser persists in `langflow.db`. Then log in and mint the API key as above.
+
+---
+
+## Running Langflow in Docker
+
+Run flow mode in one of **two clean shapes** — keep the backend and Langflow **together** so they share one filesystem (required for **file-upload** ingest; cloud sources don't care):
+
+1. **All on the host (non-Docker)** — the two-venv setup above: standalone backend + standalone Langflow.
+2. **All in Docker (compose)** — `app-stack.yaml` (backend + UIs), `langflow.yaml`, and optionally `proxy.yaml`, all containerized (this section).
+
+!!! warning "Don't mix host + container across the flow boundary"
+    A **host** backend pointed at a **container** Langflow (or vice-versa) runs **cloud sources** fine, but **file upload fails** — the backend passes absolute host paths a container can't resolve (`c:\…\uploads\file` → `Path does not exist`). Pick shape 1 **or** 2; use cloud sources if you must run a mixed setup.
+
+**Images (share one base):** both the backend `Dockerfile` and `Dockerfile.langflow` build on `ghcr.io/astral-sh/uv:python3.14-trixie-slim` — Langflow's own build base (Python 3.14, uv pre-installed). `Dockerfile.langflow` = that base + `langflow==1.10.2` + `flexible-graphrag[extras]`. The **Flexible GraphRAG** palette auto-registers via the extension bundle (no `LANGFLOW_COMPONENTS_PATH`). (The 12 components import the real backend machinery at runtime, so — unlike a stock Langflow image — this image must install flexible-graphrag too.)
+
+**Enable the all-Docker stack:** in `docker/docker-compose.yaml` uncomment `- includes/app-stack.yaml` (backend + UIs), `- includes/langflow.yaml`, and optionally `- includes/proxy.yaml`. Flow mode is **opt-in** — in `app-stack.yaml` flip the backend's `ENABLE_LANGFLOW_FLOWS` to `"true"` (it defaults to `"false"` / direct mode); the rest of the flow config is already there:
+
+```ini
+ENABLE_LANGFLOW_FLOWS: "true"                         # flip from the default "false"
+LANGFLOW_URL: http://flexible-graphrag-langflow:7860  # the compose service name, NOT localhost
+INGEST_FLOW_PATH: flows/fg_ingestion_flow.json        # + QUERY_/SEARCH_/AIQUERY_FLOW_PATH
+```
+Then `docker compose up --build`.
+It also mounts `flows/` (`../../flows:/app/flows:ro`) and shares the `upload_data` volume with Langflow (both read the same `/app/uploads`, so **file upload works**) — all wired in `app-stack.yaml` / `langflow.yaml`. (The `langflow.yaml` include is self-contained and *can* run against another backend via the "BACKEND SIDE" block in that file — but see the mixed-setup warning above.)
+
+**Config the flow reads (important):** in flow mode the components run **inside the Langflow container** and read config from **its** environment. The container uses `env_file: [../../flexible-graphrag/.env, ../docker.env]`, layered exactly like the backend (docker.env's container-reachable DB addresses win). This works because `/app/.env` is **not** present in the image (`.dockerignore` excludes `.env`, and it is not mounted), so `Settings()` reads the compose-injected env vars. **Consequence:** config is fixed at container start — change `DOCUMENT_PARSER`, `CHUNK_SIZE`, DBs, etc. by editing `.env`/`docker.env` and **recreating** the container (`docker compose up -d --force-recreate`), not by a live edit (the host live-edit behavior needs `/app/.env`, which would defeat the docker.env override layering).
+
+!!! warning "Bare `docker run --env-file` does not strip inline `#` comments"
+    Mostly a concern for a **standalone container** run with `docker run --env-file …` (not the compose stack — modern Docker **Compose** strips ` # ` inline comments, and the shipped `env-sample.txt`'s active lines are already comment-free). `docker run --env-file` passes values **verbatim** — python-dotenv on the host trims `KEY=value  # note` → `value`, but `--env-file` keeps `value  # note`. So a `.env`/`docker.env` value with an inline comment breaks inside the container: enum/number/bool settings (e.g. `ONTOLOGY_FORMAT`, `*_FUNCTION_CALLING`, `*_TIMEOUT`) fail `Settings` validation → **500 at flow-run time** (`Error building Component Flexible: Data Source`), and string settings silently take the commented value. Fix: move any inline comment to its **own line** (`# note` above the `KEY=value`) in the file that container reads. (Applies too if you *uncomment* an example option that still has an inline comment.)
+
+**Persistence:** `LANGFLOW_CONFIG_DIR=/app/langflow-data` (+ `LANGFLOW_DATABASE_URL=sqlite:////app/langflow-data/langflow.db`) keeps Langflow's **own** SQLite DB — flows, users, API keys — in the `langflow_data` named volume across restarts. (This is Langflow's internal DB, separate from the flexible-graphrag vector/search/graph/RDF stores.) For Postgres instead, override `LANGFLOW_DATABASE_URL=postgresql://…`.
 
 ---
 
@@ -126,7 +192,8 @@ If you change **backend code that a component imports at runtime** (e.g. `_fg_sh
 
 ## Troubleshooting
 
-- **`Flexible: *` nodes don't appear** — `LANGFLOW_COMPONENTS_PATH` must point at the **parent `langflow_components` folder, not the `flexible_graphrag/` subfolder** (the subfolder name becomes the sidebar category). Confirm `flexible-graphrag` is installed editable (`-e`) in the **same** venv as Langflow, then check the Langflow logs for import errors and restart. Quick checklist: `echo $env:LANGFLOW_COMPONENTS_PATH` → verify the path → confirm the components import in that venv.
+- **`Flexible: *` nodes don't appear** — the palette comes from the extension bundle, so confirm `flexible-graphrag` (≥ 0.7.1) is installed in the **same** venv as Langflow: `python -c "from importlib.metadata import entry_points; print(list(entry_points(group='langflow.extensions')))"` should list `flexible-graphrag`. If it's missing, reinstall (`uv pip install -e .` from the backend dir) so the entry point lands in the metadata, then restart Langflow and check its log for `Extension load error`. Do **not** set `LANGFLOW_COMPONENTS_PATH` — with the extension present it only adds a `bundle-shadowed` warning.
+- **`duplicate-distribution` extension error in the Langflow log** — two installed distributions named `flexible-graphrag` are visible (e.g. a stale `*.egg-info` in a source dir that's on `sys.path`/`PYTHONPATH` alongside the real install). Remove the stray `*.egg-info`/`build`/`dist` artifacts; the palette still loads (lexicographically-first manifest wins) but the error should be cleared.
 - **SSL abort on Langflow start** — the interpreter's OpenSSL is 3.5.x (uv-standalone). Recreate the venv on a python.org / pythoncore 3.14.5 (or 3.13) interpreter. See the warning above.
 - **401 from Langflow in flow mode** — set `LANGFLOW_API_KEY` (x-api-key) if your Langflow requires auth; leave it unset for a default local single-user Langflow.
 - **Nothing ingests / long hang** — ingestion runs synchronously over one HTTP call and can take minutes (KG extraction is LLM-bound). This is expected; the connect timeout is short but the read timeout is unlimited. If you drive the API directly (or via a node with its own timeout), raise the request timeout to 300–600s.

@@ -55,5 +55,24 @@ process/
   KGExtractorAdapter              — ABC (LlamaIndex extractors or LLMGraphTransformer)
   LangChainKGExtractorAdapter     — ontology-aware LLMGraphTransformer wrapper
   build_kg_extractor_adapter()    — factory for KG extractor adapters
+
+Namespace coexistence with the real PyPI ``langchain``
+------------------------------------------------------
+This package is deliberately named ``langchain`` and, in dev/editable and
+Docker layouts, wins ``import langchain`` over the installed PyPI ``langchain``
+library (our subpackages ``graph``/``llm``/``process``/``search``/``vector``
+are imported as ``langchain.*``). That shadowing would otherwise starve code
+that needs the *real* langchain submodules — notably Langflow 1.10.2+, whose
+core startup does ``from langchain.agents import create_agent`` (uncaught, so a
+miss is fatal). ``extend_path`` appends the real langchain's directory to our
+``__path__`` as a fallback: our own submodules still resolve first (our dir
+stays first in ``__path__``), and any name we don't define (``agents``,
+``chains``, ``tools``, …) falls through to the real library.
 """
+
+import pkgutil as _pkgutil
+
+# Keep our subpackages first; append the real langchain dir(s) found elsewhere
+# on sys.path so `langchain.agents` etc. remain importable despite the shadow.
+__path__ = _pkgutil.extend_path(__path__, __name__)
 

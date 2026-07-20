@@ -1,6 +1,6 @@
 [project]
 name = "flexible-graphrag"
-version = "0.7.0"
+version = "0.7.1"
 description = "Open source AI context platform: document processing, knowledge graph auto-building, ontologies, GraphRAG/RAG, hybrid search (vector, property graph, RDF/SPARQL, fulltext), 13 LLM providers, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain, FastAPI, MCP server"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -381,6 +381,14 @@ Issues = "https://github.com/stevereiner/flexible-graphrag/issues"
 [project.scripts]
 flexible-graphrag = "start:main"
 
+# Langflow Extension System: ships langflow_components/extension.json so Langflow 1.10.x
+# auto-registers the "Flexible GraphRAG" palette on `pip install` (no LANGFLOW_COMPONENTS_PATH
+# needed). Langflow walks importlib.metadata.distributions() at startup, resolves this module
+# via find_spec, and reads extension.json from its package dir. compat ["1"] is a MAJOR version,
+# so this is not pinned to one Langflow release.
+[project.entry-points."langflow.extensions"]
+flexible-graphrag = "langflow_components"
+
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -408,6 +416,8 @@ include = ["adapters*", "ingest*", "process*", "sources*", "observability*", "in
 
 [tool.setuptools.package-data]
 "*" = ["*.txt", "*.md", "*.sql", "*.toml"]
+# Ship the Langflow extension manifest inside the wheel (non-.py file).
+"langflow_components" = ["extension.json"]
 
 [tool.setuptools.data-files]
 "." = [

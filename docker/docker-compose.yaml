@@ -52,6 +52,7 @@ include:
    # backend and ui clients, but using databases in docker
    #- includes/app-stack.yaml       # backend and ui clients
    #- includes/proxy.yaml           # proxy for backend and ui clients
+   #- includes/langflow.yaml        # Langflow server for flow mode (opt-in; see the file for the backend-side config it needs)
    # RDF graph databases
    #- includes/jena-fuseki.yaml      # Jena Fuseki server
    #- includes/ontotext-graphdb.yaml   # Ontotext GraphDB server

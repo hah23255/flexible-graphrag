@@ -2,7 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2026-07-16] — v0.7.0: Langflow integration + LiteParse document parser
+## [2026-07-20] — v0.7.1: Langflow 1.10.2 compatibility + auto-registering palette
+
+Version bumped to **0.7.1** across the backend, MCP server, and React/Vue/Angular frontends. (The  Docker-for-Langflow image in 07-18 section also in this checkin / release.)
+
+### Added
+
+- **Langflow Extension bundle** — `langflow_components/extension.json` + a `[langflow.extensions]` entry point make the *Flexible GraphRAG* palette **auto-register on install** (Langflow discovers it via `importlib.metadata`) — no `LANGFLOW_COMPONENTS_PATH`. Works for editable and wheel installs; `compat: ["1"]` targets Langflow major 1 (not pinned to one release).
+
+### Fixed
+
+- **Langflow 1.10.2 crashed at startup** (`langchain/__init__.py`) — this repo's own `langchain` package shadows the real one, starving Langflow 1.10.2's uncaught `from langchain.agents import create_agent` (host and Docker; 1.10.1 tolerated it). `pkgutil.extend_path` now lets the real langchain's `agents`/`chains`/… resolve while our subpackages still win. *(PyPI wheel installs were unaffected — the two `langchain` dirs merge in site-packages.)*
+- **LiteParse failed on every cloud source** (`process/document_processor.py`) — the cloud download-then-process path (`process_documents_from_metadata`; S3, GCS, Azure Blob, OneDrive, SharePoint, Box, Google Drive, Alfresco) had two liteparse gaps: (1) it dispatched only `docling`/`llamaparse` and raised `Unknown parser type: liteparse` for `DOCUMENT_PARSER=liteparse` — added the missing branch; (2) `_process_with_liteparse` then called `check_cancellation()` unguarded, but this path passes `None` (only the filesystem path passes a real callable), giving `TypeError: 'NoneType' object is not callable` — now normalized to a no-op like docling/llamaparse. Latent since LiteParse landed (0.7.0); local/filesystem was unaffected (different path), so it only bit cloud sources — in both normal and flow mode.
+- **MCP server printed a traceback on Ctrl-C** (`flexible-graphrag-mcp/main.py`) — after a clean shutdown ("Application shutdown complete"), Python 3.14's `asyncio.run()` re-raises `KeyboardInterrupt`, leaving a bare `CancelledError`/`KeyboardInterrupt` traceback. Now caught → quiet exit ("MCP server stopped.").
+- **File-upload flow mode in Docker** — the compose Langflow service now shares the backend's `upload_data` volume (`docker/includes/langflow.yaml`), so file-upload ingest works in the all-container setup (Test C): the backend container writes to `/app/uploads` and the Langflow container reads the same path. `data_source.py` also normalizes `\`→`/` for path robustness. *Constraint:* a **host** backend → **container** Langflow still can't do file upload — the backend deliberately sends **absolute host paths** (`backend.py._source_config_for_flow`, for a co-located Langflow with a different cwd), which a Linux container can't map. Use compose (both containerized) or a co-located host Langflow for uploads; cloud sources work in any combination.
+
+### Changed
+
+- **`Dockerfile.langflow` uses the extension bundle** — dropped `LANGFLOW_COMPONENTS_PATH` (setting it alongside the extension only logs a `bundle-shadowed` warning), and removes the editable-install `*.egg-info` after copy (under `PYTHONPATH=/app` it was a second `flexible-graphrag` distribution → `duplicate-distribution` error). `.dockerignore` excludes build artifacts.
+- **Docker image extras trimmed** — the default `EXTRAS` for the backend and langflow images (and the `docker-publish` workflow) is now `langchain,langchain-extras`, dropping `rdf` (redundant — `rdflib`/`pyoxigraph` are base deps, so RDF stores already work) and `observability` (optional OpenTelemetry tracing). Add `observability` via the build arg / workflow input to bake tracing in.
+- **`env-sample.txt` inline comments moved to their own lines** — a bare `docker run --env-file` (unlike python-dotenv on the host and modern Docker Compose) does **not** strip inline `#` comments or trailing whitespace, so a value like `ONTOLOGY_FORMAT=turtle  # ...` reached the container verbatim and failed `Settings` validation (a 500 at flow-run time). Every active line in the shipped template is now comment-free; the caveat is documented in `LANGFLOW-INTEGRATION.md`.
+- **Docker Langflow runs single-user by default** — the compose Langflow service (`docker/includes/langflow.yaml`) sets `LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true` so flow mode works with **no API key** out of the box (since Langflow v1.5, `/run` otherwise returns 403 under auto-login even after the flow binds; for a bare `docker run`, pass `-e LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true`). Not baked into the image as `ENV` (Docker's `SecretsUsedInArgOrEnv` linter flags the AUTH-named var). The API is therefore **unauthenticated** — for an exposed deployment, disable auto-login and use a minted `LANGFLOW_API_KEY` (see `LANGFLOW-INTEGRATION.md` → Authentication).
+
+---
+
+## [2026-07-18] — v0.7.1: Docker for Langflow + Docker images on Python 3.14
+
+Docker deployment for flow mode + post-release packaging hardening. These are Docker/deployment/packaging changes — the feature set of v0.7.0 is in the [2026-07-16] entry below.
+
+### Added
+
+- **Docker for Langflow flow mode** — a new **`flexible-graphrag/Dockerfile.langflow`** (Langflow 1.10.2 + `flexible-graphrag[extras]`) and an **opt-in** **`docker/includes/langflow.yaml`** service, decoupled from app-stack so it runs with any backend (app-stack, standalone container, or host). The flow container reads config via `env_file: [.env, docker.env]` (docker.env's container DB addresses win), and Langflow's own SQLite DB persists in a `langflow_data` volume. See `docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md`. *(Palette loading via the extension bundle — see v0.7.1 above.)*
+
+### Changed
+
+- **Docker images now build on Python 3.14** — backend `Dockerfile` moved from `python:3.12` to `ghcr.io/astral-sh/uv:python3.14-trixie-slim` (uv pre-installed; same base as Langflow's image and `Dockerfile.langflow`). Only the images changed — the PyPI wheel is `py3-none-any` and unaffected.
+
+---
+
+## [2026-07-17] — v0.7.0: Langflow integration + LiteParse document parser
 
 Release rolling up the **Langflow integration** ([2026-07-06]) and the new **LiteParse** document parser ([2026-07-12]), plus the cloud incremental-sync work ([2026-07-09]) and the Microsoft Graph delta query. Version bumped to **0.7.0** across the backend, the MCP server, and the React/Vue/Angular frontends.
 
@@ -18,6 +56,8 @@ Release rolling up the **Langflow integration** ([2026-07-06]) and the new **Lit
 - **Parsing output** (`SAVE_PARSING_OUTPUT`) — same-stem files of different types (`cmispress.pdf` vs `cmispress.txt`) no longer overwrite each other, empty files are no longer written, docling now saves output for text files (it previously saved none), and every parser writes into its own subfolder: `parsing_output/{docling,liteparse,llamaparse}/`.
 - **Extraction-format selection** (`PARSER_FORMAT_FOR_EXTRACTION=auto`, all three parsers) — table detection no longer treats any prose containing a pipe and a `---` as a table, and now prefers plaintext when a parser's markdown is lossy (drops content). Each parser logs a per-file table-detection line.
 - **Langflow console `UnicodeEncodeError`** — document text containing characters the Windows cp1252 console can't encode (e.g. a zero-width space in a pptx) spammed `--- Logging error ---` tracebacks. Ingest was never affected; content previews are now escaped before logging.
+- **Packaging: `flow_service` was missing from the wheel** — `flow_service.py` (the Langflow flow-mode REST client) was never listed in `[tool.setuptools] py-modules`, so an installed wheel raised `ModuleNotFoundError: No module named 'flow_service'` when flow mode started. Added it. (Invisible in a source checkout; only an installed wheel surfaced it.)
+- **Packaging: litellm pinned `<1.92` in the BASE dependencies** — litellm 1.92.0 added a Rust/PyO3 bridge that fails to build on Python 3.14 (PyO3 ≤ 3.13). The `litellm>=1.81,<1.92` ceiling (1.91.x is pure-Python) lives in the base `dependencies` — where litellm is pulled in transitively via the `llama-index-*-litellm` packages — not in an extra, so a plain `pip install flexible-graphrag` gets the constraint too.
 
 ---
 

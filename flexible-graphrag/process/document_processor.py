@@ -473,6 +473,13 @@ class DocumentProcessor:
         original_metadata = original_metadata or {}
         loop = asyncio.get_event_loop()
 
+        # Provide a default no-op cancellation check if None (matches docling/llamaparse). The
+        # cloud download-then-process path (process_documents_from_metadata) passes None; only the
+        # filesystem path passes a real callable. The safe callable is also forwarded to
+        # _liteparse_parse_files below, so its own check_cancellation() calls are covered too.
+        if check_cancellation is None:
+            check_cancellation = lambda: False
+
         cfg = self.config
         routing_on = bool(getattr(cfg, "liteparse_complex_routing", False)) if cfg else False
         fallback_name = ((getattr(cfg, "liteparse_complex_fallback", None) or "docling").lower()) if cfg else "docling"
@@ -1315,6 +1322,8 @@ class DocumentProcessor:
                 documents = await self._process_with_docling(file_paths_to_process, check_cancellation, original_filenames, original_metadata)
             elif self.parser_type == "llamaparse":
                 documents = await self._process_with_llamaparse(file_paths_to_process, check_cancellation, original_filenames, original_metadata)
+            elif self.parser_type == "liteparse":
+                documents = await self._process_with_liteparse(file_paths_to_process, check_cancellation, original_filenames, original_metadata)
             else:
                 raise ValueError(f"Unknown parser type: {self.parser_type}")
             

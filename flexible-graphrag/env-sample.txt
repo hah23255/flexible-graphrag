@@ -668,17 +668,20 @@ OPENAI_MODEL=gpt-4.1-mini
 # gpt-5-mini:    $0.25/$2.00 per 1M tokens, 400K ctx  — reasoning model; temp forced to 1.0 by LlamaIndex
 # gpt-4o:        $2.50/$10.00 per 1M tokens, 128K ctx — high quality, more expensive
 # gpt-4o-mini:   $0.15/$0.60 per 1M tokens, 128K ctx  — fastest/cheapest, lower extraction quality
-OPENAI_TEMPERATURE=0.0  # 0.0 = deterministic extraction (recommended)
+# 0.0 = deterministic extraction (recommended)
+OPENAI_TEMPERATURE=0.0
 # OPENAI_TIMEOUT=120.0  # LLM request timeout in seconds (default: 2 minutes)
 
 # Ollama Configuration (if using Ollama - local LLM)
 # See docs/OLLAMA-CONFIGURATION.md for detailed setup and optimization
 # See docs/LLM/LLM-TESTING-RESULTS.md for full Ollama benchmark results
-OLLAMA_MODEL=gpt-oss:20b             # 20B params - RECOMMENDED for graph extraction
+# 20B params - RECOMMENDED for graph extraction
+OLLAMA_MODEL=gpt-oss:20b
 #OLLAMA_MODEL=llama3.1:8b             # 8B params  - NOT RECOMMENDED: very slow, hangs on 2nd doc
 #OLLAMA_MODEL=llama3.2:3b             # 3B params  - NOT RECOMMENDED: stalls at 8192 context, low entity count
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_TIMEOUT=900.0  # 15 minutes timeout for graph extraction (default: 900.0)
+# 15 minutes timeout for graph extraction (default: 900.0)
+OLLAMA_TIMEOUT=900.0
 
 # Azure OpenAI Configuration (if using Azure OpenAI)
 # See docs/LLM-EMBEDDING-CONFIG.md for detailed examples
@@ -691,7 +694,8 @@ AZURE_OPENAI_API_VERSION=2024-12-01-preview
 # Google Gemini Configuration (if using Gemini)
 # See docs/LLM-EMBEDDING-CONFIG.md for detailed examples
 GOOGLE_API_KEY=your-google-api-key
-GEMINI_MODEL=gemini-3-flash-preview    # fast model - recommended default (gemini-2.5 shutdown 6/17/26)
+# fast model - recommended default (gemini-2.5 shutdown 6/17/26)
+GEMINI_MODEL=gemini-3-flash-preview
 # GEMINI_MODEL=gemini-3.1-pro-preview    # pro quality
 # GEMINI_MODEL=gemini-2.5-flash          # shutdown 6/17/26
 
@@ -725,7 +729,8 @@ BEDROCK_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 # All Groq models have 131,072 context window; LlamaIndex doesn't know Groq-specific models
 # and defaults to 3900 tokens — flexible-graphrag overrides this automatically.
 # GROQ_API_KEY=your-groq-api-key  # Get from https://console.groq.com
-GROQ_MODEL=openai/gpt-oss-20b      # 131072 ctx, 65536 max completion, 1000 t/s — recommended
+# 131072 ctx, 65536 max completion, 1000 t/s — recommended
+GROQ_MODEL=openai/gpt-oss-20b
 # GROQ_MODEL=openai/gpt-oss-120b     # 131072 ctx, 65536 max completion, 500 t/s
 # GROQ_MODEL=llama-3.3-70b-versatile # 131072 ctx, 32768 max completion, 280 t/s
 # GROQ_MODEL=llama-3.1-8b-instant    # 131072 ctx, 131072 max completion, 560 t/s (smaller model)
@@ -804,15 +809,18 @@ FIREWORKS_MODEL=accounts/fireworks/models/gpt-oss-120b
 # Docs: https://docs.litellm.ai/docs/proxy/quick_start
 # LITELLM_MODEL=ollama/gpt-oss:20b            # Model name as configured in LiteLLM
 # LITELLM_API_BASE=http://localhost:11434     # Direct to Ollama (LiteLLM routes ollama/* models here automatically)
-LITELLM_MODEL=gpt-4.1-mini                   # Model name as configured in LiteLLM
-LITELLM_API_BASE=http://localhost:4000/v1    # LiteLLM proxy endpoint
+# Model name as configured in LiteLLM
+LITELLM_MODEL=gpt-4.1-mini
+# LiteLLM proxy endpoint
+LITELLM_API_BASE=http://localhost:4000/v1
 # LITELLM_API_KEY=local                       # LiteLLM master key (or "local" if none)
 # LITELLM_FUNCTION_CALLING=true
 
 # OpenRouter Configuration (unified API for 200+ models)
 # Get API key from https://openrouter.ai/keys (free tier available)
 # OPENROUTER_API_KEY=sk-or-your-key-here
-OPENROUTER_MODEL=openai/gpt-4.1-mini         # or anthropic/claude-3-5-sonnet, meta-llama/llama-3.3-70b-instruct, etc.
+# or anthropic/claude-3-5-sonnet, meta-llama/llama-3.3-70b-instruct, etc.
+OPENROUTER_MODEL=openai/gpt-4.1-mini
 
 
 # LLM Extraction Mode
@@ -849,35 +857,43 @@ EMBEDDING_KIND=openai
 #EMBEDDING_KIND=litellm
 
 # OpenAI Embeddings (default — active when EMBEDDING_KIND=openai)
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small       # 1536 dims
+# 1536 dims
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 #OPENAI_EMBEDDING_MODEL=text-embedding-3-large      # 3072 dims
 
 # Ollama Embeddings (active when EMBEDDING_KIND=ollama)
 # WARNING: all-minilm (384 dims, 512 context) is NOT recommended - its 512-token limit causes errors
 # when embedding graph nodes (combined entity + relationship text). Use nomic-embed-text instead.
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text              # 768 dims, 8192 context - recommended
+# 768 dims, 8192 context - recommended
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 #OLLAMA_EMBEDDING_MODEL=mxbai-embed-large            # 1024 dims, 512 context - higher quality but limited context
 #OLLAMA_EMBEDDING_MODEL=all-minilm                   # 384 dims, 512 context - NOT RECOMMENDED (context too small)
 
 # Google Gemini Embeddings (active when EMBEDDING_KIND=google)
-GOOGLE_EMBEDDING_MODEL=gemini-embedding-001          # 768 dims - stable GA (recommended)
+# 768 dims - stable GA (recommended)
+GOOGLE_EMBEDDING_MODEL=gemini-embedding-001
 #GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview   # preview: 1 content/call — breaks LangChain-backend batching (stores only 1 vector); also preview names are short-lived
 
 # Google Vertex AI Embeddings (active when EMBEDDING_KIND=vertex)
-VERTEX_EMBEDDING_MODEL=gemini-embedding-001          # 768 dims - stable GA (recommended)
+# 768 dims - stable GA (recommended)
+VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 #VERTEX_EMBEDDING_MODEL=gemini-embedding-2-preview   # preview: 1 content/call — breaks LangChain-backend batching (stores only 1 vector); also preview names are short-lived
 #VERTEX_EMBEDDING_MODEL=text-embedding-005           # 768 dims - text-only option
 
 # Azure Embeddings (active when EMBEDDING_KIND=azure)
-AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-small    # deployment name (if different from model name)
-AZURE_EMBEDDING_MODEL=text-embedding-3-small         # model name in your Azure resource
+# deployment name (if different from model name)
+AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-small
+# model name in your Azure resource
+AZURE_EMBEDDING_MODEL=text-embedding-3-small
 AZURE_EMBEDDING_API_VERSION=2024-02-01
 
 # Bedrock Embeddings (active when EMBEDDING_KIND=bedrock)
-BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0 # 1024 dims
+# 1024 dims
+BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
 
 # Fireworks Embeddings (active when EMBEDDING_KIND=fireworks)
-FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5  # 768 dims
+# 768 dims
+FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 
 # OpenAI-Like Embeddings (active when EMBEDDING_KIND=openai_like)
 # Any server with a /v1/embeddings endpoint: LM Studio, LocalAI, Llamafile, etc.
@@ -893,7 +909,8 @@ FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5  # 768 dims
 LITELLM_EMBEDDING_MODEL=text-embedding-3-small
 #LITELLM_EMBEDDING_MODEL=ollama/nomic-embed-text
 #LITELLM_EMBEDDING_API_BASE=http://localhost:11434
-LITELLM_EMBEDDING_API_BASE=http://localhost:4000/v1       # Must include /v1 suffix
+# Must include /v1 suffix
+LITELLM_EMBEDDING_API_BASE=http://localhost:4000/v1
 # LITELLM_API_KEY=local                                   # LiteLLM master key
 
 # ====================================================================
@@ -1334,7 +1351,8 @@ ONTOLOGY_PATHS=../schemas/company_classes.ttl,../schemas/company_properties.ttl,
 
 # Serialization format for ONTOLOGY_PATH and ONTOLOGY_PATHS.
 # Directory loading (ONTOLOGY_DIR) auto-detects format from file extension.
-ONTOLOGY_FORMAT=turtle          # turtle | rdfxml | ntriples | nquads
+# turtle | rdfxml | ntriples | nquads
+ONTOLOGY_FORMAT=turtle
 
 
 # =============================================================================

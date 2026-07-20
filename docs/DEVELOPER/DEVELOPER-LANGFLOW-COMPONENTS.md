@@ -77,15 +77,13 @@ Each query node reuses a **warm cached system** (`run_with_query_system` in `_fg
 
 ---
 
-## Component loading & Langflow 1.10.1 constraints
+## Component loading & Langflow 1.10.2 constraints
 
-Components are loaded by pointing Langflow at the package directory (relative to the `flexible-graphrag` backend dir you run Langflow from):
+As of v0.7.1 the components load via a **Langflow Extension bundle** — `langflow_components/extension.json` plus a `[langflow.extensions]` entry point in `pyproject.toml` (`flexible-graphrag = "langflow_components"`). Langflow discovers it at startup by walking `importlib.metadata.distributions()`, so installing `flexible-graphrag` in Langflow's venv is all it takes — **no `LANGFLOW_COMPONENTS_PATH`**. The bundle's `path` (`flexible_graphrag`) names the sidebar **category**; `"lfx": {"compat": ["1"]}` targets Langflow major version 1 (not pinned to one release). Setting `LANGFLOW_COMPONENTS_PATH` as well is unnecessary and makes Langflow log a `bundle-shadowed` warning (the installed extension outranks the inline path).
 
-```ini
-LANGFLOW_COMPONENTS_PATH=langflow_components
-```
+**Langflow 1.10.2 requires the `langchain` shadow fix.** This repo's own package is named `langchain` and wins `import langchain` in editable/source layouts (its subpackages import as `langchain.graph`/`langchain.llm`/…). Langflow 1.10.2's core startup does an **uncaught** `from langchain.agents import create_agent`; with our package shadowing the real one, that aborted boot (`No module named 'langchain.agents'`). `langchain/__init__.py` runs `pkgutil.extend_path` so our subpackages resolve first while the real langchain's `agents`/`chains`/`tools` fall through. Without it, Langflow 1.10.2 won't start in an editable/source install (the PyPI wheel install is unaffected — the two `langchain` dirs merge in site-packages).
 
-Langflow's loader (`lfx.custom.validate.prepare_global_scope`) only executes **top-level** `import` / `class` / `def` AST nodes in a component file. Three patterns are required for the components to register on Langflow 1.10.1:
+Langflow's loader (`lfx.custom.validate.prepare_global_scope`) only executes **top-level** `import` / `class` / `def` AST nodes in a component file. Three patterns are required for the components to register on Langflow 1.10.2:
 
 1. **Secret fields** use `SecretStrInput(...)`, not `MessageTextInput(..., password=True)` — API keys must be secret inputs.
 2. **Imports must be flat and top-level.** `try/except` import blocks are silently dropped (they caused `NameError: Component is not defined`). Langflow auto-falls-back `langflow.* → lfx.*`.
@@ -98,7 +96,7 @@ Other loader details:
 
 ### Fast iteration without a restart
 
-To debug a single component without the regen + Langflow-restart cycle, use Langflow's **"New Custom Component"** button at the bottom of the left sidebar and **paste the component's Python** directly — it registers immediately. (Use `LANGFLOW_COMPONENTS_PATH` for the permanent, whole-package install.)
+To debug a single component without the regen + Langflow-restart cycle, use Langflow's **"New Custom Component"** button at the bottom of the left sidebar and **paste the component's Python** directly — it registers immediately. (The whole package registers permanently via the extension bundle once `flexible-graphrag` is installed in Langflow's venv.)
 
 ### Mixing with stock Langflow components
 
@@ -128,6 +126,30 @@ python flexible-graphrag/langflow_components/generate_flows.py   # run in the La
 It validates each with `lfx.graph.graph.base.Graph.from_payload(data).prepare()` before writing. In app-driven flow mode the backend **deletes and re-uploads** the flow matching the JSON's `name` on every startup (see [Langflow Integration](../GETTING-STARTED/LANGFLOW-INTEGRATION.md#customizing-the-flows)), so regenerate rather than hand-editing the running flow in the UI. **Re-run the generator whenever you edit a component** (its code is embedded in the flow JSON), then restart the backend.
 
 ---
+
+## Creating a Langflow API key programmatically
+
+When Langflow requires auth (`LANGFLOW_AUTO_LOGIN=false`), the backend needs a key in `LANGFLOW_API_KEY`. The UI route is **Settings → Langflow API Keys → Add New** (see [Langflow Integration → Authentication](../GETTING-STARTED/LANGFLOW-INTEGRATION.md#authentication)); to mint one from code, call the Langflow API:
+
+```python
+import httpx
+LF = "http://localhost:7860"
+
+# 1) Get a session token.
+#    AUTO_LOGIN on:  GET  /api/v1/auto_login
+#    AUTO_LOGIN off: POST /api/v1/login  (form: username/password = your superuser creds)
+tok = httpx.get(f"{LF}/api/v1/auto_login").json()["access_token"]
+# auth mode instead:
+# tok = httpx.post(f"{LF}/api/v1/login", data={"username": "admin", "password": "..."}).json()["access_token"]
+
+# 2) Create the key — POST /api/v1/api_key/ ; the response's "api_key" is the FULL key (returned once).
+r = httpx.post(f"{LF}/api/v1/api_key/",
+               headers={"Authorization": f"Bearer {tok}"},
+               json={"name": "flexible-graphrag"})
+print(r.json()["api_key"])   # → set this as the backend's LANGFLOW_API_KEY
+```
+
+`GET /api/v1/api_key/` lists keys (masked); `DELETE /api/v1/api_key/{id}` removes one. Keys live in `langflow.db` — persist it (the `langflow_data` volume in Docker) if they should survive restarts. The `langflow api-key create` CLI is the terminal equivalent.
 
 ## File map
 

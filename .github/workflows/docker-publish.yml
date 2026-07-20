@@ -12,9 +12,9 @@ on:
         required: false
         default: 'dev'
       backend_extras:
-        description: 'Backend optional extras (comma-separated, e.g. "langchain,langchain-extras,rdf,observability")'
+        description: 'Backend/langflow optional extras (comma-separated; rdf is redundant with base deps, add observability for OTel tracing)'
         required: false
-        default: 'langchain,langchain-extras,rdf,observability'
+        default: 'langchain,langchain-extras'
 
 env:
   DOCKERHUB_ORG: integratedsemantics
@@ -35,6 +35,11 @@ jobs:
             context: flexible-graphrag
             dockerfile: flexible-graphrag/Dockerfile
             image: flexible-graphrag-backend
+
+          - name: langflow
+            context: flexible-graphrag
+            dockerfile: flexible-graphrag/Dockerfile.langflow
+            image: flexible-graphrag-langflow
 
           - name: ui-react
             context: flexible-graphrag-ui/frontend-react
@@ -99,9 +104,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Pass EXTRAS only for the backend image (frontend images don't use it)
+          # Pass EXTRAS for the backend AND langflow images (both install flexible-graphrag[extras]);
+          # frontend images don't use it.
           build-args: |
-            ${{ matrix.name == 'backend' && format('EXTRAS={0}', inputs.backend_extras || 'langchain,langchain-extras,rdf,observability') || '' }}
+            ${{ (matrix.name == 'backend' || matrix.name == 'langflow') && format('EXTRAS={0}', inputs.backend_extras || 'langchain,langchain-extras') || '' }}
           # Layer cache per image name — speeds up re-runs significantly
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}

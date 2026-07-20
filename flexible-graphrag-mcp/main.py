@@ -313,14 +313,20 @@ def main():
     sys.stderr.write("   • health_check\n")
     sys.stderr.flush()
     
-    if http_mode:
-        asyncio.run(mcp.run_http_async(host=host, port=port))
-    else:
-        # Do NOT apply nest_asyncio in either mode — it patches asyncio.run() in a way
-        # that breaks anyio's task-state weakref lookup on Python 3.14 (host_task
-        # becomes None, triggering "cannot create weak reference to 'NoneType'").
-        # All tools are async def using await, so nest_asyncio is not needed.
-        asyncio.run(mcp.run_async())
+    try:
+        if http_mode:
+            asyncio.run(mcp.run_http_async(host=host, port=port))
+        else:
+            # Do NOT apply nest_asyncio in either mode — it patches asyncio.run() in a way
+            # that breaks anyio's task-state weakref lookup on Python 3.14 (host_task
+            # becomes None, triggering "cannot create weak reference to 'NoneType'").
+            # All tools are async def using await, so nest_asyncio is not needed.
+            asyncio.run(mcp.run_async())
+    except KeyboardInterrupt:
+        # Ctrl-C: the server has already run its async shutdown ("Application shutdown
+        # complete"); on Python 3.14 asyncio.run() then re-raises KeyboardInterrupt, which
+        # would print a bare CancelledError/KeyboardInterrupt traceback. Exit quietly instead.
+        sys.stderr.write("\nMCP server stopped.\n")
 
 if __name__ == "__main__":
     main()

@@ -10,12 +10,26 @@ services:
     env_file:
       - ../../flexible-graphrag/.env     # Load main configuration first
       - ../docker.env                    # Override with host.docker.internal addresses
+    # Flow mode (Langflow) — OPT-IN, OFF by default (base config is direct mode). To route
+    # ingest/search/AI-query through the Langflow container, flip the flag below to "true" AND uncomment
+    # `- includes/langflow.yaml` in docker-compose.yaml. LANGFLOW_URL is the compose SERVICE NAME (not
+    # localhost — that would be this backend); no LANGFLOW_API_KEY needed (the langflow service runs
+    # AUTO_LOGIN + SKIP_AUTH_AUTO_LOGIN). The URL/flow-path vars below are harmless when flows are off.
+    environment:
+      ENABLE_LANGFLOW_FLOWS: "false"
+      #ENABLE_LANGFLOW_FLOWS: "true"
+      LANGFLOW_URL: http://flexible-graphrag-langflow:7860
+      INGEST_FLOW_PATH: flows/fg_ingestion_flow.json
+      SEARCH_FLOW_PATH: flows/fg_search_flow.json
+      AIQUERY_FLOW_PATH: flows/fg_aiquery_flow.json
+      QUERY_FLOW_PATH: flows/fg_query_flow.json
     ports:
       - "8000:8000"
     volumes:
       - ../../sample-docs:/app/sample_docs:ro
       - ../../schemas:/app/schemas:ro
       - upload_data:/app/uploads
+      - ../../flows:/app/flows:ro         # flow JSONs the backend reads and sends to Langflow (flow mode)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]

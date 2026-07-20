@@ -1,4 +1,6 @@
 
+**New 7/20/26 — v0.7.1 release:** Document processing now supports **LiteParse** in addition to the previous **Docling** and **LlamaParse** support. Langflow integration ships with fixes and an optional **Langflow Docker** image bundling the 12 "Flexible" components. **MS Graph delta query** support was added for more efficient incremental updating with SharePoint and OneDrive data sources.
+
 **New 7/5/26:** Optional **Langflow visual flows** — the app can run its ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows (12 custom Flexible GraphRAG components), using your existing `.env` config. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
 
 **New 5/6/26:** 15 property graph databases total: 8 supported on both LlamaIndex and LangChain, 1 LI-only (Google Cloud Spanner Graph), 6 LC-only (ArangoDB, Apache AGE, Azure Cosmos DB for Gremlin, Apache HugeGraph, SurrealDB, TigerGraph). AWS Neptune RDF/SPARQL added. All 10 vector databases, all 3 search engines, and all LLM/embedding providers work with both LlamaIndex and LangChain. Every pipeline stage (chunking, KG extraction, graph write, vector write, search write, and retrieval fusion) can be configured independently. (Data source reading is LlamaIndex only; RDF stores use framework-independent adapters with LangChain Text-to-SPARQL retrieval.)
@@ -1215,18 +1217,19 @@ The main requirement is a **separate venv for Langflow** — Langflow runs the f
 **1. Langflow venv** — create it on Python **3.14.5 or newer** (or 3.13). Use an explicit patch version: `uv venv --python 3.14.5` (or greater) — plain `uv venv --python 3.14` resolves to **3.14.0**, which has an OpenSSL bug that makes Langflow abort on startup. Then install Langflow and the backend (LlamaIndex + fuller LangChain), and run Langflow **from the `flexible-graphrag` backend dir**:
 
 ```powershell
-uv pip install --native-tls langflow==1.10.1
+uv pip install --native-tls langflow==1.10.2
 uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"
-# from the flexible-graphrag backend dir (so the relative components path resolves):
-$env:LANGFLOW_COMPONENTS_PATH = "langflow_components"
+# Run from the flexible-graphrag backend dir:
 langflow run --port 7860 --log-level WARNING --log-file langflow.log
 ```
 
-Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; it's ready once that finishes.
+Wait for Langflow to **fully start** — after the purple "Welcome to Langflow" box it prints `Launching Langflow...`; it's ready once that finishes. Then create an API key in the Langflow UI: **Settings → Langflow API Keys → Add New** (copy it — shown once).
 
-**2. Backend venv** — set `ENABLE_LANGFLOW_FLOWS=true` and `LANGFLOW_URL=http://localhost:7860` in `.env`, then start the app as usual.
+**2. Backend venv** — set `ENABLE_LANGFLOW_FLOWS=true`, `LANGFLOW_URL=http://localhost:7860`, and `LANGFLOW_API_KEY=<the key from the UI>` in `.env`, then start the app as usual. (A no-API-key local shortcut and the underlying `LANGFLOW_SECRET_KEY` are covered in the docs' Authentication section.)
 
-For the full setup, configuration reference, flow customization, and the 12-component developer reference, see **[Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md)** and **[Langflow Components](docs/DEVELOPER/DEVELOPER-LANGFLOW-COMPONENTS.md)**.
+**Docker Compose alternative** — instead of the two-venv setup above, the compose stack runs the **backend in Docker** alongside an optional **Langflow container** (with the 12 components already bundled), which you enable by flipping `ENABLE_LANGFLOW_FLOWS: "true"` and uncommenting the Langflow include. Covered in detail in the doc link below.
+
+For the full setup (both the two-venv and Docker Compose paths), configuration reference, flow customization, and the 12-component developer reference, see **[Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md)** and **[Langflow Components](docs/DEVELOPER/DEVELOPER-LANGFLOW-COMPONENTS.md)**.
 
 ## MCP Server Setup (Quickstart)
 

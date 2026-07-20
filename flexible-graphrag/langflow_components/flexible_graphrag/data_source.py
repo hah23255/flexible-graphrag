@@ -163,6 +163,10 @@ class FlexibleDataSourceComponent(Component):
 
         paths = []
         for entry in entries:
+            # Normalize Windows backslash separators to forward slashes so a path produced by a
+            # Windows host backend (e.g. "uploads\\file.txt") resolves when the flow runs in a Linux
+            # container. Safe cross-platform: Windows accepts "/", and Linux never uses "\\" as a sep.
+            entry = str(entry).replace("\\", "/")
             if not os.path.exists(entry):
                 raise ValueError(f"Path does not exist: {entry}")
             paths.extend(self._walk(entry))

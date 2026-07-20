@@ -1,0 +1,110 @@
+# Langflow image for Flexible GraphRAG flow mode.
+#
+# This is the backend image + Langflow. Flexible GraphRAG's 12 Langflow components are thin wrappers
+# that import the REAL backend machinery at runtime (config, hybrid_system, ingest.*, process.*, rdf.*),
+# so — unlike a stock Langflow image — this image MUST install flexible-graphrag too. (Contrast OpenRAG,
+# whose langflow image ships no openrag: their components are self-contained HTTP clients.)
+#
+# Mirrors flexible-graphrag/Dockerfile (same base + extras install) and adds Langflow on top, then runs
+# `langflow run` instead of uvicorn. The backend service points at this via LANGFLOW_URL and uploads the
+# flow JSONs over REST at startup, so this image needs no flow files baked in.
+#
+# Build (from the repo root, context = flexible-graphrag/):
+#   docker build -f flexible-graphrag/Dockerfile.langflow -t flexible-graphrag-langflow flexible-graphrag
+# Behind an SSL-inspecting proxy, add:  --build-arg UV_NATIVE_TLS=true
+
+# Python 3.14 on the SAME base Langflow's own image builds from (uv pre-installed, Debian trixie-slim).
+# Using Langflow's build base maximizes compatibility with Langflow and gives us uv for free.
+# The litellm floor/ceiling pin in pyproject (litellm<1.92) keeps litellm on pure-Python 1.91.x, so its
+# Rust/PyO3 bridge — which fails to build on 3.14 — is never pulled.
+# (Alternatives: OpenRAG uses registry.access.redhat.com/ubi10/python-314-minimal; the backend image
+#  currently uses python:3.12. Consider a multi-stage build later — builder here + a python:3.14-slim-trixie
+#  runtime that copies the venv — to drop the build tools from the final image, as Langflow's Dockerfile does.)
+FROM ghcr.io/astral-sh/uv:python3.14-trixie-slim
+
+WORKDIR /app
+
+# trixie-slim ships no compiler — flexible-graphrag has C-extension deps (e.g. pystemmer), so add
+# build tools; curl is for the healthcheck; git is needed by the langflow install (as in Langflow's own
+# Dockerfile). (We skip Langflow's Node install — we install Langflow from PyPI, not building its
+# frontend.) uv is already in this image, so no `pip install uv`.
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    build-essential gcc curl git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# --native-tls (UV_NATIVE_TLS=true) is needed only when BUILDING behind an SSL-inspecting proxy.
+# Default MUST be a valid boolean, not "" — uv rejects an empty UV_NATIVE_TLS ("expected a boolish value").
+ARG UV_NATIVE_TLS=false
+ENV UV_NATIVE_TLS=${UV_NATIVE_TLS}
+
+# Step 1: Langflow. Pinned to the version the components were validated against (the three
+# langflow-1.10.2 API fixes live in the component files). Installed first, before flexible-graphrag.
+RUN uv pip install --system langflow==1.10.2
+
+# Step 2: flexible-graphrag + extras — identical to the backend image (overrides must be present first).
+# extras-overrides.txt suppresses advisory-only transitive downgrades from langchain-extras.
+# `rdf` is intentionally omitted (rdflib/pyoxigraph are already base deps); add `observability` for OTel tracing.
+COPY pyproject.toml uv.toml extras-overrides.txt ./
+ARG EXTRAS="langchain,langchain-extras"
+RUN if [ -n "$EXTRAS" ]; then \
+        uv pip install --override extras-overrides.txt --system -e ".[$EXTRAS]"; \
+    else \
+        uv pip install --system -e .; \
+    fi
+
+# Application code (brings in langflow_components/, config, hybrid_system, ingest/, process/, rdf/, …).
+COPY . .
+
+# The editable install (`uv pip install -e .`) leaves a flexible_graphrag.egg-info in /app. With /app
+# on PYTHONPATH (below), importlib.metadata would then see it as a SECOND 'flexible-graphrag'
+# distribution alongside the real site-packages dist-info, and Langflow reports a `duplicate-distribution`
+# extension error at startup. Remove it — imports resolve via PYTHONPATH, and the extension entry point
+# lives in the site-packages dist-info, so nothing depends on this egg-info.
+RUN rm -rf /app/*.egg-info
+
+# Put /app on the import path. The editable install above ran before this COPY, so setuptools'
+# packages.find never saw langflow_components/ and didn't register it — Langflow execs the component
+# code with `from langflow_components.flexible_graphrag._fg_shared import ...`, which then fails with
+# `No module named 'langflow_components'`. Adding /app to PYTHONPATH makes the package (and the
+# top-level config/ingest/process/… modules) importable directly from the source tree.
+ENV PYTHONPATH=/app
+
+# The "Flexible GraphRAG" palette auto-registers via the Langflow Extension System: the installed
+# flexible-graphrag distribution ships langflow_components/extension.json + a [langflow.extensions]
+# entry point, which Langflow discovers at startup by walking importlib.metadata.distributions().
+# So NO LANGFLOW_COMPONENTS_PATH is set here — setting it too would make Langflow shadow the inline
+# copy behind the higher-precedence installed bundle and log a `bundle-shadowed` warning; the
+# extension alone is the single clean source.
+#
+# Config: .env is NOT baked into the image (.dockerignore excludes it), and we do NOT mount /app/.env —
+# so _fg_shared.build_settings() finds no /app/.env, skips load_dotenv, and Settings() reads the
+# CONTAINER ENV VARS. Provide those via compose `env_file: [.env, docker.env]` (docker.env overrides
+# win) — see docker/includes/langflow.yaml. (Config changes then take effect on container recreate,
+# not a live .env edit — standard for Docker.)
+
+# Persist Langflow's OWN state (its config + SQLite `langflow.db` — flows, API keys, users) across
+# restarts. Langflow stores both under LANGFLOW_CONFIG_DIR by default; the compose file mounts a volume
+# there (see docker/includes/langflow.yaml). LANGFLOW_DATABASE_URL pins the SQLite file into that same
+# dir explicitly (matches OpenRAG; robust across Langflow versions). For Postgres instead, override
+# LANGFLOW_DATABASE_URL=postgresql://… in the compose environment.
+# NOTE: this is Langflow's internal DB — NOT the flexible-graphrag vector/search/graph/RDF stores, which
+# come from the .env/docker.env config the flow reads.
+ENV LANGFLOW_CONFIG_DIR=/app/langflow-data
+ENV LANGFLOW_DATABASE_URL=sqlite:////app/langflow-data/langflow.db
+RUN mkdir -p /app/langflow-data
+
+# Auth is NOT set as an image ENV — it's deployment config, and Docker's SecretsUsedInArgOrEnv linter
+# flags any AUTH-named ENV (false positive on LANGFLOW_SKIP_AUTH_AUTO_LOGIN). Langflow defaults to
+# single-user AUTO_LOGIN, but since v1.5 the /run endpoint needs LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true under
+# AUTO_LOGIN (else ingest/search/AI-query runs 403 after the flow binds). The compose service sets it
+# (docker/includes/langflow.yaml); for a bare `docker run`, add `-e LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true`.
+# Production auth: LANGFLOW_AUTO_LOGIN=false + LANGFLOW_SUPERUSER/_PASSWORD + a minted LANGFLOW_API_KEY
+# for the backend. See docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md → Authentication.
+
+EXPOSE 7860
+
+# Langflow 1.10.2 health endpoint — /health returns 200 (verified).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
+    CMD curl -f http://localhost:7860/health || exit 1
+
+CMD ["langflow", "run", "--host", "0.0.0.0", "--port", "7860"]

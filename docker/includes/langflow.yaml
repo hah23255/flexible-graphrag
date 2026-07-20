@@ -1,0 +1,94 @@
+# Langflow service for Flexible GraphRAG flow mode (OPTIONAL — opt-in, self-contained).
+#
+# Decoupled from app-stack on purpose: this include only defines the Langflow SERVICE. It works with ANY
+# backend — the app-stack backend, a standalone backend container, or a backend on the host — you just
+# point that backend at LANGFLOW_URL and give it the flow JSONs. Nothing here (or in app-stack.yaml /
+# docker.env) is changed on the backend side; the backend-side requirements are documented below so you
+# can apply them to whichever backend you run.
+#
+# Enable: uncomment `- includes/langflow.yaml` in docker/docker-compose.yaml, then configure the backend
+# per the block below. The backend retries the flow binding on first request, so no depends_on is needed.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# BACKEND SIDE — what the backend needs for flow mode (add to YOUR backend, wherever it runs):
+#
+#   env:
+#     ENABLE_LANGFLOW_FLOWS=true
+#     LANGFLOW_URL=http://flexible-graphrag-langflow:7860   # from a compose backend on this network
+#                  # (standalone/host backend instead: http://localhost:7860, or the langflow host:port)
+#     INGEST_FLOW_PATH=flows/fg_ingestion_flow.json         # relative to the backend's workdir (/app in
+#     QUERY_FLOW_PATH=flows/fg_query_flow.json              #  the container) — or absolute
+#     SEARCH_FLOW_PATH=flows/fg_search_flow.json
+#     AIQUERY_FLOW_PATH=flows/fg_aiquery_flow.json
+#
+#   flow JSONs must be reachable at those paths. For a COMPOSE backend, mount them:
+#     volumes:
+#       - ../../flows:/app/flows:ro
+#   (flows/ is at the repo root, outside the backend build context, so it is mounted, not baked in.)
+#   A standalone/host backend just needs the flows/ folder next to it and matching *_FLOW_PATH.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+services:
+  flexible-graphrag-langflow:
+    image: integratedsemantics/flexible-graphrag-langflow:${FLEXIBLE_GRAPHRAG_VERSION:-latest}
+    build:
+      context: ../../flexible-graphrag
+      dockerfile: Dockerfile.langflow
+      # args:
+      #   UV_NATIVE_TLS: "true"      # uncomment when building behind an SSL-inspecting proxy
+    container_name: flexible-graphrag-langflow
+    ports:
+      - "7860:7860"
+    # Linux Docker Engine doesn't auto-inject host.docker.internal — map it to the host gateway
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Config is layered the SAME way as the backend: base .env, then docker.env overrides (container
+    # DB addresses / host.docker.internal). This works because .env is NOT baked into the image
+    # (.dockerignore) and /app/.env is NOT mounted, so _fg_shared.build_settings() finds no /app/.env,
+    # skips load_dotenv, and Settings() reads these CONTAINER ENV VARS — with docker.env winning. (If a
+    # /app/.env DID exist it would `load_dotenv(override=True)` and clobber the docker.env overrides.)
+    # Config changes take effect on `docker compose up --force-recreate`, not a live .env edit.
+    env_file:
+      - ../../flexible-graphrag/.env     # base configuration
+      - ../docker.env                    # override with container-reachable addresses (WINS)
+    # AUTH: single-user, no auth — flow mode works with no LANGFLOW_API_KEY (bind via auto-login; /run via
+    # the skip flag below, required since Langflow v1.5). Fine for local/trusted networks. Set here rather
+    # than as an image ENV to avoid Docker's SecretsUsedInArgOrEnv lint on the AUTH-named var. To require
+    # auth on an exposed deployment: comment the skip flag, uncomment the block, set a password, then mint
+    # an API key in the UI and give it to the backend as LANGFLOW_API_KEY (skip flag is ignored once
+    # AUTO_LOGIN is off). Details: docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md → Authentication.
+    environment:
+      LANGFLOW_SKIP_AUTH_AUTO_LOGIN: "true"
+      # Fixed key for Langflow's JWT signing AND Fernet encryption of stored secrets. MUST be a valid
+      # Fernet key = 32 url-safe base64-encoded bytes; a plain string throws "Fernet key must be 32
+      # url-safe base64-encoded bytes" at startup and breaks secret storage + API-key creation. Without
+      # a fixed key Langflow randomizes it per worker/restart → the backend's auto-login token fails with
+      # PyJWT InvalidSignatureError on longer requests. Generate one (and CHANGE for real deployments):
+      #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      LANGFLOW_SECRET_KEY: Gwv6cwr3oc2thIxLC82GBFoqMPJYO3swpjhSXoZsml8=
+      # LANGFLOW_AUTO_LOGIN: "false"
+      # LANGFLOW_SUPERUSER: admin
+      # LANGFLOW_SUPERUSER_PASSWORD: change-me
+    volumes:
+      # schemas/ for ONTOLOGY_DIR (the flow builds the full system, same as the backend)
+      - ../../schemas:/app/schemas:ro
+      # persist Langflow's own SQLite DB / config across restarts
+      - langflow_data:/app/langflow-data
+      # Share the backend's uploads so FILESYSTEM / file-upload flow mode works: the app-stack backend
+      # writes uploaded files to /app/uploads (the `upload_data` volume) and passes their paths to the
+      # flow; Langflow reads the SAME volume here (all-Linux, forward-slash paths — no host/Windows path
+      # mismatch). Cloud sources (S3/GCS/…) don't need this. Only meaningful with the app-stack backend.
+      - upload_data:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]   # /health returns 200 (verified)
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+
+volumes:
+  langflow_data:
+  # Shared with the app-stack backend's uploads (see the service volumes above). When both includes are
+  # active, compose merges this with app-stack.yaml's declaration into one volume; standalone it's empty.
+  upload_data:

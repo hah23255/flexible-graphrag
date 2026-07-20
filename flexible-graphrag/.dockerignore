@@ -14,6 +14,16 @@ __pycache__/
 *.pyd
 .Python
 
+# Python build artifacts — a stale *.egg-info (or dist-info) copied into the image
+# becomes a SECOND importlib.metadata distribution named 'flexible-graphrag' under
+# PYTHONPATH=/app, which Langflow reports as a `duplicate-distribution` extension
+# error. Keep build metadata out of the image so only the installed dist-info exists.
+*.egg-info/
+*.egg-info
+*.dist-info/
+build/
+dist/
+
 # Local database directories
 ladybug/
 arcadedb_data/
