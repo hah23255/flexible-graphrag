@@ -145,7 +145,7 @@ def _resolve_pydantic_program_mode(config: Dict[str, Any]) -> PydanticProgramMod
 
 def create_llm(provider: LLMProvider, config: Dict[str, Any]):
     """Create a LlamaIndex LLM instance based on provider and configuration."""
-    logger.info(f"Creating LLM with provider: {provider}")
+    logger.info(f"[LlamaIndex] Creating LLM with provider: {provider}")
 
     if provider == LLMProvider.OPENAI:
         return OpenAI(
@@ -287,6 +287,16 @@ def create_llm(provider: LLMProvider, config: Dict[str, Any]):
         is_chat = config.get("is_chat_model", True)
         context_window = config.get("context_window", 4096)
         logger.info(f"Configuring OpenAI-Like LLM - Model: {model}, API Base: {api_base}, function_calling={is_fc}")
+        # Some OpenAI-compatible gateways (e.g. Azure API Management fronting Azure OpenAI)
+        # reject the standard `Authorization: Bearer` header and require the key in a custom
+        # header such as `api-key`. OPENAI_LIKE_API_KEY_HEADER lets users send the key there;
+        # when unset, behavior is unchanged (plain Bearer auth). OpenAILike forwards
+        # default_headers to the underlying openai SDK client.
+        extra_headers: Dict[str, str] = {}
+        api_key_header = os.getenv("OPENAI_LIKE_API_KEY_HEADER")
+        if api_key_header:
+            extra_headers[api_key_header] = config.get("api_key", "local")
+            logger.info(f"OpenAI-Like: sending API key via custom header '{api_key_header}'")
         return OpenAILike(
             model=model,
             api_base=api_base,
@@ -297,6 +307,7 @@ def create_llm(provider: LLMProvider, config: Dict[str, Any]):
             is_chat_model=is_chat,
             is_function_calling_model=is_fc,
             pydantic_program_mode=_resolve_pydantic_program_mode(config) if is_fc else PydanticProgramMode.DEFAULT,
+            default_headers=extra_headers or None,
         )
 
     elif provider == LLMProvider.VLLM:

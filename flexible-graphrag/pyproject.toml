@@ -131,8 +131,8 @@ dependencies = [
     "nebula3-python>=3.8.3",        # direct dep: DDL in nebula_adapter._ensure_space_and_schema
     "llama-index-graph-stores-neptune",
     # Ladybug graph database dependencies
-    "ladybug>=0.16.1",
-    "llama-index-graph-stores-ladybug>=0.3.3",
+    "ladybug>=0.18.2",
+    "llama-index-graph-stores-ladybug>=0.3.4",
     "llama-index-retrievers-bm25",
     # ArcadeDB graph database dependencies
     "arcadedb-python>=0.4.0",
@@ -277,7 +277,7 @@ langchain = [
     "langchain-experimental",     # LLMGraphTransformer (kg extractor)
     # BM25 search
     "rank-bm25",                  # BM25SearchAdapter (langchain_community.retrievers.BM25Retriever)
-    "langchain-ladybug>=0.3.0"
+    "langchain-ladybug>=0.3.1"
 ]
    
 # Extended LangChain — graph database backends + stores with known transitive downgrades.

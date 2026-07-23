@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-07-22] — Bug fixes: OpenAI-compatible gateways, filesystem re-ingest, MCP timeouts
+
+Fixes for GitHub issues #16–#20, reported against v0.7.1 (found testing against an Azure API Management gateway and a file-based ladybug/lancedb/bm25 config).
+
+### Fixed
+
+- **`openai_like` couldn't auth to non-`Authorization` gateways** (`llamaindex/llm/{llm,embedding}_factory.py`, `langchain/llm/{llm,embedding}_factory.py`, #16) — gateways like Azure API Management and the classic Azure OpenAI endpoint require the key in a custom header (e.g. `api-key`) and reject `Authorization: Bearer`, giving a `401 missing subscription key`. New optional **`OPENAI_LIKE_API_KEY_HEADER`** sends the key via `default_headers` on the openai_like LLM **and** embeddings, across **both** the LlamaIndex and LangChain backends (one env var covers all four paths); unset = unchanged Bearer auth.
+- **`openai_like` embeddings hardcoded `encoding_format=base64`** (`llamaindex/llm/embedding_factory.py`, `langchain/llm/embedding_factory.py`, #17) — the openai SDK defaults to base64 when unset, which some gateways reject with a misleading `400 unknown_model`. Now sends `encoding_format=float` by default (most compatible) on **both** backends; override via **`OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT`**.
+- **Filesystem ingest crashed on the 2nd+ ingest** (`sources/filesystem.py`, `incremental_updates/detectors/filesystem_detector.py`, #18) — the source wrote the metadata key `'modified at'` (space) while every other path writes `'modified_at'` (underscore). LanceDB stores metadata as one nested Arrow struct fixed at first insert, so mixing the two spellings across ingests crashed the append with `field 'modified_at' does not exist in table schema`. Filesystem now writes `'modified_at'`; the detector reads it with a fallback to the legacy space key.
+- **`LadybugPropertyGraphStore.get_triplets()` raised `KeyError: '_label'`** (dependency `llama-index-graph-stores-ladybug`, #19) — it assumed lowercase internal keys, but `structured_query` returns uppercase `_LABEL`/`_ID`/`_SRC`/`_DST`. Made the loop case-tolerant with `.get()` (skips malformed rows instead of raising), matching `get_rel_map`. *Fixed in llama-index-ladybug project v0.3.4*
+- **MCP HTTP client silent-ish failures on slow calls** (`flexible-graphrag-mcp/main.py`, #20) — the `httpx` client used the 5s default timeout, so the first (cold-start) query after a backend restart (~13s) failed as a `ReadTimeout` that stringifies to `''`, surfacing as `{'success': False, 'error': ''}`. Now uses an explicit 120s timeout (**`FLEXIBLE_GRAPHRAG_TIMEOUT`**), and error messages include the exception type (`ReadTimeout: …`) instead of an empty string.
+
+### Changed
+
+- **LLM/embedding factory logs now identify the framework** (`llamaindex/llm/{llm,embedding}_factory.py`, `langchain/llm/{llm,embedding}_factory.py`) — log lines are prefixed `[LlamaIndex]` / `[LangChain]` so it's clear which framework built the model. The LangChain LLM factory previously logged nothing at all on success. This matters because `llm_backend` / `embedding_backend` default to `llamaindex` with LangChain instances created on demand (and `both` instantiates each natively), so a single run can legitimately show two factories — the labels disambiguate which is which.
+- **Dependency bumps** — `ladybug>=0.18.2`, `llama-index-graph-stores-ladybug>=0.3.4`, `langchain-ladybug>=0.3.1`.
+
+---
+
 ## [2026-07-20] — v0.7.1: Langflow 1.10.2 compatibility + auto-registering palette
 
 Version bumped to **0.7.1** across the backend, MCP server, and React/Vue/Angular frontends. (The  Docker-for-Langflow image in 07-18 section also in this checkin / release.)

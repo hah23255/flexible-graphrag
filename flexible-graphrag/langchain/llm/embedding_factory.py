@@ -34,7 +34,7 @@ def build_lc_embedding(config: "AppSettings"):
     kind = (embedding_kind or "").lower()
 
     logger.info(
-        "build_lc_embedding: kind=%r model=%r provider=%r",
+        "[LangChain] Creating embedding model, kind=%r model=%r provider=%r",
         kind, embedding_model, provider,
     )
 
@@ -223,9 +223,25 @@ def build_lc_embedding(config: "AppSettings"):
             or "local"
         )
         logger.info(
-            "build_lc_embedding [%s]: api_base=%r model=%r",
+            "[LangChain] embedding [%s]: api_base=%r model=%r",
             kind, api_base, embedding_model,
         )
+        # Optional custom auth header (e.g. `api-key` for Azure / APIM gateways that reject
+        # `Authorization: Bearer`). openai_like only — reuses OPENAI_LIKE_API_KEY_HEADER so one
+        # setting covers LLM + embeddings across both backends; unset = normal Bearer auth.
+        _extra_headers = {}
+        _model_kwargs = {}
+        if not is_litellm:
+            _hdr = os.getenv("OPENAI_LIKE_API_KEY_HEADER")
+            if _hdr:
+                _extra_headers[_hdr] = _api_key
+            # Same encoding_format default as the LlamaIndex backend: the openai SDK
+            # otherwise sends base64, which some gateways reject. langchain_openai merges
+            # model_kwargs into the embeddings request and its own docs recommend
+            # encoding_format="float" for OpenAI-compatible providers.
+            _model_kwargs["encoding_format"] = os.getenv(
+                "OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT", "float"
+            )
         # check_embedding_ctx_length=False: prevents langchain_openai from tokenising the
         # input into integer token IDs before sending — Ollama and most openai-like servers
         # only accept plain string inputs, not integer arrays.
@@ -234,6 +250,8 @@ def build_lc_embedding(config: "AppSettings"):
             api_key=_api_key,
             base_url=api_base,
             check_embedding_ctx_length=False,
+            default_headers=_extra_headers or None,
+            model_kwargs=_model_kwargs,
         )
 
     logger.warning(

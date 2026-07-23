@@ -8,6 +8,7 @@ using the same .env values (api keys, model names, endpoints).
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def get_langchain_llm(config: Any) -> Any:
             else str(config.llm_provider).lower()
         )
         llm_config: Dict[str, Any] = config.llm_config or {}
+        logger.info("[LangChain] Creating LLM with provider: %s", provider)
 
         if provider == "openai":
             from langchain_openai import ChatOpenAI
@@ -156,11 +158,20 @@ def get_langchain_llm(config: Any) -> Any:
             from langchain_openai import ChatOpenAI
             # Default 8002/v1 matches the project's vLLM Docker port (avoids clash with backend on 8000).
             api_base = llm_config.get("api_base", "http://localhost:8002/v1")
+            # Optional custom auth header (e.g. `api-key` for Azure / APIM gateways that reject
+            # `Authorization: Bearer`). Same OPENAI_LIKE_API_KEY_HEADER env var as the LlamaIndex
+            # backend, so one setting covers both; unset = normal Bearer auth.
+            api_key = llm_config.get("api_key", "local")
+            extra_headers = {}
+            api_key_header = os.getenv("OPENAI_LIKE_API_KEY_HEADER")
+            if api_key_header:
+                extra_headers[api_key_header] = api_key
             return ChatOpenAI(
                 model=llm_config.get("model", "local-model"),
                 temperature=llm_config.get("temperature", 0.1),
-                api_key=llm_config.get("api_key", "local"),
+                api_key=api_key,
                 base_url=api_base,
+                default_headers=extra_headers or None,
             )
 
         if provider == "litellm":

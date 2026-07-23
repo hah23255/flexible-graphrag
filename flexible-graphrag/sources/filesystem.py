@@ -200,9 +200,14 @@ class FileSystemSource(BaseDataSource):
                                 "file_path": file_path,
                                 "file_name": Path(file_path).name
                             })
-                            # Add modification timestamp if available
+                            # Add modification timestamp if available.
+                            # Use 'modified_at' (underscore), matching process_text_content and
+                            # the other sources. The old 'modified at' (space) key produced an
+                            # unstable LanceDB struct schema across ingests — mixing it with the
+                            # underscore key from other paths crashed appends with
+                            # "field 'modified_at' does not exist in table schema" (issue #18).
                             if modified_at:
-                                doc.metadata['modified at'] = modified_at
+                                doc.metadata['modified_at'] = modified_at
                         documents.extend(processed_docs)
                     
                 except Exception as e:

@@ -105,7 +105,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
     logger.debug(f"[EmbFactory] From settings - kind: {embedding_kind}, model: {embedding_model}, dim: {embedding_dimension}")
 
     if embedding_kind:
-        logger.info(f"Using explicit embedding_kind: {embedding_kind}")
+        logger.info(f"[LlamaIndex] Creating embedding model, embedding_kind: {embedding_kind}")
 
         if embedding_kind == "openai":
             model_name = embedding_model or "text-embedding-3-small"
@@ -230,7 +230,27 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             model_name = embedding_model or os.getenv("OPENAI_LIKE_EMBEDDING_MODEL", "local-embedding-model")
             api_base = os.getenv("OPENAI_LIKE_EMBEDDING_API_BASE") or os.getenv("OPENAI_LIKE_API_BASE", "http://localhost:8000/v1")
             api_key = os.getenv("OPENAI_LIKE_API_KEY", "fake")
-            return OpenAILikeEmbedding(model_name=model_name, api_base=api_base, api_key=api_key)
+            # The openai SDK defaults encoding_format to "base64" when unset; some
+            # OpenAI-compatible gateways (e.g. an Azure APIM proxy) don't support base64
+            # and reject the request (often with a misleading "unknown_model" 400). Send
+            # "float" by default for maximum compatibility; override via
+            # OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT (e.g. "base64" to restore the SDK default).
+            encoding_format = os.getenv("OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT", "float")
+            # Same custom auth-header support as the openai_like LLM (see llm_factory):
+            # gateways like Azure API Management (and native Azure OpenAI) require the key in
+            # an `api-key` header rather than `Authorization: Bearer`. Reuses the same
+            # OPENAI_LIKE_API_KEY_HEADER env var so setting it once covers LLM + embeddings.
+            extra_headers = {}
+            api_key_header = os.getenv("OPENAI_LIKE_API_KEY_HEADER")
+            if api_key_header:
+                extra_headers[api_key_header] = api_key
+            return OpenAILikeEmbedding(
+                model_name=model_name,
+                api_base=api_base,
+                api_key=api_key,
+                additional_kwargs={"encoding_format": encoding_format},
+                default_headers=extra_headers or None,
+            )
 
         elif embedding_kind == "litellm":
             model_name = embedding_model or os.getenv("LITELLM_EMBEDDING_MODEL", "text-embedding-3-small")

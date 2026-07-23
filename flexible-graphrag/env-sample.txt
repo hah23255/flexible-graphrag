@@ -760,6 +760,11 @@ FIREWORKS_MODEL=accounts/fireworks/models/gpt-oss-120b
 #OPENAI_LIKE_MODEL=openai/gpt-oss-20b
 #OPENAI_LIKE_API_BASE=http://localhost:1234/v1
 #OPENAI_LIKE_API_KEY=lm-studio
+# Send the API key in a custom header instead of `Authorization: Bearer` — needed by
+# gateways like Azure API Management and the classic Azure OpenAI endpoint that require `api-key`.
+# Applies to the openai_like LLM and embeddings on BOTH the LlamaIndex and LangChain backends.
+# Leave unset for normal Bearer auth. (Azure's newer /openai/v1 surface accepts Bearer too.)
+#OPENAI_LIKE_API_KEY_HEADER=api-key
 
 # vLLM Configuration — high-performance local inference (Docker or in-process)
 # See docs/LLM/LLM-EMBEDDING-CONFIG.md section 18 for full setup guide.
@@ -902,6 +907,10 @@ FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 #EMBEDDING_DIMENSION=768 
 #OPENAI_LIKE_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5@q4_k_m
 #OPENAI_LIKE_EMBEDDING_API_BASE=http://localhost:1234/v1
+# Embedding request encoding_format. Defaults to "float" for max gateway compatibility
+# (the openai SDK's own default is "base64", which some gateways reject). Set to "base64"
+# to restore the SDK default.
+#OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT=float
 
 # LiteLLM Embeddings (active when EMBEDDING_KIND=litellm)
 # Route embeddings through a LiteLLM proxy to any backend (OpenAI, Ollama, Bedrock, etc.)

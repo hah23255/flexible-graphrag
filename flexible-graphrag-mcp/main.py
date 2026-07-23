@@ -23,9 +23,26 @@ BACKEND_URL = os.getenv("FLEXIBLE_GRAPHRAG_URL", "http://localhost:8000")
 # Initialize MCP server
 mcp = FastMCP("flexible-graphrag-mcp")
 
+# httpx defaults to a 5s timeout on every phase. Several backend operations exceed that —
+# notably the first query/search after a fresh backend start, which lazily reconnects to the
+# vector/graph/search indexes (~13s observed). Use a generous explicit timeout so cold-start
+# calls don't fail as bare timeouts (issue #20). Override via FLEXIBLE_GRAPHRAG_TIMEOUT.
+_API_TIMEOUT = float(os.getenv("FLEXIBLE_GRAPHRAG_TIMEOUT", "120.0"))
+
+
+def _fmt_error(e: Exception) -> str:
+    """Format an exception including its type name.
+
+    Some exceptions (e.g. httpx.ReadTimeout/ConnectTimeout) stringify to '', which
+    surfaces to the MCP client as a mysterious empty-string failure. Always include the
+    type so a bare timeout is identifiable (issue #20).
+    """
+    return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+
 async def make_api_call(method: str, endpoint: str, data: Optional[Dict] = None) -> Dict[str, Any]:
     """Make HTTP API call to the flexible-graphrag backend"""
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_API_TIMEOUT)) as client:
         url = f"{BACKEND_URL}{endpoint}"
         
         if method.upper() == "GET":
@@ -45,7 +62,7 @@ async def get_system_status() -> Dict[str, Any]:
         result = await make_api_call("GET", "/api/status")
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def ingest_documents(
@@ -158,7 +175,7 @@ async def ingest_documents(
         return {
             "processing_id": "error", 
             "status": "failed", 
-            "message": f"Failed to start document processing: {str(e) or 'Unknown error'}", 
+            "message": f"Failed to start document processing: {_fmt_error(e)}",
             "progress": 0
         }
 
@@ -176,7 +193,7 @@ async def search_documents(query: str, top_k: int = 10) -> Dict[str, Any]:
         result = await make_api_call("POST", "/api/search", request_data)
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def query_documents(query: str, top_k: int = 10) -> Dict[str, Any]:
@@ -192,7 +209,7 @@ async def query_documents(query: str, top_k: int = 10) -> Dict[str, Any]:
         result = await make_api_call("POST", "/api/query", request_data)
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def test_with_sample(skip_graph: bool = False) -> Dict[str, Any]:
@@ -204,7 +221,7 @@ async def test_with_sample(skip_graph: bool = False) -> Dict[str, Any]:
         result = await make_api_call("POST", "/api/test-sample", request_data or None)
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def ingest_text(content: str, source_name: str = "mcp-input", skip_graph: bool = False) -> Dict[str, Any]:
@@ -223,7 +240,7 @@ async def ingest_text(content: str, source_name: str = "mcp-input", skip_graph: 
         result = await make_api_call("POST", "/api/ingest-text", request_data)
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def check_processing_status(processing_id: str) -> Dict[str, Any]:
@@ -237,7 +254,7 @@ async def check_processing_status(processing_id: str) -> Dict[str, Any]:
         result = await make_api_call("GET", f"/api/processing-status/{processing_id}")
         return {"success": True, "processing": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def get_python_info() -> Dict[str, Any]:
@@ -246,7 +263,7 @@ async def get_python_info() -> Dict[str, Any]:
         result = await make_api_call("GET", "/api/python-info")
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 @mcp.tool()
 async def health_check() -> Dict[str, Any]:
@@ -255,7 +272,7 @@ async def health_check() -> Dict[str, Any]:
         result = await make_api_call("GET", "/api/health")
         return {"success": True, "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _fmt_error(e)}
 
 def main():
     """Run the MCP server"""

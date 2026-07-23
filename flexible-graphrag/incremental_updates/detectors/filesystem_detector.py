@@ -503,7 +503,11 @@ class FilesystemDetector(ChangeDetector):
         
         # Use filesystem path as source_id
         source_id = full_path
-        modified_timestamp = self.parse_timestamp(doc.metadata.get('modified at'))
+        # FileSystemSource now writes 'modified_at' (underscore); accept the legacy
+        # 'modified at' (space) too for documents ingested before that change (issue #18).
+        modified_timestamp = self.parse_timestamp(
+            doc.metadata.get('modified_at') or doc.metadata.get('modified at')
+        )
         
         # Create doc_id using full_path for consistency
         doc_id = f"{self.config_id}:{full_path}"
