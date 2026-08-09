@@ -67,6 +67,7 @@
               "_type": "Component",
               "code": {
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "fileTypes": [],
                 "file_path": "",
@@ -279,6 +280,7 @@
                 "password": false,
                 "name": "code",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "info": "",
                 "load_from_db": false,
@@ -298,6 +300,7 @@
                 "value": "",
                 "display_name": "Config (.env) path",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": false,
                 "info": "Blank = backend default .env (StrInput so API tweaks apply)",
                 "title_case": false,
@@ -320,6 +323,7 @@
                 "value": "",
                 "display_name": "Query",
                 "advanced": false,
+                "api_editable": false,
                 "input_types": [
                   "Message"
                 ],
@@ -343,6 +347,7 @@
                 "value": 10,
                 "display_name": "Top K",
                 "advanced": false,
+                "api_editable": false,
                 "dynamic": false,
                 "info": "Number of results",
                 "title_case": false,
@@ -396,11 +401,11 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.7.1"
+                    "version": "0.7.2"
                   },
                   {
                     "name": "langflow",
-                    "version": "1.10.2"
+                    "version": "1.11.2"
                   }
                 ]
               }
@@ -435,6 +440,7 @@
                 "password": false,
                 "name": "code",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "info": "",
                 "load_from_db": false,
@@ -454,6 +460,7 @@
                 "value": "",
                 "display_name": "Config (.env) path",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": false,
                 "info": "Blank = backend default .env (StrInput so API tweaks apply)",
                 "title_case": false,
@@ -476,6 +483,7 @@
                 "value": "",
                 "display_name": "Question",
                 "advanced": false,
+                "api_editable": false,
                 "input_types": [
                   "Message"
                 ],
@@ -546,11 +554,11 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.7.1"
+                    "version": "0.7.2"
                   },
                   {
                     "name": "langflow",
-                    "version": "1.10.2"
+                    "version": "1.11.2"
                   }
                 ]
               }
@@ -584,6 +592,7 @@
                 "value": "",
                 "display_name": "AI Answer",
                 "advanced": false,
+                "api_editable": false,
                 "input_types": [
                   "Data"
                 ],
@@ -606,6 +615,7 @@
                 "value": "",
                 "display_name": "Search Results",
                 "advanced": false,
+                "api_editable": false,
                 "input_types": [
                   "Data"
                 ],
@@ -629,6 +639,7 @@
                 "password": false,
                 "name": "code",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "info": "",
                 "load_from_db": false,
@@ -647,6 +658,7 @@
                 "value": 5,
                 "display_name": "Max search results shown",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": false,
                 "info": "",
                 "title_case": false,
@@ -700,7 +712,7 @@
                 "dependencies": [
                   {
                     "name": "langflow",
-                    "version": "1.10.2"
+                    "version": "1.11.2"
                   }
                 ]
               }
@@ -747,7 +759,7 @@
                   },
                   {
                     "name": "fastapi",
-                    "version": "0.139.0"
+                    "version": "0.139.2"
                   },
                   {
                     "name": "lfx",
@@ -798,6 +810,7 @@
               },
               "code": {
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "fileTypes": [],
                 "file_path": "",

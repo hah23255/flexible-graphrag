@@ -21,6 +21,7 @@ export class AppComponent implements OnInit {
   // New configuration types for modular sources
   configuredCmisConfig: any = null;
   configuredAlfrescoConfig: any = null;
+  configuredNuxeoConfig: any = null;
   configuredWebConfig: any = null;
   configuredWikipediaConfig: any = null;
   configuredYoutubeConfig: any = null;
@@ -81,6 +82,7 @@ export class AppComponent implements OnInit {
     // Clear all configuration types
     this.configuredCmisConfig = null;
     this.configuredAlfrescoConfig = null;
+    this.configuredNuxeoConfig = null;
     this.configuredWebConfig = null;
     this.configuredWikipediaConfig = null;
     this.configuredYoutubeConfig = null;
@@ -96,6 +98,7 @@ export class AppComponent implements OnInit {
     // Set new configuration types
     this.configuredCmisConfig = data.cmisConfig || null;
     this.configuredAlfrescoConfig = data.alfrescoConfig || null;
+    this.configuredNuxeoConfig = data.nuxeoConfig || null;
     this.configuredWebConfig = data.webConfig || null;
     this.configuredWikipediaConfig = data.wikipediaConfig || null;
     this.configuredYoutubeConfig = data.youtubeConfig || null;
@@ -119,7 +122,7 @@ export class AppComponent implements OnInit {
   removeRepositoryFile(index: number): void {
     console.log('🗑️ removeRepositoryFile called for index:', index);
     
-    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       // For repository files, hide the items
       this.repositoryItemsHidden = true;
     }

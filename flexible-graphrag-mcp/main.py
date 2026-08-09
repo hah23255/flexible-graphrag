@@ -8,7 +8,7 @@ import asyncio
 import os
 import sys
 import httpx
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from fastmcp import FastMCP
 
 # Windows encoding is handled by environment variables in Claude Desktop config:
@@ -20,8 +20,34 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'flexible-graphrag
 # Default backend URL
 BACKEND_URL = os.getenv("FLEXIBLE_GRAPHRAG_URL", "http://localhost:8000")
 
-# Initialize MCP server
-mcp = FastMCP("flexible-graphrag-mcp")
+def _build_transport_auth():
+    """Optionally secure the MCP transport itself with OAuth2/JWT bearer validation.
+
+    Enabled by env MCP_TRANSPORT_AUTH=true (applies to HTTP/SSE transports only; stdio ignores
+    it). Validates RS256 bearer tokens from an OIDC IdP (e.g. Keycloak) via its JWKS; a client
+    (including MCP Inspector) must send `Authorization: Bearer <token>`. This gates who may call
+    the flexible-graphrag MCP server — separate from the data-source credentials passed through in
+    alfresco_config/nuxeo_config. Defaults target the local Keycloak realm.
+    """
+    if os.getenv("MCP_TRANSPORT_AUTH", "false").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    # FastMCP 3.x: JWT transport auth uses JWTVerifier (v2 BearerAuthProvider was removed).
+    from fastmcp.server.auth.providers.jwt import JWTVerifier as _Verifier
+    jwks_uri = os.getenv(
+        "MCP_AUTH_JWKS_URI",
+        "http://host.docker.internal:8091/realms/alfresco/protocol/openid-connect/certs",
+    )
+    # The MCP SDK enforces HTTPS for the issuer URL (localhost/127.0.0.1 excepted); a local http
+    # Keycloak issuer is rejected. Leave issuer unset by default (the JWKS signature check still
+    # gates access); set MCP_AUTH_ISSUER with an HTTPS IdP for strict issuer validation.
+    issuer = os.getenv("MCP_AUTH_ISSUER") or None
+    audience = os.getenv("MCP_AUTH_AUDIENCE") or None
+    print(f"MCP transport auth ENABLED (jwks_uri={jwks_uri}, issuer={issuer}, audience={audience})", file=sys.stderr)
+    return _Verifier(jwks_uri=jwks_uri, issuer=issuer, audience=audience)
+
+
+# Initialize MCP server (optionally with transport-level OAuth2/JWT bearer auth)
+mcp = FastMCP("flexible-graphrag-mcp", auth=_build_transport_auth())
 
 # httpx defaults to a 5s timeout on every phase. Several backend operations exceed that —
 # notably the first query/search after a fresh backend start, which lazily reconnects to the
@@ -67,27 +93,28 @@ async def get_system_status() -> Dict[str, Any]:
 @mcp.tool()
 async def ingest_documents(
     data_source: str = "filesystem", 
-    paths: Optional[str] = None,
+    paths: Optional[Union[str, list]] = None,
     enable_sync: Optional[bool] = False,
     skip_graph: Optional[bool] = False,
-    cmis_config: Optional[str] = None,
-    alfresco_config: Optional[str] = None,
-    web_config: Optional[str] = None,
-    wikipedia_config: Optional[str] = None,
-    youtube_config: Optional[str] = None,
-    s3_config: Optional[str] = None,
-    gcs_config: Optional[str] = None,
-    azure_blob_config: Optional[str] = None,
-    onedrive_config: Optional[str] = None,
-    sharepoint_config: Optional[str] = None,
-    box_config: Optional[str] = None,
-    google_drive_config: Optional[str] = None
+    cmis_config: Optional[Union[str, dict]] = None,
+    alfresco_config: Optional[Union[str, dict]] = None,
+    nuxeo_config: Optional[Union[str, dict]] = None,
+    web_config: Optional[Union[str, dict]] = None,
+    wikipedia_config: Optional[Union[str, dict]] = None,
+    youtube_config: Optional[Union[str, dict]] = None,
+    s3_config: Optional[Union[str, dict]] = None,
+    gcs_config: Optional[Union[str, dict]] = None,
+    azure_blob_config: Optional[Union[str, dict]] = None,
+    onedrive_config: Optional[Union[str, dict]] = None,
+    sharepoint_config: Optional[Union[str, dict]] = None,
+    box_config: Optional[Union[str, dict]] = None,
+    google_drive_config: Optional[Union[str, dict]] = None
 ) -> Dict[str, Any]:
     """
     Ingest documents from filesystem, web, or cloud sources.
     
     Args:
-        data_source: Source type (filesystem, web, wikipedia, youtube, s3, gcs, azure_blob, etc.)
+        data_source: Source type (filesystem, cmis, alfresco, nuxeo, web, wikipedia, youtube, s3, gcs, azure_blob, etc.)
         paths: File path(s) as JSON array for filesystem source
         enable_sync: Enable automatic change detection and incremental updates
         skip_graph: Skip knowledge graph extraction (faster, vector+search only)
@@ -107,7 +134,10 @@ async def ingest_documents(
             request_data["enable_sync"] = enable_sync
         
         # Add paths if provided
-        if paths:
+        if isinstance(paths, list):
+            # Structured MCP clients (e.g. MCP Inspector) send an actual array
+            request_data["paths"] = paths
+        elif paths:
             # Handle multiple formats:
             # 1. JSON array string: "[\"path1\", \"path2\"]"
             # 2. Comma-separated string: "path1,path2"
@@ -144,6 +174,7 @@ async def ingest_documents(
         config_mappings = {
             "cmis_config": cmis_config,
             "alfresco_config": alfresco_config,
+            "nuxeo_config": nuxeo_config,
             "web_config": web_config,
             "wikipedia_config": wikipedia_config,
             "youtube_config": youtube_config,
@@ -158,16 +189,20 @@ async def ingest_documents(
         
         for config_key, config_value in config_mappings.items():
             if config_value:
-                try:
-                    # Parse JSON string to dictionary
-                    request_data[config_key] = json.loads(config_value)
-                except json.JSONDecodeError as e:
-                    return {
-                        "processing_id": "error",
-                        "status": "failed",
-                        "message": f"Invalid JSON in {config_key}: {str(e)}",
-                        "progress": 0
-                    }
+                # Accept either a dict (structured MCP clients like MCP Inspector send an object)
+                # or a JSON string (LLM clients typically send a stringified object).
+                if isinstance(config_value, dict):
+                    request_data[config_key] = config_value
+                else:
+                    try:
+                        request_data[config_key] = json.loads(config_value)
+                    except json.JSONDecodeError as e:
+                        return {
+                            "processing_id": "error",
+                            "status": "failed",
+                            "message": f"Invalid JSON in {config_key}: {str(e)}",
+                            "progress": 0
+                        }
             
         result = await make_api_call("POST", "/api/ingest", request_data)
         return result  # Return the async processing response directly
@@ -320,7 +355,7 @@ def main():
     
     sys.stderr.write("🛠️  Available tools:\n")
     sys.stderr.write("   • get_system_status\n")
-    sys.stderr.write("   • ingest_documents (supports paths, skip_graph, enable_sync, nodeDetails, all 13 data sources)\n")
+    sys.stderr.write("   • ingest_documents (supports paths, skip_graph, enable_sync, nodeDetails, all 14 data sources)\n")
     sys.stderr.write("   • search_documents\n") 
     sys.stderr.write("   • query_documents\n")
     sys.stderr.write("   • test_with_sample\n")

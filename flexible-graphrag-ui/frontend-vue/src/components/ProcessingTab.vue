@@ -15,10 +15,10 @@
         <!-- Only show Enable Sync for datasources that support auto-sync -->
         <!-- Hidden for: upload, cmis, webpage, wikipedia, youtube -->
         <v-checkbox
-          v-if="configuredDataSource !== 'upload' && 
-                configuredDataSource !== 'cmis' && 
-                configuredDataSource !== 'web' && 
-                configuredDataSource !== 'wikipedia' && 
+          v-if="configuredDataSource !== 'upload' &&
+                configuredDataSource !== 'cmis' &&
+                configuredDataSource !== 'web' &&
+                configuredDataSource !== 'wikipedia' &&
                 configuredDataSource !== 'youtube'"
           v-model="enableSync"
           label="Enable auto change sync"
@@ -328,6 +328,10 @@ export default defineComponent({
       type: Object,
       default: null,
     },
+    configuredNuxeoConfig: {
+      type: Object,
+      default: null,
+    },
     configuredWebConfig: {
       type: Object,
       default: null,
@@ -394,7 +398,7 @@ export default defineComponent({
           size: file.size,
           type: 'file',
         }));
-      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco') {
+      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco' || props.configuredDataSource === 'nuxeo') {
         // If repository items are explicitly hidden AND sources haven't been freshly reconfigured, show nothing
         if (repositoryItemsHidden.value && sourcesReconfiguredFlag.value === 0) {
           console.log('Repository items hidden - returning empty array:', {
@@ -678,7 +682,7 @@ export default defineComponent({
           .filter(i => i !== index)
           .map(i => i > index ? i - 1 : i);
         selectedItems.value = newSelected;
-      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco') {
+      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco' || props.configuredDataSource === 'nuxeo') {
         // For repository items, remove from display
         if (statusData.value?.individual_files && statusData.value.individual_files.length > 0) {
           // If we have individual files, remove from that array
@@ -728,7 +732,7 @@ export default defineComponent({
         });
         // Emit event to parent to update configured files
         emit('files-removed', newFiles);
-      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco') {
+      } else if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco' || props.configuredDataSource === 'nuxeo') {
         // For repository items, remove from display
         if (statusData.value?.individual_files && statusData.value.individual_files.length > 0) {
           // If we have individual files, remove selected ones
@@ -881,6 +885,8 @@ export default defineComponent({
             password: 'admin',
             path: props.configuredFolderPath || '/Shared/GraphRAG'
           };
+        } else if (props.configuredDataSource === 'nuxeo') {
+          request.nuxeo_config = props.configuredNuxeoConfig;
         } else if (props.configuredDataSource === 'web') {
           request.web_config = props.configuredWebConfig;
         } else if (props.configuredDataSource === 'wikipedia') {
@@ -1008,7 +1014,7 @@ export default defineComponent({
     // Watch for repository configuration changes (CMIS/Alfresco) based on timestamp
     watch(() => props.configurationTimestamp, (newTimestamp, oldTimestamp) => {
       if (newTimestamp > 0 && newTimestamp !== oldTimestamp && 
-          (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco')) {
+          (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco' || props.configuredDataSource === 'nuxeo')) {
         // Clear old processing messages when reconfiguring
         successMessage.value = '';
         error.value = '';
@@ -1058,7 +1064,7 @@ export default defineComponent({
 
     // Auto-select files when they are discovered from processing status or configuration
     watch(() => displayFiles.value, (newFiles, oldFiles) => {
-      if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco') {
+      if (props.configuredDataSource === 'cmis' || props.configuredDataSource === 'alfresco' || props.configuredDataSource === 'nuxeo') {
         console.log('Repository displayFiles changed:', newFiles.length, 'files');
         selectedItems.value = newFiles.map((_, index) => index);
         console.log('Auto-selected repository items:', selectedItems.value);

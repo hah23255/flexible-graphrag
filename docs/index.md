@@ -15,7 +15,7 @@ hide:
 [![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-**Flexible GraphRAG** is an open source platform supporting document processing (Docling or LlamaParse), knowledge graph auto-building, schemas, LlamaIndex LLMs, RAG and GraphRAG setup, hybrid search (fulltext, vector, graph), AI query, and AI chat capabilities. The backend uses Python, LlamaIndex, and FastAPI. Has Angular, React, and Vue TypeScript frontends. A MCP Server is also available. Currently supports 13 data sources, 10 vector databases, OpenSearch / Elasticsearch / BM25 search, 8 property graph databases, 3 RDF triple stores (Fuseki, GraphDB, Oxigraph), and Alfresco. These servers and their dashboards can be configured in a provided docker compose.
+**Flexible GraphRAG** is an open source platform supporting document processing (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, schemas, LlamaIndex LLMs, RAG and GraphRAG setup, hybrid search (fulltext, vector, graph), AI query, and AI chat capabilities. The backend uses Python, LlamaIndex, and FastAPI. Has Angular, React, and Vue TypeScript frontends. A MCP Server is also available. Currently supports 14 data sources, 10 vector databases, OpenSearch / Elasticsearch / BM25 search, 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), and Alfresco. These servers and their dashboards can be configured in a provided docker compose.
 
 ---
 
@@ -40,10 +40,10 @@ hide:
 - **LLM providers (KG extraction & chat)**: Ollama, OpenAI, Azure OpenAI, Google Gemini, Anthropic Claude, Google Vertex AI, Amazon Bedrock, Groq, Fireworks AI, OpenAI-compatible endpoints (`openai_like`), OpenRouter, LiteLLM proxy, and vLLM — configurable via `LLM_PROVIDER`; see [LLM & Embedding Config](LLM/LLM-EMBEDDING-CONFIG.md)
 - **Embedding providers**: OpenAI, Ollama, Azure OpenAI, Google GenAI, Vertex AI, Bedrock, Fireworks, OpenAI-like (`EMBEDDING_KIND=openai_like`), and LiteLLM — see [LLM Configuration](LLM/LLM-EMBEDDING-CONFIG.md)
 - **Configurable Architecture**: LlamaIndex provides abstractions for allowing multiple vector databases, property graph databases, RDF triple stores, search engines, and LLM providers to be supported
-- **Multi-Source Ingestion**: Processes documents from 13 data sources (file upload, cloud storage, enterprise repositories, web sources) with Docling (default) or LlamaParse (cloud API) document parsing.
+- **Multi-Source Ingestion**: Processes documents from 14 data sources (file upload, cloud storage, enterprise repositories, web sources) with Docling (default) or LlamaParse (cloud API) document parsing.
 - **Observability**: Built-in OpenTelemetry instrumentation with automatic LlamaIndex tracing, Prometheus metrics, Jaeger traces, and Grafana dashboards for production monitoring
 - **FastAPI Server with REST API**: Python based FastAPI server with REST APIs for document ingesting, hybrid search, AI query, and AI chat.
-- **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 13 data sources), hybrid search, and AI query. Uses FastAPI backend REST APIs.
+- **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 14 data sources), hybrid search, and AI query. Uses FastAPI backend REST APIs.
 - **UI Clients**: Angular, React, and Vue UI clients support choosing the data source (filesystem, Alfresco, CMIS, etc.), ingesting documents, performing hybrid searches, AI queries, and AI chat. The UI clients use the REST APIs of the FastAPI backend.
 - **Docker Deployment Flexibility**: Supports both standalone and Docker deployment modes. Docker infrastructure provides modular database selection via docker-compose includes — vector, graph, search engines, and Alfresco can be included or excluded with a single comment. Choose between hybrid deployment (databases in Docker, backend and UIs standalone) or full containerization.
 
@@ -62,7 +62,7 @@ hide:
 ### MCP Server (`/flexible-graphrag-mcp`)
 
 - **MCP Client support**: Model Context Protocol server for Claude Desktop and other MCP clients
-- **Full API Parity**: Tools like `ingest_documents()` support all 13 data sources with source-specific configs: filesystem, repositories (Alfresco, SharePoint, Box, CMIS), cloud storage, web; `skip_graph` flag for all data sources; `paths` parameter for filesystem/Alfresco/CMIS; Alfresco also supports `nodeDetails` list (multi-select for KG Spaces)
+- **Full API Parity**: Tools like `ingest_documents()` support all 14 data sources with source-specific configs: filesystem, repositories (Alfresco, SharePoint, Box, CMIS, Nuxeo), cloud storage, web; `skip_graph` flag for all data sources; `paths` parameter for filesystem/Alfresco/CMIS; Alfresco also supports `nodeDetails` list (multi-select for KG Spaces)
 - **Additional Tools**: `search_documents()`, `query_documents()`, `ingest_text()`, system diagnostics, and health checks
 - **Dual Transport**: HTTP mode for debugging, stdio mode for production
 - **Tool Suite**: 9 specialized tools for document processing, search, and system management
@@ -93,7 +93,7 @@ hide:
 | **[Docker Deployment](GETTING-STARTED/DOCKER-DEPLOYMENT.md)** | Modular docker-compose — pick your databases, start one command |
 | **[Configuration](DATABASES/DATABASE-CONFIGURATION.md)** | Database configuration, schema examples, LangChain config |
 | **[UI Guide](UI-GUIDE/UI-GUIDE.md)** | 4-tab interface: Sources → Processing → Search → Chat |
-| **[Data Sources](DATA-SOURCES/OVERVIEW.md)** | 13 sources: S3, Azure Blob, GCS, OneDrive, Alfresco, CMIS, Wikipedia, YouTube … |
+| **[Data Sources](DATA-SOURCES/OVERVIEW.md)** | 14 sources: S3, Azure Blob, GCS, OneDrive, Alfresco, Nuxeo, CMIS, Wikipedia, YouTube … |
 | **[Databases](DATABASES/GRAPH-DATABASES/README-neo4j.md)** | Property graph, RDF triple stores, vector databases, search databases |
 | **[MCP Server](MCP/MCP-SERVER.md)** | 9 tools for Claude Desktop, Cursor, and other MCP clients |
 | **[Developer](DEVELOPER/REST-API.md)** | REST API, MCP Tools, Observability, Testing & Debugging |

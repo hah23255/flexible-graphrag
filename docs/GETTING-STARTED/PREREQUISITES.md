@@ -30,5 +30,5 @@ uv pip install -e .
   ```bash
   uv pip install arcadedb>=26.3.2
   ```
-- **Enterprise Repositories**: Alfresco, SharePoint, Box, CMIS-compliant repository
+- **Enterprise Repositories**: Alfresco, Nuxeo, SharePoint, Box, CMIS-compliant repository
 - **Cloud Storage**: Amazon S3, Google Cloud Storage, Google Drive, Azure Blob, Microsoft OneDrive

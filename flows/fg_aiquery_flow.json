@@ -67,6 +67,7 @@
               "_type": "Component",
               "code": {
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "fileTypes": [],
                 "file_path": "",
@@ -279,6 +280,7 @@
                 "password": false,
                 "name": "code",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": true,
                 "info": "",
                 "load_from_db": false,
@@ -298,6 +300,7 @@
                 "value": "",
                 "display_name": "Config (.env) path",
                 "advanced": true,
+                "api_editable": false,
                 "dynamic": false,
                 "info": "Blank = backend default .env (StrInput so API tweaks apply)",
                 "title_case": false,
@@ -320,6 +323,7 @@
                 "value": "",
                 "display_name": "Question",
                 "advanced": false,
+                "api_editable": false,
                 "input_types": [
                   "Message"
                 ],
@@ -390,11 +394,11 @@
                 "dependencies": [
                   {
                     "name": "langflow_components",
-                    "version": "0.7.1"
+                    "version": "0.7.2"
                   },
                   {
                     "name": "langflow",
-                    "version": "1.10.2"
+                    "version": "1.11.2"
                   }
                 ]
               }

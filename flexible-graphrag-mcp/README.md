@@ -1,6 +1,6 @@
 # Flexible GraphRAG
 
-Flexible GraphRAG is an open source AI context platform supporting a document processing pipeline (Docling or LlamaParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is Python with LlamaIndex and LangChain as peer frameworks. LlamaIndex is the default for each pipeline stage; LangChain can be selected per stage in environment configuration. The API is a REST FastAPI service. Angular, React, and Vue TypeScript frontends and an MCP server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout.
+Flexible GraphRAG is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is Python with LlamaIndex and LangChain as peer frameworks. LlamaIndex is the default for each pipeline stage; LangChain can be selected per stage in environment configuration. The API is a REST FastAPI service. Angular, React, and Vue TypeScript frontends and an MCP server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout.
 
 This package is the MCP server — it connects to the Flexible GraphRAG FastAPI backend (status, ingest, hybrid search, AI Q&A) for Claude Desktop and other MCP clients.
 
@@ -12,7 +12,7 @@ This package is the MCP server — it connects to the Flexible GraphRAG FastAPI 
 
 # Flexible GraphRAG MCP Server
 
-Model Context Protocol (MCP) server for Flexible GraphRAG: connects to the FastAPI backend (status, ingest, hybrid search, AI Q&A). Same project scope as the main stack — **LlamaIndex** / **LangChain** peer frameworks, 13 data sources, 15 property graph databases, 4 RDF stores, vector databases, and search engines.
+Model Context Protocol (MCP) server for Flexible GraphRAG: connects to the FastAPI backend (status, ingest, hybrid search, AI Q&A). Same project scope as the main stack — **LlamaIndex** / **LangChain** peer frameworks, 14 data sources, 15 property graph databases, 4 RDF stores, vector databases, and search engines.
 
 - **Repository**: [github.com/stevereiner/flexible-graphrag](https://github.com/stevereiner/flexible-graphrag)
 - **Full README**: [README.md on GitHub](https://github.com/stevereiner/flexible-graphrag/blob/main/README.md)
@@ -175,10 +175,37 @@ flexible-graphrag-mcp --http --port 8080
 
 The HTTP mode is automatically configured in the `mcp-inspector/` config files and works better than stdio for debugging complex MCP interactions.
 
+## Securing the MCP transport (OAuth2 bearer)
+
+You can require **callers of this MCP server** to present an OAuth2 bearer token, validated against an
+OIDC IdP's JWKS (e.g. Keycloak). This uses FastMCP's JWT verifier and applies to the **HTTP** transport
+only (stdio ignores it). It's separate from the data-source credentials passed through in
+`alfresco_config` / `nuxeo_config`.
+
+```bash
+# Require a valid bearer token on the HTTP endpoint
+MCP_TRANSPORT_AUTH=true \
+MCP_AUTH_JWKS_URI=http://host.docker.internal:8091/realms/alfresco/protocol/openid-connect/certs \
+flexible-graphrag-mcp --http --port 3001
+```
+
+RS256 tokens are validated against the JWKS, so only genuine IdP-signed tokens are accepted:
+
+- no token → `401`
+- `Authorization: Bearer <valid-token>` → `200`
+
+**MCP Inspector:** set the server URL to `http://localhost:3001/mcp` and add an
+`Authorization: Bearer <token>` header (obtain the token out-of-band from your IdP; the server validates
+but does not issue tokens).
+
+Env vars: `MCP_TRANSPORT_AUTH` (default `false`), `MCP_AUTH_JWKS_URI`, `MCP_AUTH_ISSUER` (optional — the
+MCP SDK requires an **HTTPS** issuer, so leave unset for a local http Keycloak; the JWKS signature check
+still gates access), `MCP_AUTH_AUDIENCE` (optional).
+
 ## Available Tools
 
 - **`get_system_status()`** - System status and configuration
-- **`ingest_documents()`** - Ingest documents from 13 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list)
+- **`ingest_documents()`** - Ingest documents from 14 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list)
 - **`ingest_text(content, source_name)`** - Ingest custom text content
 - **`search_documents(query, top_k)`** - Hybrid search for document retrieval
 - **`query_documents(query, top_k)`** - AI-generated answers from documents

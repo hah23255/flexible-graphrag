@@ -1,6 +1,6 @@
 [project]
 name = "flexible-graphrag"
-version = "0.7.1"
+version = "0.7.2"
 description = "Open source AI context platform: document processing, knowledge graph auto-building, ontologies, GraphRAG/RAG, hybrid search (vector, property graph, RDF/SPARQL, fulltext), 13 LLM providers, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain, FastAPI, MCP server"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -72,7 +72,9 @@ dependencies = [
     "nest-asyncio",
     "wikipedia",
     "cmislib",
-    "python-alfresco-api>=1.1.5",
+    "python-alfresco-api>=1.2.1",
+    "nuxeo[oauth2]",                # Nuxeo REST client (basic/oauth2/token) for the Nuxeo data source
+    "kafka-python-ng",              # Nuxeo real-time change detection via the audit Kafka stream
     "docling-slim[standard]",
     "llama-cloud>=2.1",      # v2 unified SDK — LlamaParse now uses AsyncLlamaCloud from this package
     "liteparse",             # local Rust/PyO3 PDF/office/image parser (DOCUMENT_PARSER=liteparse), no API key
@@ -142,7 +144,9 @@ dependencies = [
     "elasticsearch",
     "opensearch-py",
     # Vector database client libraries
-    "qdrant-client",
+    # Pin <1.19: qdrant-client 1.19.0 moved IDF_EMBEDDING_MODELS out of qdrant_fastembed,
+    # which llama-index-vector-stores-qdrant 0.10.2 still imports from there (ImportError).
+    "qdrant-client>=1.16,<1.19",
     "chromadb",
     "pymilvus",
     "weaviate-client",
@@ -390,41 +394,57 @@ flexible-graphrag = "start:main"
 flexible-graphrag = "langflow_components"
 
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools]
-# Flat layout - Python files are in the same directory as pyproject.toml
-py-modules = [
-    "backend",
-    "config",
-    "factories",
-    "flow_service",   # Langflow flow-mode REST client (backend imports it when ENABLE_LANGFLOW_FLOWS)
-    "hybrid_system",
-    "incremental_system",
-    "main",
-    "post_ingestion_state",
-    "query_engine",
-    "retriever_setup",
-    "schema_manager",
-    "start",
+# Flat layout — top-level modules and subpackages live alongside pyproject.toml. `only-include`
+# reliably ships both loose files and whole directories (a plain `include` alongside `packages`
+# misses root-level modules). Directory contents (package data: extension.json, *.sql, *.txt, …)
+# are included automatically.
+[tool.hatch.build.targets.wheel]
+only-include = [
+    # loose top-level modules
+    "backend.py",
+    "config.py",
+    "factories.py",
+    "flow_service.py",   # Langflow flow-mode REST client (backend imports it when ENABLE_LANGFLOW_FLOWS)
+    "hybrid_system.py",
+    "incremental_system.py",
+    "main.py",
+    "post_ingestion_state.py",
+    "query_engine.py",
+    "retriever_setup.py",
+    "schema_manager.py",
+    "start.py",
+    # subpackages
+    "adapters",
+    "ingest",
+    "process",
+    "sources",
+    "observability",
+    "incremental_updates",
+    "rdf",
+    "langchain",
+    "stores",
+    "llamaindex",
+    "langflow_components",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["adapters*", "ingest*", "process*", "sources*", "observability*", "incremental_updates*", "rdf*", "langchain*", "stores*", "llamaindex*", "langflow_components*"]
+# App/deploy files shipped inside the wheel (previously [tool.setuptools.data-files]).
+[tool.hatch.build.targets.wheel.force-include]
+"Dockerfile" = "Dockerfile"
+"env-sample.txt" = "env-sample.txt"
+"uv.toml" = "uv.toml"
+"extras-overrides.txt" = "extras-overrides.txt"
 
-[tool.setuptools.package-data]
-"*" = ["*.txt", "*.md", "*.sql", "*.toml"]
-# Ship the Langflow extension manifest inside the wheel (non-.py file).
-"langflow_components" = ["extension.json"]
-
-[tool.setuptools.data-files]
-"." = [
-    "Dockerfile",
-    "env-sample.txt",
-    "uv.toml",
-    "extras-overrides.txt",
+[tool.hatch.build.targets.sdist]
+include = [
+    "*.py",
+    "adapters/", "ingest/", "process/", "sources/", "observability/",
+    "incremental_updates/", "rdf/", "langchain/", "stores/", "llamaindex/",
+    "langflow_components/",
+    "Dockerfile", "env-sample.txt", "uv.toml", "extras-overrides.txt",
+    "pyproject.toml", "README.md",
 ]
 
 [tool.pytest.ini_options]

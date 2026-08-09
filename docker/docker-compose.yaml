@@ -46,6 +46,7 @@ include:
    #- includes/opensearch.yaml      # Commented - using elasticsearch instead
    # Alfresco repository
    #- includes/alfresco.yaml        # Alfresco content management system
+   #- includes/keycloak.yaml        # Keycloak OIDC IdP for Alfresco OAuth2 (identity-service subsystem, port 8091)
    # Observability
    #- includes/observability.yaml   # OpenTelemetry observability stack (Jaeger, Prometheus, Grafana)
    # commented out app-stack.yaml and proxy.yaml currently using external/standalone flexible-graphrag 

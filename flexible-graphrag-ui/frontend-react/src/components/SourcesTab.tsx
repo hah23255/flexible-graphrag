@@ -12,6 +12,7 @@ import { Theme } from '@mui/material/styles';
 import {
   FileUploadForm,
   AlfrescoSourceForm,
+  NuxeoSourceForm,
   CMISSourceForm,
   WebSourceForm,
   WikipediaSourceForm,
@@ -33,9 +34,10 @@ interface SourcesTabProps {
   cmisUrl: string;
   cmisUsername: string;
   cmisPassword: string;
-  alfrescoUrl: string;
-  alfrescoUsername: string;
-  alfrescoPassword: string;
+  nuxeoFormValue: any;
+  onNuxeoFormChange: (config: any) => void;
+  alfrescoFormValue: any;
+  onAlfrescoFormChange: (config: any) => void;
   // Web sources
   webUrl: string;
   wikipediaUrl: string;
@@ -68,9 +70,6 @@ interface SourcesTabProps {
   onCmisUrlChange: (url: string) => void;
   onCmisUsernameChange: (username: string) => void;
   onCmisPasswordChange: (password: string) => void;
-  onAlfrescoUrlChange: (url: string) => void;
-  onAlfrescoUsernameChange: (username: string) => void;
-  onAlfrescoPasswordChange: (password: string) => void;
   // Web sources handlers
   onWebUrlChange: (url: string) => void;
   onWikipediaUrlChange: (url: string) => void;
@@ -104,6 +103,7 @@ interface SourcesTabProps {
     folderPath: string;
     cmisConfig?: any;
     alfrescoConfig?: any;
+    nuxeoConfig?: any;
     webConfig?: any;
     cloudConfig?: any;
     enterpriseConfig?: any;
@@ -118,9 +118,10 @@ export const SourcesTab: React.FC<SourcesTabProps> = ({
   cmisUrl,
   cmisUsername,
   cmisPassword,
-  alfrescoUrl,
-  alfrescoUsername,
-  alfrescoPassword,
+  nuxeoFormValue,
+  onNuxeoFormChange,
+  alfrescoFormValue,
+  onAlfrescoFormChange,
   // Web sources
   webUrl,
   wikipediaUrl,
@@ -153,9 +154,6 @@ export const SourcesTab: React.FC<SourcesTabProps> = ({
   onCmisUrlChange,
   onCmisUsernameChange,
   onCmisPasswordChange,
-  onAlfrescoUrlChange,
-  onAlfrescoUsernameChange,
-  onAlfrescoPasswordChange,
   // Web sources handlers
   onWebUrlChange,
   onWikipediaUrlChange,
@@ -207,10 +205,13 @@ export const SourcesTab: React.FC<SourcesTabProps> = ({
     const configData = {
       dataSource,
       files: dataSource === 'upload' ? selectedFiles : [],
-      folderPath: ['cmis', 'alfresco'].includes(dataSource) ? folderPath : '',
+      folderPath: dataSource === 'cmis'
+        ? folderPath
+        : ((dataSource === 'alfresco' || dataSource === 'nuxeo') ? (currentConfig?.path || '') : ''),
       // Legacy configs for backward compatibility
       cmisConfig: dataSource === 'cmis' ? currentConfig : undefined,
       alfrescoConfig: dataSource === 'alfresco' ? currentConfig : undefined,
+      nuxeoConfig: dataSource === 'nuxeo' ? currentConfig : undefined,
       // New modular configs  
       webConfig: dataSource === 'web' ? currentConfig : undefined,
       wikipediaConfig: dataSource === 'wikipedia' ? currentConfig : undefined,
@@ -263,19 +264,24 @@ export const SourcesTab: React.FC<SourcesTabProps> = ({
         return (
           <AlfrescoSourceForm
             currentTheme={currentTheme}
-            url={alfrescoUrl}
-            username={alfrescoUsername}
-            password={alfrescoPassword}
-            path={folderPath}
-            onUrlChange={onAlfrescoUrlChange}
-            onUsernameChange={onAlfrescoUsernameChange}
-            onPasswordChange={onAlfrescoPasswordChange}
-            onPathChange={onFolderPathChange}
+            value={alfrescoFormValue}
+            onChange={onAlfrescoFormChange}
             onConfigurationChange={handleConfigurationChange}
             onValidationChange={handleValidationChange}
           />
         );
       
+      case 'nuxeo':
+        return (
+          <NuxeoSourceForm
+            currentTheme={currentTheme}
+            value={nuxeoFormValue}
+            onChange={onNuxeoFormChange}
+            onConfigurationChange={handleConfigurationChange}
+            onValidationChange={handleValidationChange}
+          />
+        );
+
       case 'web':
         return (
           <WebSourceForm
@@ -439,6 +445,7 @@ export const SourcesTab: React.FC<SourcesTabProps> = ({
         >
           <MenuItem value="upload">File Upload</MenuItem>
           <MenuItem value="alfresco">Alfresco Repository</MenuItem>
+          <MenuItem value="nuxeo">Nuxeo Repository</MenuItem>
           <MenuItem value="cmis">CMIS Repository</MenuItem>
           <MenuItem disabled>─── Web ───</MenuItem>
           <MenuItem value="web">Web Page</MenuItem>

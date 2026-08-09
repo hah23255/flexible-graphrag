@@ -927,7 +927,7 @@ LITELLM_EMBEDDING_API_BASE=http://localhost:4000/v1
 # ====================================================================
 
 # Data Source Type (mainly for REST API and MCP server usage)
-# Options: filesystem, cmis, alfresco, upload, web, wikipedia, youtube, s3, gcs, azure_blob, onedrive, sharepoint, box, google_drive
+# Options: filesystem, cmis, alfresco, nuxeo, upload, web, wikipedia, youtube, s3, gcs, azure_blob, onedrive, sharepoint, box, google_drive
 # Note: UI clients typically override this setting with their own data source selection
 DATA_SOURCE=filesystem
 
@@ -952,6 +952,28 @@ ALFRESCO_PASSWORD=admin
 # ALFRESCO_STOMP_PORT: ActiveMQ STOMP port for real-time events (default: 61613)
 # Note: If you've changed the ActiveMQ STOMP port in docker-compose (e.g., to 8613), set it here
 ALFRESCO_STOMP_PORT=8613
+
+# Nuxeo Configuration (if using Nuxeo)
+# Requires the `nuxeo` client: uv pip install "nuxeo[oauth2]"
+# NUXEO_URL: base repository URL (no /api/v1 suffix - the client appends it)
+NUXEO_URL=http://localhost:8081/nuxeo
+# NUXEO_AUTH_METHOD: basic | oauth2 | token  (default: basic)
+NUXEO_AUTH_METHOD=basic
+# Basic auth (auth_method=basic)
+NUXEO_USERNAME=Administrator
+NUXEO_PASSWORD=Administrator
+# Path to ingest (folder or single document), e.g. /default-domain/workspaces/GraphRAG
+NUXEO_PATH=/default-domain/workspaces
+# Token auth (auth_method=token): a Nuxeo auth token (sent as X-Authentication-Token)
+# NUXEO_TOKEN=
+# OAuth2 (auth_method=oauth2): register an OAuth2 client in Nuxeo, obtain a token out-of-band
+# (authorization code + PKCE) and supply it here; the client auto-refreshes when possible.
+# NUXEO_OAUTH2_CLIENT_ID=
+# NUXEO_OAUTH2_CLIENT_SECRET=
+# NUXEO_OAUTH2_ACCESS_TOKEN=
+# NUXEO_OAUTH2_REFRESH_TOKEN=
+# NUXEO_OAUTH2_TOKEN_ENDPOINT=
+# NUXEO_OAUTH2_OPENID_CONFIG_URL=
 
 # Amazon S3 Configuration (if using S3)
 # Note: These values serve as defaults/fallbacks when S3_CONFIG is not provided or incomplete

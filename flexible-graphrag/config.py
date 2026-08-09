@@ -9,6 +9,7 @@ class DataSourceType(str, Enum):
     FILESYSTEM = "filesystem"
     CMIS = "cmis"
     ALFRESCO = "alfresco"
+    NUXEO = "nuxeo"
     UPLOAD = "upload"
     WEB = "web"
     WIKIPEDIA = "wikipedia"

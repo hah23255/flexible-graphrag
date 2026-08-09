@@ -179,10 +179,33 @@
   --success-bg: #1b4332;
   --success-text: #d1e7dd;
   --success-border: #2d5a3d;
-  
+
   --error-bg: #842029;
   --error-text: #f8d7da;
   --error-border: #a02834;
+}
+
+// Dark theme: the header checkboxes ("Skip graph…", "Enable auto change sync") inherit
+// dark text/borders and vanish on the dark background. Force the label white and the
+// unchecked box outline light. These live inside the child mat-checkbox, so pierce
+// encapsulation and drive Material's MDC custom properties.
+:host-context(.dark-theme) ::ng-deep .checkbox-group .mat-mdc-checkbox {
+  // Unchecked box border (invisible when it inherits a dark color)
+  --mdc-checkbox-unselected-icon-color: #ffffff;
+  --mdc-checkbox-unselected-hover-icon-color: #ffffff;
+  --mdc-checkbox-unselected-focus-icon-color: #ffffff;
+
+  .mdc-label {
+    color: #ffffff !important;
+  }
+}
+
+// Material's theme overrides the custom property, so set the unchecked box outline
+// directly. Scoped to :not(:checked):not(:indeterminate) so the blue checked fill is
+// left alone.
+:host-context(.dark-theme) ::ng-deep .checkbox-group .mat-mdc-checkbox
+  .mdc-checkbox__native-control:not(:checked):not(:indeterminate) ~ .mdc-checkbox__background {
+  border-color: #ffffff !important;
 }
 
 // Remove Selected and Cancel button styling - red outline only (like Vue/React)

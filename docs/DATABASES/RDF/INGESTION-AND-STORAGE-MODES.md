@@ -100,7 +100,7 @@ Pass `skip_graph=true` on a per-ingest call to skip KG extraction (and therefore
 | MCP tools | `ingest_documents`, `ingest_text`, `test_with_sample` — `skip_graph` parameter |
 | Python API | `backend.ingest_documents(skip_graph=True)`, `backend.ingest_text(skip_graph=True)` |
 | Python API | `system.ingest_documents(skip_graph=True)`, `system.ingest_text(skip_graph=True)` |
-| Datasource config | `skip_graph` field persisted in DB — applies to every auto-sync cycle for that datasource (filesystem, S3, GCS, Azure Blob, Google Drive, OneDrive, Alfresco, Box) |
+| Datasource config | `skip_graph` field persisted in DB — applies to every auto-sync cycle for that datasource (filesystem, S3, GCS, Azure Blob, Google Drive, OneDrive, Alfresco, Nuxeo, Box) |
 
 When `skip_graph=true`:
 - LLM KG extraction is skipped entirely (faster ingest)

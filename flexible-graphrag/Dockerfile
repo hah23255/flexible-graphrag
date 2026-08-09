@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 
 # Copy dependency files first for better layer caching.
 # extras-overrides.txt must be present before install so --override can reference it.
-COPY pyproject.toml uv.toml extras-overrides.txt ./
+# README.md + the force-included deploy files (Dockerfile, env-sample.txt) must be present before the
+# editable install: hatchling reads `readme` and validates `[tool.hatch.build.targets.wheel.force-include]`
+# during `build_editable`, so they have to exist at /app even though `COPY . .` re-copies them below.
+COPY pyproject.toml uv.toml extras-overrides.txt README.md Dockerfile env-sample.txt ./
 
 # Optional extras to install alongside base dependencies.
 # extras-overrides.txt suppresses advisory-only transitive downgrades from langchain-extras

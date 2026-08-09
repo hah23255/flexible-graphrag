@@ -21,7 +21,7 @@ from langflow.schema import Data
 _DEFAULT = "(.env default)"
 _DOC_EXTS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".txt",
              ".md", ".html", ".htm", ".csv", ".json", ".rtf", ".odt"}
-_SOURCE_TYPES = ["filesystem", "alfresco", "cmis", "web", "wikipedia", "youtube",
+_SOURCE_TYPES = ["filesystem", "alfresco", "nuxeo", "cmis", "web", "wikipedia", "youtube",
                  "s3", "gcs", "azure_blob", "onedrive", "sharepoint", "box", "google_drive"]
 
 

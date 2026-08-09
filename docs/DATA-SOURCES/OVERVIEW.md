@@ -1,6 +1,6 @@
 # Data Sources
 
-Flexible GraphRAG supports **13 data sources** for ingesting documents into your knowledge base.
+Flexible GraphRAG supports **14 data sources** for ingesting documents into your knowledge base.
 
 [![Data Sources](https://raw.githubusercontent.com/stevereiner/flexible-graphrag/main/screen-shots/react/data-sources-1.jpeg)](https://raw.githubusercontent.com/stevereiner/flexible-graphrag/main/screen-shots/react/data-sources-1.jpeg)
 
@@ -10,7 +10,7 @@ Flexible GraphRAG supports **13 data sources** for ingesting documents into your
 |---|---|
 | **File & Upload** | File Upload |
 | **Cloud Storage** | Amazon S3, Google Cloud Storage, Azure Blob Storage, Google Drive, Microsoft OneDrive |
-| **Enterprise Repositories** | Alfresco, Microsoft SharePoint, Box, CMIS |
+| **Enterprise Repositories** | Alfresco, Nuxeo, Microsoft SharePoint, Box, CMIS |
 | **Web Sources** | Web Pages, Wikipedia, YouTube |
 
 All data sources support:
@@ -101,7 +101,28 @@ ALFRESCO_USERNAME=admin
 ALFRESCO_PASSWORD=admin
 ```
 
+Alfresco also supports **ticket** and **OAuth2** (Bearer via the `identity-service` subsystem, e.g. Keycloak) auth, selectable in the UI. For OAuth2, prefer a **user token** for content operations: `client_credentials` runs as the client's *service account* — a just-in-time user with no display name and only default permissions (not admin, not guest) — whereas a user token gives a real display name and that user's ACLs.
+
+See [Alfresco Integration Guide](README-alfresco.md) for the full setup (Keycloak / `identity-service`, client-credentials vs. user token, token minting, incremental sync).
+
 Incremental updates supported via **ActiveMQ events** (real-time).
+
+### Nuxeo
+
+Ingest documents from a Nuxeo repository (File and Note documents). Three authentication methods:
+**basic**, **token** (X-Authentication-Token), and **OAuth2** (Bearer / PKCE).
+
+```bash
+NUXEO_URL=http://localhost:8081/nuxeo
+NUXEO_AUTH_METHOD=basic
+NUXEO_USERNAME=Administrator
+NUXEO_PASSWORD=Administrator
+NUXEO_PATH=/default-domain/workspaces
+```
+
+Incremental updates supported via the **Kafka audit stream** (real-time).
+
+See [Nuxeo Setup Guide](README-nuxeo.md).
 
 ### Microsoft SharePoint
 
@@ -150,6 +171,7 @@ Provide YouTube video URLs — transcripts are extracted and processed.
 | Source | Auto-Sync | Detection Method |
 |---|---|---|
 | Alfresco | Real-time | Community ActiveMQ |
+| Nuxeo | Real-time | Kafka audit stream |
 | Amazon S3 | Real-time | SQS event notifications |
 | Azure Blob Storage | Real-time | Change feed |
 | Google Cloud Storage | Real-time | Pub/Sub notifications |

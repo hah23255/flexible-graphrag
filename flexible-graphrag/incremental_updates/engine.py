@@ -723,7 +723,7 @@ class IncrementalUpdateEngine:
                 # For detectors with event streams (polling or webhooks), skip NEW files in periodic refresh
                 # Let the event stream handle new file detection and processing
                 # BUT: Check if the event stream is actually enabled before skipping!
-                if detector_name in ['BoxDetector', 'GoogleDriveDetector', 'S3Detector', 'AlfrescoDetector']:
+                if detector_name in ['BoxDetector', 'GoogleDriveDetector', 'S3Detector', 'AlfrescoDetector', 'NuxeoDetector']:
                     logger.info(f"NEW FILE: {metadata.path}: Skipping in periodic refresh (will be processed by event stream)")
                     return
                 
@@ -744,7 +744,7 @@ class IncrementalUpdateEngine:
                         # Fall through to process via backend
                 
                 # For other detectors without event streams (GCS, Azure, Filesystem), process via backend
-                if detector_name not in ['BoxDetector', 'GoogleDriveDetector', 'S3Detector', 'AlfrescoDetector', 'MicrosoftGraphDetector']:
+                if detector_name not in ['BoxDetector', 'GoogleDriveDetector', 'S3Detector', 'AlfrescoDetector', 'NuxeoDetector', 'MicrosoftGraphDetector']:
                     logger.info(f"NEW FILE: {metadata.path}: Processing via backend...")
                 
                 try:

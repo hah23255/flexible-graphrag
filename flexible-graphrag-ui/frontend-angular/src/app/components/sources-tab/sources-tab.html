@@ -7,6 +7,7 @@
     <mat-select [(value)]="dataSource" (selectionChange)="onDataSourceChange()" panelClass="compact-dropdown">
       <mat-option value="upload">File Upload</mat-option>
       <mat-option value="alfresco">Alfresco Repository</mat-option>
+      <mat-option value="nuxeo">Nuxeo Repository</mat-option>
       <mat-option value="cmis">CMIS Repository</mat-option>
       <mat-option disabled>─── Web ───</mat-option>
       <mat-option value="web">Web Page</mat-option>
@@ -46,18 +47,23 @@
     </app-cmis-source-form>
 
     <!-- Alfresco Form -->
-    <app-alfresco-source-form 
+    <app-alfresco-source-form
       *ngIf="dataSource === 'alfresco'"
-      [(url)]="alfrescoUrl"
-      [(username)]="alfrescoUsername"
-      [(password)]="alfrescoPassword"
-      [(path)]="folderPath"
+      [(value)]="alfrescoFormValue"
       (configurationChange)="onConfigurationChange($event)"
       (validationChange)="onValidationChange($event)">
     </app-alfresco-source-form>
 
+    <!-- Nuxeo Form -->
+    <app-nuxeo-source-form
+      *ngIf="dataSource === 'nuxeo'"
+      [(value)]="nuxeoFormValue"
+      (configurationChange)="onConfigurationChange($event)"
+      (validationChange)="onValidationChange($event)">
+    </app-nuxeo-source-form>
+
     <!-- Web Form -->
-    <app-web-source-form 
+    <app-web-source-form
       *ngIf="dataSource === 'web'"
       [(url)]="webUrl"
       (configurationChange)="onConfigurationChange($event)"

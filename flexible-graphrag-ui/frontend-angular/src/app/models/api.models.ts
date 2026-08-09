@@ -15,9 +15,33 @@ export interface IngestRequest {
   };
   alfresco_config?: {
     url: string;
-    username: string;
-    password: string;
+    auth_method?: string;
+    username?: string;
+    password?: string;
+    oauth2?: {
+      client_id?: string;
+      client_secret?: string;
+      token_endpoint?: string;
+      scope?: string;
+      access_token?: string;
+      refresh_token?: string;
+    };
     path: string;
+  };
+  nuxeo_config?: {
+    url: string;
+    auth_method?: string;
+    username?: string;
+    password?: string;
+    token?: string;
+    oauth2?: {
+      client_id?: string;
+      client_secret?: string;
+      access_token?: string;
+      refresh_token?: string;
+      token_endpoint?: string;
+    };
+    path?: string;
   };
 }
 

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "flexible-graphrag-mcp"
-version = "0.7.1"
-description = "MCP server for Flexible GraphRAG — connects to the FastAPI backend (status, ingest, hybrid search, AI Q&A) for Claude Desktop and other MCP clients. Supports 13 data sources, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain"
+version = "0.7.2"
+description = "MCP server for Flexible GraphRAG — connects to the FastAPI backend (status, ingest, hybrid search, AI Q&A) for Claude Desktop and other MCP clients. Supports 14 data sources, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
@@ -52,7 +52,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "fastmcp",
+    "fastmcp>=3.4.5,<4",
     "httpx",
     "python-dotenv"
 ]
@@ -74,5 +74,16 @@ dev = [
     "flake8"
 ]
 
-[tool.setuptools]
-py-modules = ["main"]
+[tool.hatch.build.targets.wheel]
+# Single top-level module (flat layout).
+only-include = ["main.py"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "main.py",
+    "test-http-mode.py",
+    "claude-desktop-configs/",
+    "mcp-inspector/",
+    "README.md",
+    "pyproject.toml",
+]

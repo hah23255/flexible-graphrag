@@ -23,10 +23,9 @@ export class SourcesTabComponent {
   cmisUsername = 'admin';
   cmisPassword = 'admin';
 
-  // Alfresco state
-  alfrescoUrl = `${environment.alfrescoBaseUrl || 'http://localhost:8080'}`;
-  alfrescoUsername = 'admin';
-  alfrescoPassword = 'admin';
+  // Single-object form state for the self-contained Nuxeo/Alfresco forms (persists across tabs).
+  nuxeoFormValue: any = {};
+  alfrescoFormValue: any = {};
 
   // Web sources state
   webUrl = '';
@@ -65,10 +64,6 @@ export class SourcesTabComponent {
     return `e.g., ${baseUrl}/alfresco/api/-default-/public/cmis/versions/1.1/atom`;
   }
 
-  get alfrescoPlaceholder(): string {
-    const baseUrl = environment.alfrescoBaseUrl || 'http://localhost:8080';
-    return `e.g., ${baseUrl}`;
-  }
 
 
   // Methods
@@ -108,6 +103,11 @@ export class SourcesTabComponent {
         break;
       case 'alfresco':
         sourceConfig.alfrescoConfig = this.currentConfig;
+        sourceConfig.folderPath = this.currentConfig?.path || '';
+        break;
+      case 'nuxeo':
+        sourceConfig.nuxeoConfig = this.currentConfig;
+        sourceConfig.folderPath = this.currentConfig?.path || '';
         break;
       case 'web':
         sourceConfig.webConfig = this.currentConfig;

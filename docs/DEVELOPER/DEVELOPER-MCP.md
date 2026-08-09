@@ -54,7 +54,7 @@ Click **Connect** — you can now browse and test all 9 tools interactively.
 | Tool | Description |
 |---|---|
 | `get_system_status()` | Verify setup — check all database connections and config |
-| `ingest_documents()` | Process documents from any of the 13 data sources |
+| `ingest_documents()` | Process documents from any of the 14 data sources |
 | `ingest_text(content, source_name)` | Ingest and analyze specific text content |
 | `search_documents(query, top_k)` | Hybrid search — returns ranked excerpts with scores |
 | `query_documents(query, top_k)` | AI Q&A — generates an answer from your document corpus |

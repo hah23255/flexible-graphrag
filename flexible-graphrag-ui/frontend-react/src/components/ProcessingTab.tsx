@@ -38,6 +38,7 @@ interface ProcessingTabProps {
   folderPath: string;
   cmisConfig?: any;
   alfrescoConfig?: any;
+  nuxeoConfig?: any;
   webConfig?: any;
   wikipediaConfig?: any;
   youtubeConfig?: any;
@@ -78,6 +79,7 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
   folderPath,
   cmisConfig,
   alfrescoConfig,
+  nuxeoConfig,
   webConfig,
   wikipediaConfig,
   youtubeConfig,
@@ -159,7 +161,7 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
         size: file.size,
         type: 'file' as const
       }));
-    } else if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco') {
+    } else if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco' || configuredDataSource === 'nuxeo') {
       // If repository items are explicitly hidden, show nothing
       if (repositoryItemsHidden) {
         return [];
@@ -471,6 +473,8 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
       } else if (configuredDataSource === 'alfresco') {
         request.paths = [folderPath];
         request.alfresco_config = alfrescoConfig;
+      } else if (configuredDataSource === 'nuxeo') {
+        request.nuxeo_config = nuxeoConfig;
       } else if (configuredDataSource === 'web') {
         request.web_config = webConfig;
       } else if (configuredDataSource === 'wikipedia') {
@@ -561,8 +565,8 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
 
   // Auto-select files when they are configured for single-source data types
   useEffect(() => {
-    if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco' || 
-        configuredDataSource === 'web' || configuredDataSource === 'wikipedia' || 
+    if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco' || configuredDataSource === 'nuxeo' ||
+        configuredDataSource === 'web' || configuredDataSource === 'wikipedia' ||
         configuredDataSource === 'youtube' || 
         ['s3', 'gcs', 'azure_blob', 'google_drive', 'onedrive', 'sharepoint', 'box'].includes(configuredDataSource)) {
       const displayFiles = getDisplayFiles();
@@ -621,10 +625,10 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
         />
         {/* Only show Enable Sync for datasources that support auto-sync */}
         {/* Hidden for: upload, cmis, webpage, wikipedia, youtube */}
-        {configuredDataSource !== 'upload' && 
-         configuredDataSource !== 'cmis' && 
-         configuredDataSource !== 'web' && 
-         configuredDataSource !== 'wikipedia' && 
+        {configuredDataSource !== 'upload' &&
+         configuredDataSource !== 'cmis' &&
+         configuredDataSource !== 'web' &&
+         configuredDataSource !== 'wikipedia' &&
          configuredDataSource !== 'youtube' && (
           <FormControlLabel
             control={

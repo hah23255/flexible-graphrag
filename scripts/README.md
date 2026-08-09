@@ -10,6 +10,15 @@ Scripts for managing incremental updates and auto-sync functionality. See [incre
 - **set-refresh-interval** - Set polling interval for auto-sync datasources (supports hours, minutes, seconds)
 - **sync-now** - Trigger immediate synchronization for datasources
 
+### alfresco/
+Local dev helper to mint an Alfresco **user** OAuth2 token via Keycloak (identity-service) password grant, for testing the Alfresco source with Authentication = OAuth2. See [alfresco/README.md](./alfresco/README.md).
+
+### mcp/
+Local dev helper to mint a bearer token for the **MCP transport** auth layer (FastMCP JWTVerifier, `MCP_TRANSPORT_AUTH`) — the outer layer gating who may call an MCP server. See [mcp/README.md](./mcp/README.md).
+
+### nuxeo/
+Local dev helpers to mint a Nuxeo OAuth2 token (auth-code + PKCE) for testing the Nuxeo source with Authentication = OAuth2. See [nuxeo/README.md](./nuxeo/README.md).
+
 ## Scripts
 
 ### create_opensearch_pipeline.py

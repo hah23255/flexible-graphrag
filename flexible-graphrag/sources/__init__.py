@@ -9,6 +9,7 @@ from .base import BaseDataSource
 from .filesystem import FileSystemSource
 from .cmis import CmisSource
 from .alfresco import AlfrescoSource
+from .nuxeo import NuxeoSource
 from .web import WebSource
 from .wikipedia import WikipediaSource
 from .youtube import YouTubeSource
@@ -23,8 +24,9 @@ from .google_drive import GoogleDriveSource
 __all__ = [
     "BaseDataSource",
     "FileSystemSource",
-    "CmisSource", 
+    "CmisSource",
     "AlfrescoSource",
+    "NuxeoSource",
     "WebSource",
     "WikipediaSource",
     "YouTubeSource",

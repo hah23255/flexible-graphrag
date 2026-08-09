@@ -6,7 +6,7 @@ from typing import Dict, Any
 import logging
 from sources.base import BaseDataSource
 from sources import (
-    FileSystemSource, CmisSource, AlfrescoSource,
+    FileSystemSource, CmisSource, AlfrescoSource, NuxeoSource,
     WebSource, WikipediaSource, YouTubeSource,
     S3Source, GCSSource, AzureBlobSource,
     OneDriveSource, SharePointSource, BoxSource, GoogleDriveSource
@@ -22,6 +22,7 @@ class DataSourceFactory:
         "filesystem": FileSystemSource,
         "cmis": CmisSource,
         "alfresco": AlfrescoSource,
+        "nuxeo": NuxeoSource,
         "web": WebSource,
         "wikipedia": WikipediaSource,
         "youtube": YouTubeSource,

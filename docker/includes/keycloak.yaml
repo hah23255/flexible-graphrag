@@ -1,0 +1,29 @@
+# Keycloak — OIDC Identity Provider for Alfresco OAuth2 (identity-service subsystem).
+#
+# Alfresco Community 23.2+ (incl. 25.2) has a BUILT-IN Spring-Security `identity-service` auth
+# subsystem that validates OIDC Bearer tokens from any IdP — config-only, no Acosix/AMP needed.
+# This adds a plain upstream Keycloak with a preconfigured `alfresco` realm (client
+# `flexible-graphrag`, secret `flexible-graphrag-secret`, an `admin` user password `admin`).
+#
+# Issuer consistency: KC_HOSTNAME pins the token issuer to http://host.docker.internal:8091 so it
+# validates identically whether reached from the Alfresco container (host.docker.internal) or the
+# host (localhost:8091 -> same issuer). On Docker Desktop (Windows/Mac) containers resolve
+# host.docker.internal automatically.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: flexible-graphrag-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://host.docker.internal:8091
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8091:8080"
+    volumes:
+      - ./keycloak/alfresco-realm.json:/opt/keycloak/data/import/alfresco-realm.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

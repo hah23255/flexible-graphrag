@@ -24,10 +24,21 @@ Auto sync is not supported for the file upload UI.
 Supports auto sync — select **"Enable auto change sync"** on the Processing tab before clicking **"START PROCESSING"**.
 
 - **Alfresco Base URL** — e.g. `http://localhost:8080/alfresco`
-- **Username / Password**
+- **Authentication** — **basic**, **ticket** (enter username/password; the source self-fetches the ticket), or **OAuth2** (Bearer via the `identity-service` subsystem, e.g. Keycloak). See the [Alfresco Integration Guide](../DATA-SOURCES/README-alfresco.md).
+- **Username / Password** (for basic / ticket)
 - **Path** — e.g. `/Sites/example/documentLibrary`
 
 ![Alfresco source form](screen-shots/react/sources/react-sources-alfresco.png)
+
+## Nuxeo Repository
+
+Supports auto sync — select **"Enable auto change sync"** on the Processing tab before clicking **"START PROCESSING"** (real-time via the Nuxeo audit stream over Kafka).
+
+- **Nuxeo URL** — e.g. `http://localhost:8081/nuxeo`
+- **Authentication** — **basic**, **token** (enter username/password; the source self-fetches the token), or **OAuth2** (Bearer)
+- **Path** — e.g. `/default-domain/workspaces/test`
+
+![Nuxeo source form](screen-shots/react/sources/react-sources-nuxeo.png)
 
 ## CMIS Repository
 
@@ -125,7 +136,7 @@ Supports auto sync — select **"Enable auto change sync"** on the Processing ta
 
 ![SharePoint source form](screen-shots/react/sources/react-sources-sharepoint.png)
 
-## All 13 Data Sources
+## All 14 Data Sources
 
 | Category | Sources |
 |---|---|

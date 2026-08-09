@@ -76,4 +76,11 @@ export class EnvService {
   get alfrescoBaseUrl(): string {
     return window.__env?.ALFRESCO_BASE_URL || environment.alfrescoBaseUrl;
   }
+
+  /**
+   * Get the Nuxeo base URL from runtime config or fallback to environment.ts
+   */
+  get nuxeoBaseUrl(): string {
+    return window.__env?.NUXEO_BASE_URL || environment.nuxeoBaseUrl;
+  }
 }

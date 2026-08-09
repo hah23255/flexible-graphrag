@@ -107,6 +107,7 @@ const App: React.FC = () => {
   const [folderPath, setFolderPath] = useState<string>('');
   const [cmisConfig, setCmisConfig] = useState<any>(null);
   const [alfrescoConfig, setAlfrescoConfig] = useState<any>(null);
+  const [nuxeoConfig, setNuxeoConfig] = useState<any>(null);
   
   // File selection state for processing tab
   const [selectedFileIndices, setSelectedFileIndices] = useState<Set<number>>(new Set());
@@ -121,9 +122,10 @@ const App: React.FC = () => {
   const [cmisUrl, setCmisUrl] = useState<string>(`${import.meta.env.VITE_CMIS_BASE_URL || 'http://localhost:8080'}/alfresco/api/-default-/public/cmis/versions/1.1/atom`);
   const [cmisUsername, setCmisUsername] = useState<string>('admin');
   const [cmisPassword, setCmisPassword] = useState<string>('admin');
-  const [alfrescoUrl, setAlfrescoUrl] = useState<string>(import.meta.env.VITE_ALFRESCO_BASE_URL || 'http://localhost:8080');
-  const [alfrescoUsername, setAlfrescoUsername] = useState<string>('admin');
-  const [alfrescoPassword, setAlfrescoPassword] = useState<string>('admin');
+  // Single-object form state (persists across Sources<->Processing tab switches) for the
+  // self-contained Nuxeo/Alfresco forms — replaces per-field lifting.
+  const [nuxeoFormValue, setNuxeoFormValue] = useState<any>({});
+  const [alfrescoFormValue, setAlfrescoFormValue] = useState<any>({});
   
   // PERSISTENT STATE - Web Sources
   const [webUrl, setWebUrl] = useState<string>('');
@@ -216,6 +218,7 @@ const App: React.FC = () => {
     folderPath: string;
     cmisConfig?: any;
     alfrescoConfig?: any;
+    nuxeoConfig?: any;
     webConfig?: any;
     wikipediaConfig?: any;
     youtubeConfig?: any;
@@ -229,6 +232,7 @@ const App: React.FC = () => {
     setFolderPath(data.folderPath);
     setCmisConfig(data.cmisConfig);
     setAlfrescoConfig(data.alfrescoConfig);
+    setNuxeoConfig(data.nuxeoConfig);
     // Store new configurations
     setWebConfig(data.webConfig);
     setWikipediaConfig(data.wikipediaConfig);
@@ -281,8 +285,8 @@ const App: React.FC = () => {
         // Skip i === index (the removed file)
       });
       setSelectedFileIndices(newSelected);
-    } else if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco') {
-      console.log('🗂️ Repository file removal:', { 
+    } else if (configuredDataSource === 'cmis' || configuredDataSource === 'alfresco' || configuredDataSource === 'nuxeo') {
+      console.log('🗂️ Repository file removal:', {
         hasIndividualFiles: statusData?.individual_files?.length > 0,
         individualFilesCount: statusData?.individual_files?.length,
         index 
@@ -432,9 +436,10 @@ const App: React.FC = () => {
                 cmisUrl={cmisUrl}
                 cmisUsername={cmisUsername}
                 cmisPassword={cmisPassword}
-                alfrescoUrl={alfrescoUrl}
-                alfrescoUsername={alfrescoUsername}
-                alfrescoPassword={alfrescoPassword}
+                nuxeoFormValue={nuxeoFormValue}
+                onNuxeoFormChange={setNuxeoFormValue}
+                alfrescoFormValue={alfrescoFormValue}
+                onAlfrescoFormChange={setAlfrescoFormValue}
                 // Web sources
                 webUrl={webUrl}
                 wikipediaUrl={wikipediaUrl}
@@ -467,9 +472,6 @@ const App: React.FC = () => {
                 onCmisUrlChange={setCmisUrl}
                 onCmisUsernameChange={setCmisUsername}
                 onCmisPasswordChange={setCmisPassword}
-                onAlfrescoUrlChange={setAlfrescoUrl}
-                onAlfrescoUsernameChange={setAlfrescoUsername}
-                onAlfrescoPasswordChange={setAlfrescoPassword}
                 // Web sources handlers
                 onWebUrlChange={setWebUrl}
                 onWikipediaUrlChange={setWikipediaUrl}
@@ -511,6 +513,7 @@ const App: React.FC = () => {
                 folderPath={folderPath}
                 cmisConfig={cmisConfig}
                 alfrescoConfig={alfrescoConfig}
+                nuxeoConfig={nuxeoConfig}
                 webConfig={webConfig}
                 wikipediaConfig={wikipediaConfig}
                 youtubeConfig={youtubeConfig}

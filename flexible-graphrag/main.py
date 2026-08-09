@@ -646,15 +646,51 @@ class NodeDetail(BaseModel):
     isFile: bool
     isFolder: bool
 
+class AlfrescoOAuth2Config(BaseModel):
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    token_endpoint: Optional[str] = None
+    grant_type: Optional[str] = None  # client_credentials (default) | refresh_token | authorization_code
+    scope: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+
 class AlfrescoConfig(BaseModel):
     url: str
-    username: str
-    password: str
+    auth_method: Optional[str] = "basic"  # basic | ticket | oauth2
+    username: Optional[str] = None
+    password: Optional[str] = None
+    oauth2: Optional[AlfrescoOAuth2Config] = None  # for auth_method="oauth2"
     path: str
     nodeIds: Optional[List[str]] = None  # Array of node IDs (UUIDs from REST API) for multi-select
     nodeDetails: Optional[List[NodeDetail]] = None  # Array of node details with metadata
     recursive: Optional[bool] = False  # Whether to recursively process subfolders (default: False)
     stomp_port: Optional[int] = None  # ActiveMQ STOMP port for real-time events (default: 61613, or set via ALFRESCO_STOMP_PORT env var)
+
+class NuxeoOAuth2Config(BaseModel):
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    token_type: Optional[str] = None
+    expires_at: Optional[float] = None
+    expires_in: Optional[float] = None
+    authorization_endpoint: Optional[str] = None
+    token_endpoint: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    openid_configuration_url: Optional[str] = None
+
+class NuxeoConfig(BaseModel):
+    url: str
+    auth_method: Optional[str] = "basic"  # basic | oauth2 | token
+    username: Optional[str] = None
+    password: Optional[str] = None
+    token: Optional[str] = None  # for auth_method="token" (X-Authentication-Token)
+    oauth2: Optional[NuxeoOAuth2Config] = None  # for auth_method="oauth2"
+    path: Optional[str] = "/"
+    nodeIds: Optional[List[str]] = None  # Array of Nuxeo document uids for multi-select
+    nodeDetails: Optional[List[NodeDetail]] = None  # Array of node details with metadata
+    recursive: Optional[bool] = False  # Whether to recursively process subfolders (default: False)
 
 class WebConfig(BaseModel):
     url: str
@@ -732,11 +768,12 @@ class GoogleDriveConfig(BaseModel):
 
 class IngestRequest(BaseModel):
     paths: Optional[List[str]] = None  # overrides config
-    data_source: Optional[str] = None  # filesystem, cmis, alfresco, web, wikipedia, youtube, s3, gcs, azure_blob, onedrive, sharepoint, box, google_drive
+    data_source: Optional[str] = None  # filesystem, cmis, alfresco, nuxeo, web, wikipedia, youtube, s3, gcs, azure_blob, onedrive, sharepoint, box, google_drive
     skip_graph: Optional[bool] = False  # Per-ingest flag to skip knowledge graph step (doesn't persist)
     enable_sync: Optional[bool] = False  # Enable incremental sync monitoring for this datasource
     cmis_config: Optional[CmisConfig] = None
     alfresco_config: Optional[AlfrescoConfig] = None
+    nuxeo_config: Optional[NuxeoConfig] = None
     web_config: Optional[WebConfig] = None
     wikipedia_config: Optional[WikipediaConfig] = None
     youtube_config: Optional[YouTubeConfig] = None
@@ -830,6 +867,8 @@ async def ingest(request: IngestRequest):
             kwargs['cmis_config'] = request.cmis_config.dict()
         if request.alfresco_config:
             kwargs['alfresco_config'] = request.alfresco_config.dict()
+        if request.nuxeo_config:
+            kwargs['nuxeo_config'] = request.nuxeo_config.dict(exclude_none=True)
         if request.web_config:
             kwargs['web_config'] = request.web_config.dict()
         if request.wikipedia_config:
@@ -873,6 +912,9 @@ async def ingest(request: IngestRequest):
             if data_source == "alfresco" and request.alfresco_config:
                 ac = request.alfresco_config
                 _identity_parts += [ac.url or "", ac.username or "", ac.path or ""]
+            elif data_source == "nuxeo" and request.nuxeo_config:
+                nc = request.nuxeo_config
+                _identity_parts += [nc.url or "", nc.username or "", nc.path or ""]
             elif data_source == "filesystem":
                 _identity_parts += sorted(paths or [])
             elif data_source == "s3" and request.s3_config:
@@ -948,6 +990,10 @@ async def ingest(request: IngestRequest):
                             connection_params["stomp_port"] = int(stomp_port)
                             logger.info(f"Added ALFRESCO_STOMP_PORT={stomp_port} to datasource config")
                     
+                elif data_source == "nuxeo" and request.nuxeo_config:
+                    connection_params = request.nuxeo_config.dict(exclude_none=True)
+                    source_path = connection_params.get('path', '/unknown')
+
                 elif data_source == "google_drive" and request.google_drive_config:
                     connection_params = request.google_drive_config.dict(exclude_none=True)
                     source_path = f"google_drive://{connection_params.get('folder_id', 'root')}"

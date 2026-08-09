@@ -11,6 +11,7 @@ from .base import ChangeDetector
 from .filesystem_detector import FilesystemDetector
 from .s3_detector import S3Detector
 from .alfresco_detector import AlfrescoDetector
+from .nuxeo_detector import NuxeoDetector
 from .azure_blob_detector import AzureBlobDetector
 from .gcs_detector import GCSDetector
 from .google_drive_detector import GoogleDriveDetector
@@ -40,7 +41,10 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
     
     elif source_type == 'alfresco':
         return AlfrescoDetector(config)
-    
+
+    elif source_type == 'nuxeo':
+        return NuxeoDetector(config)
+
     elif source_type == 'gcs':
         return GCSDetector(config)
     

@@ -162,7 +162,7 @@ The HTTP mode is automatically configured in the `mcp-inspector/` config files a
 ## Available Tools
 
 - **`get_system_status()`** - System status and configuration
-- **`ingest_documents()`** - Ingest documents from 13 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list)
+- **`ingest_documents()`** - Ingest documents from 14 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list)
 - **`ingest_text(content, source_name)`** - Ingest custom text content
 - **`search_documents(query, top_k)`** - Hybrid search for document retrieval
 - **`query_documents(query, top_k)`** - AI-generated answers from documents

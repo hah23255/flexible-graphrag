@@ -1,4 +1,6 @@
 
+**New 8/8/26 — v0.7.2 release:** **Nuxeo** added as a data source — all 3 UIs (React/Vue/Angular) plus REST/MCP, with basic / token / OAuth2 auth and real-time incremental sync via the Nuxeo audit event stream (Kafka). **Alfresco OAuth2 and ticket** authentication added across the source, all 3 UIs, initial ingest, and real-time sync. **Alfresco Community 26.1** Docker upgrade. The **MCP server** gained optional OAuth2 on its transport (bearer token via your IdP) and moved to **FastMCP 3**. Requires `python-alfresco-api >= 1.2.1`.
+
 **New 7/20/26 — v0.7.1 release:** Document processing now supports **LiteParse** in addition to the previous **Docling** and **LlamaParse** support. Langflow integration ships with fixes and an optional **Langflow Docker** image bundling the 12 "Flexible" components. **MS Graph delta query** support was added for more efficient incremental updating with SharePoint and OneDrive data sources.
 
 **New 7/5/26:** Optional **Langflow visual flows** — the app can run its ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows (12 custom Flexible GraphRAG components), using your existing `.env` config. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
@@ -23,7 +25,7 @@
 [![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 13 data sources (9 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
+**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
 
 <p align="center">
   <a href="./screen-shots/auto-sync/auto-sync.png">
@@ -49,10 +51,10 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 - **LLM providers (KG extraction & chat)**: Ollama, OpenAI, Azure OpenAI, Google Gemini, Anthropic Claude, Google Vertex AI, Amazon Bedrock, Groq, Fireworks AI, OpenAI-compatible endpoints (`openai_like`), OpenRouter, LiteLLM proxy, and vLLM — configurable via `LLM_PROVIDER`; see [Supported LLM Providers](#supported-llm-providers)
 - **Embedding providers**: OpenAI, Ollama, Azure OpenAI, Google GenAI, Vertex AI, Bedrock, Fireworks, OpenAI-like (`EMBEDDING_KIND=openai_like`), and LiteLLM — see [LLM Configuration](#llm-configuration)
 - **Dual-framework pipeline**: **LlamaIndex** and **LangChain** are first-class choices for chunking, vector and search adapters, property graphs, KG extraction, RDF text-to-SPARQL retrieval, and hybrid fusion—each stage can be set independently (**LlamaIndex** defaults). See [Framework Configuration](#framework-configuration).
-- **Multi-Source Ingestion**: Processes documents from 13 data sources (9 with incremental auto sync): (file upload, cloud storage, enterprise repositories, web sources) with Docling (default), LlamaParse (cloud API), or LiteParse (local, lightweight) document parsing.
+- **Multi-Source Ingestion**: Processes documents from 14 data sources (10 with incremental auto sync): (file upload, cloud storage, enterprise repositories, web sources) with Docling (default), LlamaParse (cloud API), or LiteParse (local, lightweight) document parsing.
 - **Observability**: Built-in OpenTelemetry instrumentation with automatic LlamaIndex tracing, Prometheus metrics, Jaeger traces, and Grafana dashboards for production monitoring
 - **FastAPI Server with REST API**: Python based FastAPI server with REST APIs for document ingesting, hybrid search, AI query, and AI chat.
-- **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 13 data sources with 9 supporting incremental auto sync), hybrid search, and AI query. Uses FastAPI backend REST APIs. 
+- **MCP Server**: MCP server providing Claude Desktop and other MCP clients with tools for document/text ingesting (all 14 data sources with 10 supporting incremental auto sync), hybrid search, and AI query. Uses FastAPI backend REST APIs. 
 - **UI Clients**: Angular, React, and Vue UI clients support choosing the data source (filesystem, Alfresco, CMIS, etc.), ingesting documents, performing hybrid searches, AI queries, and AI chat. The UI clients use the REST APIs of the FastAPI backend.
 - **Docker Deployment Flexibility**: Supports both standalone and Docker deployment modes. Docker infrastructure provides modular database selection via docker-compose includes - vector, graph, search engines, and Alfresco can be included or excluded with a single comment. Choose between hybrid deployment (databases in Docker, backend and UIs standalone) or full containerization.
 - **Langflow Visual Flows (optional)**: Run the ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows built from 12 custom Flexible GraphRAG components — the same backend machinery (all database, LLM, and framework `.env` config applies), orchestrated visually. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
@@ -112,7 +114,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 
 ### MCP Server (`/flexible-graphrag-mcp`)  
 - **MCP Client support**: Model Context Protocol server for Claude Desktop and other MCP clients
-- **Full API Parity**: Tools like `ingest_documents()` support all 13 data sources with source-specific configs: filesystem, repositories (Alfresco, SharePoint, Box, CMIS), cloud storage, web; `skip_graph` flag for all data sources; `paths` parameter for filesystem/Alfresco/CMIS; Alfresco also supports `nodeDetails` list (multi-select for KG Spaces)
+- **Full API Parity**: Tools like `ingest_documents()` support all 14 data sources with source-specific configs: filesystem, repositories (Alfresco, SharePoint, Box, CMIS, Nuxeo), cloud storage, web; `skip_graph` flag for all data sources; `paths` parameter for filesystem/Alfresco/CMIS; Alfresco also supports `nodeDetails` list (multi-select for KG Spaces)
 - **Additional Tools**: `search_documents()`, `query_documents()`, `ingest_text()`, system diagnostics, and health checks
 - **Dual Transport**: HTTP mode for debugging, stdio mode for production
 - **Tool Suite**: 9 specialized tools for document processing, search, and system management
@@ -133,7 +135,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 
 ## Data Sources
 
-Flexible GraphRAG supports **13 different data sources** for ingesting documents into your knowledge base:
+Flexible GraphRAG supports **14 different data sources** for ingesting documents into your knowledge base:
 
 <p align="center">
   <a href="./screen-shots/react/data-sources-1.jpeg">
@@ -156,14 +158,15 @@ Flexible GraphRAG supports **13 different data sources** for ingesting documents
 7. **Alfresco** - Alfresco ECM/content repository with two integration options:
    - **[KG Spaces ACA Extension](https://github.com/stevereiner/kg-spaces-aca)** - Integrates the Flexible GraphRAG Angular UI as an extension plugin within the Alfresco Content Application (ACA), enabling multi-select document/folder ingestion with nodeIds directly from the Alfresco interface
    - **Flexible GraphRAG Alfresco Data Source** - Direct integration using Alfresco paths (e.g., /Shared/GraphRAG, /Company Home/Shared/GraphRAG, or /Shared/GraphRAG/cmispress.txt)
-8. **SharePoint** - Microsoft SharePoint document libraries
-9. **Box** - Box.com cloud storage
-10. **CMIS (Content Management Interoperability Services)** - Industry-standard content repository interface
+8. **Nuxeo** - Nuxeo content repository (File and Note documents); basic / token (X-Authentication-Token) / OAuth2 auth, path or node selection, and real-time incremental sync via the Nuxeo audit event stream (Kafka)
+9. **SharePoint** - Microsoft SharePoint document libraries
+10. **Box** - Box.com cloud storage
+11. **CMIS (Content Management Interoperability Services)** - Industry-standard content repository interface
 
 ### Web Sources
-11. **Web Pages** - Extract content from web URLs
-12. **Wikipedia** - Ingest Wikipedia articles by title or URL
-13. **YouTube** - Process YouTube video transcripts
+12. **Web Pages** - Extract content from web URLs
+13. **Wikipedia** - Ingest Wikipedia articles by title or URL
+14. **YouTube** - Process YouTube video transcripts
 
 Each data source includes:
 - **Configuration Forms**: Easy-to-use interfaces for credentials and settings
@@ -177,6 +180,7 @@ Each data source includes:
 | Data Source | Auto-Sync Support | Detection Method | Status | Notes |
 |-------------|-------------------|------------------|--------|-------|
 | **Alfresco** | ✅ Real-time | Apache ActiveMQ | Ready | |
+| **Nuxeo** | ✅ Real-time | Nuxeo audit stream (Kafka) | Ready | |
 | **Amazon S3** | ✅ Real-time | SQS event notifications | Ready | |
 | **Azure Blob Storage** | ✅ Real-time | Change feed | Ready | |
 | **Google Cloud Storage** | ✅ Real-time | Pub/Sub notifications | Ready | |
@@ -1123,7 +1127,7 @@ The system provides a tabbed interface for document processing and querying. Fol
 
 ### 1. Sources Tab
 
-Configure your data source and select files for processing. The system supports **13 data sources**:
+Configure your data source and select files for processing. The system supports **14 data sources**:
 
 **Detailed Configuration:**
 
@@ -1157,7 +1161,7 @@ Configure your data source and select files for processing. The system supports 
 - **Cloud Storage**: Amazon S3, Google Cloud Storage, Azure Blob Storage, Google Drive, Microsoft OneDrive
 - **Enterprise Repositories**: Alfresco, Microsoft SharePoint, Box, CMIS
 
-See the [Data Sources](#data-sources) section for complete details on all 13 sources.
+See the [Data Sources](#data-sources) section for complete details on all 14 sources.
 
 ### 2. Processing Tab
 
@@ -1217,9 +1221,14 @@ The main requirement is a **separate venv for Langflow** — Langflow runs the f
 **1. Langflow venv** — create it on Python **3.14.5 or newer** (or 3.13). Use an explicit patch version: `uv venv --python 3.14.5` (or greater) — plain `uv venv --python 3.14` resolves to **3.14.0**, which has an OpenSSL bug that makes Langflow abort on startup. Then install Langflow and the backend (LlamaIndex + fuller LangChain), and run Langflow **from the `flexible-graphrag` backend dir**:
 
 ```powershell
-uv pip install --native-tls langflow==1.10.2
-uv pip install --native-tls --override extras-overrides.txt -e ".[langchain,langchain-extras]"
-# Run from the flexible-graphrag backend dir:
+uv pip install --system-certs langflow==1.11.2
+uv pip install --system-certs --override extras-overrides.txt -e ".[langchain,langchain-extras]"
+# nuxeo[oauth2] pulls a `jwt` package that shadows the PyJWT Langflow needs — restore it:
+uv pip uninstall jwt
+uv pip install --system-certs --reinstall "PyJWT>=2.12.1"
+# Run from the flexible-graphrag backend dir. PYTHONPATH must point at it so this repo's bundled
+# `langchain` package wins over the real one (search / AI query need it):
+$env:PYTHONPATH = (Get-Location).Path
 langflow run --port 7860 --log-level WARNING --log-file langflow.log
 ```
 
@@ -1265,7 +1274,7 @@ The MCP server provides 9 specialized tools for document intelligence workflows:
 | Tool | Purpose | Usage |
 |------|---------|-------|
 | `get_system_status()` | System health and configuration | Verify setup and database connections |
-| `ingest_documents()` | Bulk document processing | All sources support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list (13 sources have their own config: filesystem, repositories (Alfresco, SharePoint, Box, CMIS), cloud storage, web) |
+| `ingest_documents()` | Bulk document processing | All sources support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list (14 sources have their own config: filesystem, repositories (Alfresco, SharePoint, Box, CMIS, Nuxeo), cloud storage, web) |
 | `ingest_text(content, source_name)` | Custom text analysis | Analyze specific text content |
 | `search_documents(query, top_k)` | Hybrid document retrieval | Find relevant document excerpts |
 | `query_documents(query, top_k)` | AI-powered Q&A | Generate answers from document corpus |

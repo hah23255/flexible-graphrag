@@ -79,7 +79,7 @@ Use config: `mcp-inspector/uvx-http-config.json`
 | Tool | Description | Example Usage |
 |------|-------------|---------------|
 | `get_system_status()` | Check system health and configuration | System diagnostics |
-| `ingest_documents()` | Process documents from 13 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list) | Bulk document ingestion |
+| `ingest_documents()` | Process documents from 14 data sources (all support `skip_graph`; filesystem/Alfresco/CMIS use `paths`; Alfresco also supports `nodeDetails` list) | Bulk document ingestion |
 | `ingest_text()` | Process custom text content | Quick text analysis |
 | `search_documents()` | Hybrid search across all content | Find relevant documents |
 | `query_documents()` | AI-powered Q&A over your documents | Ask questions about content |

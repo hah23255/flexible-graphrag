@@ -1,0 +1,127 @@
+# =============================================================================
+# Reference copy — Nuxeo + Kafka deployment for Flexible GraphRAG real-time sync.
+#
+# NOT part of the Flexible GraphRAG stack, and NOT standalone-runnable: the `nuxeo`
+# service below has `build: dockerfile: Dockerfile` with NUXEO_GIT_* args, so it needs
+# the surrounding repo it came from — Angel Borroy's content-lake POC deployment:
+#     https://github.com/aborroy/nuxeo-deployment   (Apache-2.0)
+# which supplies the Dockerfile, .env(.example), and config/ this file references.
+# This is an UNOFFICIAL / TEMPORARY reference of a setup we got working; upstream is a POC.
+#
+# To actually run: clone that repo, then apply the changes below (or drop in this
+# compose.yaml + config/kafka.conf).
+#
+# Changes vs. upstream compose.yaml — to publish the Nuxeo audit stream to Kafka:
+#   1. nuxeo.depends_on: add `kafka: { condition: service_started }`
+#   2. nuxeo.volumes:  REMOVE `- nuxeo-config:/etc/nuxeo`  (keep /etc/nuxeo EPHEMERAL so
+#      conf.d/kafka.conf re-applies on every start — see the in-file note)
+#   3. nuxeo.volumes:  ADD `- ./config/kafka.conf:/etc/nuxeo/conf.d/kafka.conf:ro`
+#   4. ADD the `kafka` service (apache/kafka, KRaft, dual listener) + optional `kafka-ui`
+#   5. top-level `volumes:`  REMOVE the now-unused `nuxeo-config`
+#
+# Deployment-agnostic setup steps (for your own Nuxeo): ../../docs/DATA-SOURCES/README-nuxeo.md
+# ("Real-Time Change Sync"). Flexible GraphRAG consumer default: NUXEO_KAFKA_BOOTSTRAP_SERVERS=localhost:9092.
+# =============================================================================
+
+name: nuxeo-deployment
+
+services:
+  nuxeo-db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nuxeo}
+      POSTGRES_USER: ${POSTGRES_USER:-nuxeo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nuxeo}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nuxeo} -d ${POSTGRES_DB:-nuxeo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - nuxeo-db-data:/var/lib/postgresql/data
+
+  nuxeo:
+    platform: ${NUXEO_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NUXEO_GIT_TRACK: ${NUXEO_GIT_TRACK}
+        NUXEO_GIT_REF: ${NUXEO_GIT_REF}
+        NUXEO_SOURCE_ARCHIVE_URL: ${NUXEO_SOURCE_ARCHIVE_URL}
+        NUXEO_BUILD_THREADS: ${NUXEO_BUILD_THREADS}
+        NUXEO_WEBUI_GIT_REF: ${NUXEO_WEBUI_GIT_REF}
+        NUXEO_WEBUI_VERSION: ${NUXEO_WEBUI_VERSION}
+    image: ${NUXEO_IMAGE_NAME:-nuxeo-deployment:nuxeo-local}
+    depends_on:
+      nuxeo-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      NUXEO_DB_NAME: ${POSTGRES_DB:-nuxeo}
+      NUXEO_DB_USER: ${POSTGRES_USER:-nuxeo}
+      NUXEO_DB_PWD: ${POSTGRES_PASSWORD:-nuxeo}
+      NUXEO_DB_HOST: nuxeo-db
+      NUXEO_DB_PORT: 5432
+      NUXEO_DB_TYPE: postgresql
+      NUXEO_PACKAGES: ${NUXEO_PACKAGES:-}
+      NUXEO_DEV: ${NUXEO_DEV:-true}
+      NUXEO_FORCE_CONF: "true"
+    ports:
+      - "${NUXEO_HTTP_PORT:-8081}:8080"
+    volumes:
+      - nuxeo-data:/var/lib/nuxeo
+      - nuxeo-logs:/var/log/nuxeo
+      # NOTE: /etc/nuxeo is intentionally NOT a persisted volume. The entrypoint only
+      # regenerates nuxeo.conf (and appends conf.d/*) when /etc/nuxeo/nuxeo.conf is absent,
+      # so persisting it would freeze config at first-run and ignore conf.d changes.
+      # Keeping it ephemeral makes conf.d (incl. kafka.conf below) apply on every start.
+      # Compose-only Kafka enablement: Nuxeo appends any *.conf under conf.d to nuxeo.conf at startup
+      - ./config/kafka.conf:/etc/nuxeo/conf.d/kafka.conf:ro
+
+  # Single-node Kafka (KRaft, no Zookeeper). Dual listener:
+  #  - PLAINTEXT (kafka:29092)      -> reachable by the nuxeo container (internal)
+  #  - PLAINTEXT_HOST (localhost:9092) -> reachable by the host-side Python consumer
+  kafka:
+    image: apache/kafka:3.8.1
+    hostname: kafka
+    container_name: nuxeo-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    # No named volume for log dirs: the apache/kafka image runs as uid 1000 and
+    # a root-owned named volume breaks meta.properties formatting. Dev broker —
+    # topic persistence isn't needed (change detection consumes live events).
+
+  # Optional: visual browser for the Kafka topics (port 8092 to avoid Alfresco's 8090)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: nuxeo-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8092:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+volumes:
+  nuxeo-db-data:
+  nuxeo-data:
+  nuxeo-logs:

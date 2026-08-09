@@ -16,6 +16,8 @@ The Langflow starter template is resolved from the installed ``langflow`` packag
 works regardless of which venv/repo you run it from.
 """
 import json, copy, importlib, sys, os
+import importlib.metadata
+import importlib.util
 
 # Make the flexible-graphrag dir importable (so `langflow_components...` resolves) regardless
 # of the current working directory.
@@ -46,12 +48,43 @@ COMP = {
  "FlexibleQuerySummary": ("query_summary", "FlexibleQuerySummaryComponent"),
 }
 
+# langflow stamps each component's `metadata.dependencies` versions by mapping the imported module
+# (`langflow_components`, `ingest`, `config`, …) to its distribution via
+# importlib.metadata.packages_distributions() — which returns nothing under an EDITABLE install
+# (hatchling writes no top_level.txt), so every flexible-graphrag module lands as null.
+# importlib.metadata.version("flexible-graphrag") DOES resolve, so inject it for any dependency whose
+# module lives under the flexible-graphrag source dir (covers ingest/config/retriever_setup/… — but
+# NOT `langflow`, which resolves to site-packages and keeps its real version).
+try:
+    _FG_VERSION = importlib.metadata.version("flexible-graphrag")
+except Exception:
+    _FG_VERSION = None
+
+_FG_DIR_ABS = os.path.abspath(_FG_DIR)
+
+def _is_fg_module(name):
+    try:
+        spec = importlib.util.find_spec((name or "").split(".")[0])
+    except Exception:
+        return False
+    if spec is None:
+        return False
+    paths = [getattr(spec, "origin", None)] + list(getattr(spec, "submodule_search_locations", None) or [])
+    return any(p and os.path.abspath(p).startswith(_FG_DIR_ABS + os.sep) for p in paths)
+
+def _stamp_fg_version(tpl):
+    deps = ((tpl or {}).get("metadata", {}) or {}).get("dependencies", {}) or {}
+    for dep in deps.get("dependencies", []) or []:
+        if not dep.get("version") and _is_fg_module(dep.get("name", "")):
+            dep["version"] = _FG_VERSION
+
 _tpl = {}
 def our(type_name, nid, x, y):
     if type_name not in _tpl:
         mod, cls = COMP[type_name]
         m = importlib.import_module(f"langflow_components.flexible_graphrag.{mod}")
         _tpl[type_name], _ = build_custom_component_template(getattr(m, cls)())
+        _stamp_fg_version(_tpl[type_name])
     fn = json.loads(json.dumps(_tpl[type_name]))
     return {"id": nid, "type": "genericNode", "position": {"x": x, "y": y},
             "data": {"id": nid, "type": type_name, "node": fn}}

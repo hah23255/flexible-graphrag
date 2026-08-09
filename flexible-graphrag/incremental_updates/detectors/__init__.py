@@ -15,6 +15,7 @@ from .base import (
 from .filesystem_detector import FilesystemDetector
 from .s3_detector import S3Detector
 from .alfresco_detector import AlfrescoDetector
+from .nuxeo_detector import NuxeoDetector
 from .azure_blob_detector import AzureBlobDetector
 from .gcs_detector import GCSDetector
 from .google_drive_detector import GoogleDriveDetector
@@ -34,6 +35,7 @@ __all__ = [
     'FilesystemDetector',
     'S3Detector',
     'AlfrescoDetector',
+    'NuxeoDetector',
     'AzureBlobDetector',
     'GCSDetector',
     'GoogleDriveDetector',

@@ -15,7 +15,7 @@
 ## System Overview
 
 Flexible GraphRAG is a multi-layered document intelligence platform that supports:
-- **13 data sources**: File upload, cloud storage (S3, GCS, Azure Blob, OneDrive, SharePoint, Box, Google Drive), repositories (CMIS, Alfresco), and web sources (Web pages, Wikipedia, YouTube)
+- **14 data sources**: File upload, cloud storage (S3, GCS, Azure Blob, OneDrive, SharePoint, Box, Google Drive), repositories (CMIS, Alfresco, Nuxeo), and web sources (Web pages, Wikipedia, YouTube)
 - **Hybrid search**: Vector similarity, full-text search (BM25/Elasticsearch/OpenSearch), and graph traversal (GraphRAG)
 - **Multiple interfaces**: REST API, MCP protocol for AI assistants, and web UIs (Angular, React, Vue)
 - **Flexible databases**: 10 vector stores, 15 property graph databases, 3 RDF graph stores, 3 search engines, 13 LLM providers
@@ -249,12 +249,12 @@ flexible-graphrag-mcp = "main:main"  # Entry point
 |              DOCUMENT PROCESSING PIPELINE                  |
 +------------------------------------------------------------+
 |                                                            |
-|  Input: Documents from 13 Data Sources                     |
+|  Input: Documents from 14 Data Sources                     |
 |  +----------------------------------------------------+    |
 |  | • File Upload (drag & drop)                        |    |
 |  | • Cloud: S3, GCS, Azure Blob, OneDrive,            |    |
 |  |   SharePoint, Box, Google Drive                    |    |
-|  | • Repos: CMIS, Alfresco                            |    |
+|  | • Repos: CMIS, Alfresco, Nuxeo                     |    |
 |  | • Web: Web pages, Wikipedia, YouTube               |    |
 |  +-------------------+--------------------------------+    |
 |                      |                                     |
@@ -851,7 +851,7 @@ The Flexible GraphRAG architecture demonstrates:
 
 3. **Document Processing Excellence**
    - Two parsers: Docling (free, local) and LlamaParse (premium, cloud)
-   - 13 data sources supported
+   - 14 data sources supported
    - Intelligent routing and format detection
 
 4. **Production-Ready MCP Integration**

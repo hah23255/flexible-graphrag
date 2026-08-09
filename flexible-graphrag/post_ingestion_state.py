@@ -331,6 +331,23 @@ class PostIngestionStateManager:
             else:
                 logger.warning(f"Alfresco: Document not found in documents_dict, using filename: {filename}")
         
+        elif data_source == "nuxeo":
+            # For Nuxeo:
+            # - source_path (human-readable) = /default-domain/workspaces/.../file (display)
+            # - stable_path (for doc_id) = nuxeo://uid (stable across renames/moves)
+            if filename in documents_dict:
+                doc = documents_dict[filename]
+                if hasattr(doc, 'metadata'):
+                    file_path = doc.metadata.get('file_path', filename)
+                    source_path = file_path
+                    stable_file_path = doc.metadata.get('stable_file_path')
+                    if stable_file_path:
+                        stable_path = stable_file_path
+                    else:
+                        nuxeo_id = doc.metadata.get('nuxeo_id')
+                        stable_path = f"nuxeo://{nuxeo_id}" if nuxeo_id else file_path
+                    logger.info(f"Nuxeo: source_path={source_path}, stable_path={stable_path}")
+
         elif data_source == "s3":
             # For S3, filename is already the key (from S3 events or metadata)
             source_path = filename
@@ -491,6 +508,7 @@ class PostIngestionStateManager:
             ('file id', 'file id'),  # Google Drive
             ('file_id', 'file_id'),  # OneDrive/SharePoint
             ('alfresco_id', 'alfresco_id'),
+            ('nuxeo_id', 'nuxeo_id'),
             ('node_id', 'node_id'),
             ('s3_uri', 's3_uri'),  # S3 - prefer full URI
             ('s3_key', 's3_key'),

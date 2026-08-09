@@ -92,6 +92,16 @@ def _assign_stable_doc_ids(documents: List, config_id: str) -> None:
                 stable_doc_id = f"{config_id}:{file_path}"
             else:
                 stable_doc_id = f"{config_id}:{file_name}"
+        elif source_type == 'nuxeo':
+            stable_fp = doc.metadata.get('stable_file_path', '')
+            if stable_fp:
+                stable_doc_id = f"{config_id}:{stable_fp}"
+            elif doc.metadata.get('nuxeo_id'):
+                stable_doc_id = f"{config_id}:nuxeo://{doc.metadata['nuxeo_id']}"
+            elif file_path:
+                stable_doc_id = f"{config_id}:{file_path}"
+            else:
+                stable_doc_id = f"{config_id}:{file_name}"
         elif source_type in ['onedrive', 'sharepoint']:
             stable_fp = doc.metadata.get('stable_file_path', '')
             stable_doc_id = f"{config_id}:{stable_fp}" if stable_fp else (

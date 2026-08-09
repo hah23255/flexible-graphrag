@@ -7,9 +7,15 @@
 # More details here:
 # https://www.oracle.com/technetwork/java/javase/10-relnote-issues-4108729.html
 #
+# Based on Alfresco Community 26.1.0 (acs-deployment tag v10.3.0, still Solr-based).
+# Local customizations vs the stock community-compose.yaml:
+#   - Keycloak identity-service (OIDC/OAuth2) JAVA_OPTS + extra_hosts host.docker.internal
+#   - repo.event2 + messaging.subsystem.autoStart (Alfresco real-time event sync)
+#   - Windows-safe host port remaps for ActiveMQ (8616:61616, 8613:61613) and Solr (8083:8983)
+#   - Named volumes for data persistence (alfresco_data / alfresco_db_data / solr6_data)
 services:
   alfresco:
-    image: docker.io/alfresco/alfresco-content-repository-community:25.2.0
+    image: docker.io/alfresco/alfresco-content-repository-community:26.1.0
     mem_limit: 1900m
     environment:
       JAVA_TOOL_OPTIONS: >-
@@ -40,10 +46,20 @@ services:
         -Dcsrf.filter.enabled=false
         -Daos.baseUrlOverwrite=http://localhost:8080/alfresco/aos
         -Dmessaging.broker.url="failover:(nio://activemq:61616)?timeout=3000&jms.useCompression=true"
+        -Dmessaging.broker.username=admin
+        -Dmessaging.broker.password=admin
         -Dmessaging.subsystem.autoStart=true
-        -Drepo.event2.enabled=true    
+        -Drepo.event2.enabled=true
         -Ddeployment.method=DOCKER_COMPOSE
         -DlocalTransform.core-aio.url=http://transform-core-aio:8090/
+        -Dauthentication.chain=identity-service1:identity-service,alfrescoNtlm1:alfrescoNtlm
+        -Didentity-service.authentication.enabled=true
+        -Didentity-service.auth-server-url=http://host.docker.internal:8091
+        -Didentity-service.realm=alfresco
+        -Didentity-service.resource=flexible-graphrag
+        -Didentity-service.credentials.secret=flexible-graphrag-secret
+        -Didentity-service.public-client=false
+        -Didentity-service.enable-basic-auth=true
         -XX:MinRAMPercentage=50
         -XX:MaxRAMPercentage=80
     healthcheck:
@@ -54,11 +70,14 @@ services:
       start_period: 1m
     volumes:
       - alfresco_data:/usr/local/tomcat/alf_data
+    extra_hosts:
+      # Reach the host-published Keycloak (:8091) for the identity-service OIDC issuer
+      - "host.docker.internal:host-gateway"
     extends:
       file: commons/base.yaml
       service: alfresco
   transform-core-aio:
-    image: alfresco/alfresco-transform-core-aio:5.2.4
+    image: alfresco/alfresco-transform-core-aio:5.4.0
     mem_limit: 1536m
     environment:
       JAVA_OPTS: >-
@@ -76,7 +95,7 @@ services:
       activemq:
         condition: service_healthy
   share:
-    image: docker.io/alfresco/alfresco-share:25.2.0
+    image: docker.io/alfresco/alfresco-share:26.1.0
     mem_limit: 1g
     environment:
       CSRF_FILTER_ORIGIN: http://localhost:8080
@@ -103,7 +122,7 @@ services:
       file: commons/base.yaml
       service: share
   postgres:
-    image: postgres:16.5
+    image: postgres:17.9
     mem_limit: 512m
     environment:
       - POSTGRES_PASSWORD=alfresco
@@ -121,7 +140,7 @@ services:
       retries: 3
       start_period: 5s
   solr6:
-    image: docker.io/alfresco/alfresco-search-services:2.0.16
+    image: docker.io/alfresco/alfresco-search-services:2.0.18
     mem_limit: 2g
     environment:
       # Solr needs to know how to register itself with Alfresco
@@ -142,8 +161,12 @@ services:
     ports:
       - "8083:8983" # Browser port
   activemq:
-    image: alfresco/alfresco-activemq:5.18-jre17-rockylinux8
+    image: docker.io/alfresco/alfresco-activemq:6.2.1-jre17-rockylinux8
     mem_limit: 1g
+    environment:
+      # ActiveMQ 6.x requires admin credentials (matches repo messaging.broker.username/password)
+      - ACTIVEMQ_ADMIN_LOGIN=admin
+      - ACTIVEMQ_ADMIN_PASSWORD=admin
     ports:
       - "8161:8161" # Web Console
       #- "5672:5672" # AMQP
@@ -156,7 +179,7 @@ services:
       retries: 5
       start_period: 5s
   content-app:
-    image: alfresco/alfresco-content-app:7.0.0
+    image: alfresco/alfresco-content-app:7.3.0
     mem_limit: 128m
     environment:
       APP_BASE_SHARE_URL: "http://localhost:8080/aca/#/preview/s"
@@ -170,7 +193,7 @@ services:
       file: commons/base.yaml
       service: content-app
   control-center:
-    image: quay.io/alfresco/alfresco-control-center:10.0.0
+    image: quay.io/alfresco/alfresco-control-center:10.3.0
     mem_limit: 128m
     environment:
       APP_CONFIG_PROVIDER: "ECM"
@@ -195,4 +218,3 @@ volumes:
   alfresco_data:
   alfresco_db_data:
   solr6_data:
-

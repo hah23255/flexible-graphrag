@@ -24,6 +24,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
   @Input() repositoryItemsHidden = false;
   @Input() configuredCmisConfig: any = null;
   @Input() configuredAlfrescoConfig: any = null;
+  @Input() configuredNuxeoConfig: any = null;
   @Input() configuredWebConfig: any = null;
   @Input() configuredWikipediaConfig: any = null;
   @Input() configuredYoutubeConfig: any = null;
@@ -68,6 +69,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
                                  changes['configuredFolderPath'] ||
                                  changes['configuredCmisConfig'] ||
                                  changes['configuredAlfrescoConfig'] ||
+                                 changes['configuredNuxeoConfig'] ||
                                  changes['configuredWebConfig'] ||
                                  changes['configuredWikipediaConfig'] ||
                                  changes['configuredYoutubeConfig'] ||
@@ -96,7 +98,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
         size: file.size,
         type: 'file',
       }));
-    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       // If repository items are explicitly hidden, show nothing
       if (this.repositoryItemsHidden) {
         this.displayFiles = [];
@@ -197,7 +199,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
   private autoSelectFiles(): void {
     if (this.configuredDataSource === 'upload') {
       this.selectedItems = new Set(this.configuredFiles.map((_, index) => index));
-    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       // Auto-select all repository files (whether individual files or repository path)
       this.selectedItems = new Set(this.displayFiles.map((_, index) => index));
     } else if (['web', 'wikipedia', 'youtube', 's3', 'gcs', 'azure_blob', 'onedrive', 'sharepoint', 'box', 'google_drive'].includes(this.configuredDataSource)) {
@@ -251,7 +253,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
     }
     
     // Fallback to overall progress for repository files when no individual data
-    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       return this.processingProgress; // Always show progress, even when completed
     }
     
@@ -284,7 +286,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
     }
     
     // Fallback for repository files
-    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       if (this.isProcessing) return 'Processing';
       if (this.processingProgress === 100) return 'Completed';
       return 'Ready';
@@ -308,7 +310,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
     }
     
     // Fallback for repository files
-    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       if (this.isProcessing) return 'processing';
       if (this.processingProgress === 100) return 'completed';
       return 'ready';
@@ -363,7 +365,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
       
       // Clear selection for the removed item
       this.selectedItems.delete(index);
-    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       // For repository files, emit event to parent to handle removal
       console.log('🗑️ Repository file removal requested for index:', index);
       this.removeRepositoryFile.emit(index);
@@ -383,7 +385,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
         console.log('🗑️ Upload bulk removal for index:', index);
         this.removeUploadFile.emit(index);
       });
-    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco') {
+    } else if (this.configuredDataSource === 'cmis' || this.configuredDataSource === 'alfresco' || this.configuredDataSource === 'nuxeo') {
       // For repository files, emit event to parent to handle removal
       console.log('🗑️ Repository bulk removal requested');
       this.removeRepositoryFile.emit(0); // Emit with index 0 to hide all repository items
@@ -448,6 +450,8 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
           password: 'admin',
           path: this.configuredFolderPath || '/Sites/swsdp/documentLibrary'
         };
+      } else if (this.configuredDataSource === 'nuxeo') {
+        processingData.nuxeo_config = this.configuredNuxeoConfig;
       } else if (this.configuredDataSource === 'web') {
         processingData.web_config = this.configuredWebConfig;
       } else if (this.configuredDataSource === 'wikipedia') {

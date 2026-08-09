@@ -151,11 +151,11 @@ POSTGRES_INCREMENTAL_URL=postgresql://postgres:password@host.docker.internal:543
 
 # Fuseki (active when RDF_GRAPH_DB=fuseki)
 # SCENARIO A: #FUSEKI_BASE_URL=http://host.docker.internal:3030
-# SCENARIO B: #FUSEKI_BASE_URL=http://fuseki:3030
+# SCENARIO B: #FUSEKI_BASE_URL=http://jena-fuseki:3030
 
 # GraphDB (active when RDF_GRAPH_DB=graphdb)
 # SCENARIO A: #GRAPHDB_BASE_URL=http://host.docker.internal:7200
-# SCENARIO B: #GRAPHDB_BASE_URL=http://graphdb:7200
+# SCENARIO B: #GRAPHDB_BASE_URL=http://ontotext-graphdb:7200
 
 # Oxigraph (active when RDF_GRAPH_DB=oxigraph)
 # SCENARIO A: #OXIGRAPH_URL=http://host.docker.internal:7878

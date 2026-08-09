@@ -7,7 +7,7 @@ The MCP server provides **9 tools** for document ingestion, search, and AI Q&A.
 | Tool | What it does |
 |---|---|
 | `get_system_status()` | Verify setup and database connections |
-| `ingest_documents(data_source, skip_graph, ...)` | Process documents from any of the 13 data sources |
+| `ingest_documents(data_source, skip_graph, ...)` | Process documents from any of the 14 data sources |
 | `ingest_text(content, source_name, skip_graph)` | Ingest and analyze specific text content; `skip_graph=True` skips KG extraction |
 | `search_documents(query, top_k)` | Hybrid search — find relevant document excerpts |
 | `query_documents(query, top_k)` | AI-powered Q&A over your document corpus |

@@ -27,8 +27,10 @@ class AlfrescoSource(BaseDataSource):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.url = config.get("url", "")
+        self.auth_method = (config.get("auth_method") or "basic").lower()  # basic | ticket | oauth2
         self.username = config.get("username", "")
         self.password = config.get("password", "")
+        self.oauth2 = config.get("oauth2") or {}
         self.path = config.get("path", "/")
         self.node_details = config.get("nodeDetails", None)  # Multi-select from ACA/ADF
         self.node_ids = config.get("nodeIds", None)  # Node IDs for multi-select (UUID strings from REST API)
@@ -60,12 +62,17 @@ class AlfrescoSource(BaseDataSource):
                     api_base_url = api_base_url[:-9]  # Remove '/alfresco'
                     logger.info(f"Adjusted base_url for API: {api_base_url} (removed /alfresco suffix)")
                 
-                logger.info(f"Creating ClientFactory with base_url: {api_base_url}")
-                factory = ClientFactory(
-                    base_url=api_base_url,
-                    username=self.username,
-                    password=self.password
-                )
+                logger.info(f"Creating ClientFactory with base_url: {api_base_url}, auth_method: {self.auth_method}")
+                auth_util = self._build_auth_util(api_base_url)
+                if auth_util is not None:
+                    factory = ClientFactory(base_url=api_base_url, auth_util=auth_util)
+                else:
+                    # basic auth (default): factory builds its own auth from username/password
+                    factory = ClientFactory(
+                        base_url=api_base_url,
+                        username=self.username,
+                        password=self.password
+                    )
                 logger.info("ClientFactory created successfully")
                 
                 logger.info("Creating core client...")
@@ -94,6 +101,41 @@ class AlfrescoSource(BaseDataSource):
         logger.info("=== ALFRESCO SOURCE INITIALIZATION COMPLETE ===")
         logger.info(f"Summary: use_api={self.use_api}, has_core_client={self.core_client is not None}")
     
+    def _build_auth_util(self, api_base_url):
+        """Build a python-alfresco-api auth util for the configured auth_method.
+
+        Returns None for basic auth (ClientFactory builds its own from username/password).
+        - ticket: TicketAuthUtil self-fetches an Alfresco login ticket (Basic base64(ticket)).
+        - oauth2: OAuth2AuthUtil (client_credentials/refresh or a pre-obtained access_token → Bearer).
+        """
+        if self.auth_method == "ticket":
+            try:
+                from python_alfresco_api.auth_util import TicketAuthUtil
+                logger.info("Using Alfresco ticket authentication")
+                return TicketAuthUtil(self.username, self.password, base_url=api_base_url)
+            except Exception as e:
+                logger.warning(f"Ticket auth setup failed, falling back to basic: {e}")
+                return None
+        if self.auth_method == "oauth2":
+            try:
+                from python_alfresco_api.auth_util import OAuth2AuthUtil
+                logger.info("Using Alfresco OAuth2 (Bearer) authentication")
+                return OAuth2AuthUtil(
+                    base_url=api_base_url,
+                    client_id=self.oauth2.get("client_id", ""),
+                    client_secret=self.oauth2.get("client_secret"),
+                    token_endpoint=self.oauth2.get("token_endpoint"),
+                    grant_type=self.oauth2.get("grant_type") or "client_credentials",
+                    scope=self.oauth2.get("scope"),
+                    access_token=self.oauth2.get("access_token"),
+                    refresh_token=self.oauth2.get("refresh_token"),
+                    load_env=False,
+                )
+            except Exception as e:
+                logger.warning(f"OAuth2 auth setup failed, falling back to basic: {e}")
+                return None
+        return None  # basic
+
     def _ensure_cmis_initialized(self):
         """Lazy initialization of CMIS client - only when needed"""
         if self.cmis_repo is not None:
@@ -120,15 +162,22 @@ class AlfrescoSource(BaseDataSource):
         if not self.url:
             logger.error("No URL specified for Alfresco source")
             return False
-        
-        if not self.username:
-            logger.error("No username specified for Alfresco source")
-            return False
-        
-        if not self.password:
-            logger.error("No password specified for Alfresco source")
-            return False
-        
+
+        if self.auth_method == "oauth2":
+            if not self.oauth2.get("client_id"):
+                logger.error("OAuth2 auth requires oauth2.client_id")
+                return False
+            if not (self.oauth2.get("access_token") or self.oauth2.get("client_secret")):
+                logger.error("OAuth2 auth requires an access_token or client_secret")
+                return False
+        else:  # basic or ticket
+            if not self.username:
+                logger.error("No username specified for Alfresco source")
+                return False
+            if not self.password:
+                logger.error("No password specified for Alfresco source")
+                return False
+
         return True
     
     def list_files(self) -> List[dict]:

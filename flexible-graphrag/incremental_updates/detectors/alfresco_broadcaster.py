@@ -189,10 +189,13 @@ class AlfrescoEventBroadcaster:
             self._stomp_listener = SharedAlfrescoEventListener(self)
             self._stomp_conn.set_listener('shared-alfresco-listener', self._stomp_listener)
             
-            # Connect
+            # Connect. NOTE: stomp.py's kwarg is `passcode`, not `password` — passing
+            # `password=` sends it as a stray header with an EMPTY passcode. That was
+            # harmless on ActiveMQ 5.x (no broker auth) but ActiveMQ 6.x (ACS 26.1) enforces
+            # JAAS auth, so an empty passcode → "User name [admin] or password is invalid".
             self._stomp_conn.connect(
                 username=self.username,
-                password=self.password,
+                passcode=self.password,
                 wait=True,
                 headers={'client-id': 'flexible-graphrag-broadcaster'}
             )

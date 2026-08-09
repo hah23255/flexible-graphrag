@@ -273,8 +273,15 @@ class AlfrescoDetector(ChangeDetector):
         
         # Alfresco connection parameters
         self.url = config.get('url')
+        self.auth_method = (config.get('auth_method') or 'basic').lower()  # basic | ticket | oauth2
         self.username = config.get('username')
         self.password = config.get('password')
+        self.oauth2 = config.get('oauth2') or {}
+        # ActiveMQ broker credentials for the STOMP event connection. These are the BROKER's
+        # credentials (default admin/admin), NOT the Alfresco data-source user — so real-time event
+        # sync works even with ticket/oauth2 Alfresco auth (where there is no username/password).
+        self.stomp_username = config.get('stomp_username', 'admin')
+        self.stomp_password = config.get('stomp_password', 'admin')
         self.path = config.get('path', '/')
         self.node_ids = config.get('nodeIds', None)
         self.node_details = config.get('nodeDetails', None)
@@ -316,10 +323,16 @@ class AlfrescoDetector(ChangeDetector):
         # Validate required config
         if not self.url:
             raise ValueError("AlfrescoDetector requires 'url' in config")
-        if not self.username:
-            raise ValueError("AlfrescoDetector requires 'username' in config")
-        if not self.password:
-            raise ValueError("AlfrescoDetector requires 'password' in config")
+        if self.auth_method == "oauth2":
+            if not self.oauth2.get("client_id"):
+                raise ValueError("AlfrescoDetector oauth2 auth requires oauth2.client_id")
+            if not (self.oauth2.get("client_secret") or self.oauth2.get("access_token")):
+                raise ValueError("AlfrescoDetector oauth2 auth requires oauth2.client_secret or access_token")
+        else:  # basic | ticket
+            if not self.username:
+                raise ValueError("AlfrescoDetector requires 'username' in config")
+            if not self.password:
+                raise ValueError("AlfrescoDetector requires 'password' in config")
         
         # Extract host from URL for event client
         self.host = self._extract_host(self.url)
@@ -400,9 +413,9 @@ class AlfrescoDetector(ChangeDetector):
             # Create event client WITHOUT auto_detect (we'll handle it ourselves)
             self._event_client = AlfrescoEventClient(
                 alfresco_host=self.host,
-                username=self.username,
-                password=self.password,
-                community_port=self.stomp_port,  # STOMP port (ActiveMQ bridges from OpenWire 61616)
+                username=self.stomp_username,  # ActiveMQ broker creds (not Alfresco user)
+                password=self.stomp_password,
+                activemq_port=self.stomp_port,  # ActiveMQ STOMP port (61613; 61616 is OpenWire)
                 auto_detect=False,  # Disable auto-detect, we'll do it manually
                 debug=False  # Set to True for troubleshooting
             )
@@ -416,7 +429,7 @@ class AlfrescoDetector(ChangeDetector):
                     await self._event_client._detect_event_systems()
                     
                     # Check results
-                    if self._event_client.event_gateway_available or self._event_client.activemq_available:
+                    if self._event_client.activemq_available:
                         detection_result['available'] = True
                         logger.info("Event system detection completed successfully")
                     else:
@@ -437,7 +450,6 @@ class AlfrescoDetector(ChangeDetector):
             
             # Check what was detected
             system_info = self._event_client.get_system_info()
-            logger.info(f"Event Gateway available: {system_info.get('event_gateway_available', False)}")
             logger.info(f"ActiveMQ available: {system_info.get('activemq_available', False)}")
             logger.info(f"Active system: {system_info.get('active_system', 'none')}")
             
@@ -506,8 +518,8 @@ class AlfrescoDetector(ChangeDetector):
             self._broadcaster = await AlfrescoEventBroadcaster.get_instance(
                 host=self.host,
                 port=self.stomp_port,
-                username=self.username,
-                password=self.password
+                username=self.stomp_username,  # ActiveMQ broker creds (not Alfresco user)
+                password=self.stomp_password
             )
             
             # Register this detector with the broadcaster
@@ -1087,29 +1099,57 @@ class AlfrescoDetector(ChangeDetector):
                 await asyncio.sleep(10)
                 yield None
     
+    def _build_auth_util(self, api_base_url):
+        """Build a python-alfresco-api auth util for the configured auth_method (None for basic)."""
+        if self.auth_method == "ticket":
+            from python_alfresco_api.auth_util import TicketAuthUtil
+            return TicketAuthUtil(self.username, self.password, base_url=api_base_url)
+        if self.auth_method == "oauth2":
+            from python_alfresco_api.auth_util import OAuth2AuthUtil
+            o = self.oauth2 or {}
+            return OAuth2AuthUtil(
+                base_url=api_base_url,
+                client_id=o.get("client_id", ""),
+                client_secret=o.get("client_secret"),
+                token_endpoint=o.get("token_endpoint"),
+                grant_type=o.get("grant_type") or "client_credentials",
+                scope=o.get("scope"),
+                access_token=o.get("access_token"),
+                refresh_token=o.get("refresh_token"),
+                load_env=False,
+            )
+        return None  # basic
+
     async def _verify_connection(self) -> None:
         """Verify connection to Alfresco server"""
         logger.info(f"Verifying Alfresco connection to {self.url}")
-        
+
         try:
             # Import here to avoid dependency issues if not installed
             from python_alfresco_api import ClientFactory
-            
+
             # Remove /alfresco suffix if present
             api_base_url = self.url.rstrip('/')
             if api_base_url.endswith('/alfresco'):
                 api_base_url = api_base_url[:-9]
-            
-            # Create client and test connection
+
+            # Create client and test connection (auth-method aware: basic/ticket/oauth2)
+            auth_util = self._build_auth_util(api_base_url)
             loop = asyncio.get_event_loop()
-            factory = await loop.run_in_executor(
-                None,
-                lambda: ClientFactory(
-                    base_url=api_base_url,
-                    username=self.username,
-                    password=self.password
+            if auth_util is not None:
+                factory = await loop.run_in_executor(
+                    None,
+                    lambda: ClientFactory(base_url=api_base_url, auth_util=auth_util)
                 )
-            )
+            else:
+                factory = await loop.run_in_executor(
+                    None,
+                    lambda: ClientFactory(
+                        base_url=api_base_url,
+                        username=self.username,
+                        password=self.password
+                    )
+                )
             
             core_client = await loop.run_in_executor(None, factory.create_core_client)
             
@@ -1159,17 +1199,24 @@ class AlfrescoDetector(ChangeDetector):
                 api_base_url = api_base_url[:-9]
             
             logger.info(f"   Creating ClientFactory with base_url: {api_base_url}")
-            
+
             loop = asyncio.get_event_loop()
-            factory = await loop.run_in_executor(
-                None,
-                lambda: ClientFactory(
-                    base_url=api_base_url,
-                    username=self.username,
-                    password=self.password
+            auth_util = self._build_auth_util(api_base_url)
+            if auth_util is not None:
+                factory = await loop.run_in_executor(
+                    None,
+                    lambda: ClientFactory(base_url=api_base_url, auth_util=auth_util)
                 )
-            )
-            
+            else:
+                factory = await loop.run_in_executor(
+                    None,
+                    lambda: ClientFactory(
+                        base_url=api_base_url,
+                        username=self.username,
+                        password=self.password
+                    )
+                )
+
             logger.info(f"   Creating core client...")
             core_client = await loop.run_in_executor(None, factory.create_core_client)
             
@@ -1225,11 +1272,13 @@ class AlfrescoDetector(ChangeDetector):
         """
         from sources.alfresco import AlfrescoSource
         
-        # Create Alfresco source to list files
+        # Create Alfresco source to list files (auth-method aware: basic/ticket/oauth2)
         source_config = {
             'url': self.url,
+            'auth_method': self.auth_method,
             'username': self.username,
             'password': self.password,
+            'oauth2': self.oauth2,
             'path': self.path,
             'nodeIds': self.node_ids,
             'nodeDetails': self.node_details,
@@ -1452,11 +1501,13 @@ class AlfrescoDetector(ChangeDetector):
                 'isFolder': False
             }]
             
-            # Build Alfresco config using nodeDetails (not nodeIds)
+            # Build Alfresco config using nodeDetails (not nodeIds); auth-method aware
             alfresco_config = {
                 'url': self.url,
+                'auth_method': self.auth_method,
                 'username': self.username,
                 'password': self.password,
+                'oauth2': self.oauth2,
                 'path': self.path,
                 'nodeDetails': node_details,  # Use existing nodeDetails mode
                 'recursive': False

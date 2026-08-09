@@ -13,10 +13,10 @@
       <!-- Only show Enable Sync for datasources that support auto-sync -->
       <!-- Hidden for: upload, cmis, webpage, wikipedia, youtube -->
       <mat-checkbox 
-        *ngIf="configuredDataSource !== 'upload' && 
-               configuredDataSource !== 'cmis' && 
-               configuredDataSource !== 'web' && 
-               configuredDataSource !== 'wikipedia' && 
+        *ngIf="configuredDataSource !== 'upload' &&
+               configuredDataSource !== 'cmis' &&
+               configuredDataSource !== 'web' &&
+               configuredDataSource !== 'wikipedia' &&
                configuredDataSource !== 'youtube'"
         [(ngModel)]="enableSync"
         [disabled]="isProcessing"

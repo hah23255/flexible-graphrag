@@ -1103,10 +1103,25 @@ class FlexibleGraphRAGBackend:
                     import os
                     config = {
                         "url": os.getenv("ALFRESCO_URL", "http://localhost:8080/alfresco"),
+                        "auth_method": os.getenv("ALFRESCO_AUTH_METHOD", "basic"),
                         "username": os.getenv("ALFRESCO_USERNAME", "admin"),
                         "password": os.getenv("ALFRESCO_PASSWORD", "admin"),
                         "path": os.getenv("ALFRESCO_PATH", "/")
                     }
+                    # Optional OAuth2 config from env (auth_method=oauth2)
+                    oauth2 = {
+                        k: v for k, v in {
+                            "client_id": os.getenv("ALFRESCO_OAUTH2_CLIENT_ID"),
+                            "client_secret": os.getenv("ALFRESCO_OAUTH2_CLIENT_SECRET"),
+                            "token_endpoint": os.getenv("ALFRESCO_OAUTH2_TOKEN_ENDPOINT"),
+                            "grant_type": os.getenv("ALFRESCO_OAUTH2_GRANT_TYPE"),
+                            "scope": os.getenv("ALFRESCO_OAUTH2_SCOPE"),
+                            "access_token": os.getenv("ALFRESCO_OAUTH2_ACCESS_TOKEN"),
+                            "refresh_token": os.getenv("ALFRESCO_OAUTH2_REFRESH_TOKEN"),
+                        }.items() if v
+                    }
+                    if oauth2:
+                        config["oauth2"] = oauth2
                     # Add STOMP port if configured
                     stomp_port = os.getenv("ALFRESCO_STOMP_PORT")
                     if stomp_port:
@@ -1123,7 +1138,71 @@ class FlexibleGraphRAGBackend:
                 PROCESSING_STATUS[processing_id]["documents"] = documents
                 
                 await self.system._ingest_source_documents(documents, processing_id=processing_id, status_callback=lambda **cb_kwargs: self._update_processing_status(**cb_kwargs), skip_graph=skip_graph, config_id=config_id)
-                
+
+            elif data_source == "nuxeo":
+                self._update_processing_status(
+                    processing_id,
+                    "processing",
+                    "Connecting to Nuxeo repository...",
+                    20
+                )
+
+                # Check for cancellation before connecting
+                if self._is_processing_cancelled(processing_id):
+                    return
+
+                self._update_processing_status(
+                    processing_id,
+                    "processing",
+                    "Processing Nuxeo documents...",
+                    60
+                )
+
+                # Use new modular approach with IngestionManager
+                nuxeo_config = kwargs.get('nuxeo_config')
+                if nuxeo_config:
+                    # Use provided config
+                    config = nuxeo_config
+                else:
+                    # Use environment variables
+                    import os
+                    config = {
+                        "url": os.getenv("NUXEO_URL", "http://localhost:8081/nuxeo"),
+                        "auth_method": os.getenv("NUXEO_AUTH_METHOD", "basic"),
+                        "username": os.getenv("NUXEO_USERNAME", "Administrator"),
+                        "password": os.getenv("NUXEO_PASSWORD", "Administrator"),
+                        "path": os.getenv("NUXEO_PATH", "/"),
+                    }
+                    # Optional token auth
+                    token = os.getenv("NUXEO_TOKEN")
+                    if token:
+                        config["token"] = token
+                    # Optional OAuth2 config from env
+                    oauth2 = {
+                        k: v for k, v in {
+                            "client_id": os.getenv("NUXEO_OAUTH2_CLIENT_ID"),
+                            "client_secret": os.getenv("NUXEO_OAUTH2_CLIENT_SECRET"),
+                            "access_token": os.getenv("NUXEO_OAUTH2_ACCESS_TOKEN"),
+                            "refresh_token": os.getenv("NUXEO_OAUTH2_REFRESH_TOKEN"),
+                            "token_endpoint": os.getenv("NUXEO_OAUTH2_TOKEN_ENDPOINT"),
+                            "openid_configuration_url": os.getenv("NUXEO_OAUTH2_OPENID_CONFIG_URL"),
+                        }.items() if v
+                    }
+                    if oauth2:
+                        config["oauth2"] = oauth2
+
+                documents = await self.ingestion_manager.ingest_from_source(
+                    source_type="nuxeo",
+                    config=config,
+                    processing_id=processing_id,
+                    status_callback=lambda **cb_kwargs: self._update_processing_status(**cb_kwargs)
+                )
+
+                # Store documents in PROCESSING_STATUS for document_state creation
+                PROCESSING_STATUS[processing_id]["documents"] = documents
+
+                await self.system._ingest_source_documents(documents, processing_id=processing_id, status_callback=lambda **cb_kwargs: self._update_processing_status(**cb_kwargs), skip_graph=skip_graph, config_id=config_id)
+
             elif data_source == "web":
                 # Initialize progress tracking for web source
                 web_config = kwargs.get('web_config')

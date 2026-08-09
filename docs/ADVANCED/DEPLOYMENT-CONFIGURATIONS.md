@@ -693,5 +693,5 @@ Choose your configuration based on your needs:
 - **🚀 For Production**: Configuration 3 (Full Docker) - Complete isolation and consistency  
 - **🔧 For Solo Learning**: Configuration 1 (Standalone) - Maximum flexibility
 
-All configurations support the full feature set of Flexible GraphRAG, including 13 data sources, multiple databases, and hybrid search capabilities. The main trade-offs are between convenience, debugging ease, and production readiness.
+All configurations support the full feature set of Flexible GraphRAG, including 14 data sources, multiple databases, and hybrid search capabilities. The main trade-offs are between convenience, debugging ease, and production readiness.
 

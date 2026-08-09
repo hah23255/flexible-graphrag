@@ -7,7 +7,8 @@ export const environment = {
   apiUrl: '/api', // Base URL for API requests
   defaultFolderPath: '/Shared/GraphRAG', // Default folder path for CMIS
   cmisBaseUrl: 'http://localhost:8080', // Default for standalone development
-  alfrescoBaseUrl: 'http://localhost:8080' // Default for standalone development
+  alfrescoBaseUrl: 'http://localhost:8080', // Default for standalone development
+  nuxeoBaseUrl: 'http://localhost:8081/nuxeo' // Default for standalone development
 };
 
 /*

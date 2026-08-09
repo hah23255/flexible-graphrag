@@ -178,7 +178,7 @@ class IncrementalSystemManager:
             # This flag drives BOTH the orchestrator's event-stream task AND the detector's
             # enable_change_polling, which must stay in step: the engine skips NEW files in the periodic
             # refresh whenever enable_change_polling is on, so if the stream weren't drained they'd be missed.
-            sources_with_events = ['google_drive', 'box', 'alfresco', 'filesystem', 'onedrive', 'sharepoint']
+            sources_with_events = ['google_drive', 'box', 'alfresco', 'nuxeo', 'filesystem', 'onedrive', 'sharepoint']
             
             # S3 has events only if sqs_queue_url is configured
             if source_type == 's3' and connection_params.get('sqs_queue_url'):

@@ -36,7 +36,9 @@
             <v-window v-model="mainTab">
               <!-- Sources Tab -->
               <v-window-item value="sources">
-                <sources-tab 
+                <sources-tab
+                  v-model:nuxeo-form-value="nuxeoFormValue"
+                  v-model:alfresco-form-value="alfrescoFormValue"
                   @configure-processing="onConfigureProcessing"
                   @sources-configured="onSourcesConfigured"
                 />
@@ -51,6 +53,7 @@
                   :configured-folder-path="configuredFolderPath"
                   :configured-cmis-config="configuredCmisConfig"
                   :configured-alfresco-config="configuredAlfrescoConfig"
+                  :configured-nuxeo-config="configuredNuxeoConfig"
                   :configured-web-config="configuredWebConfig"
                   :configured-wikipedia-config="configuredWikipediaConfig"
                   :configured-youtube-config="configuredYoutubeConfig"
@@ -133,6 +136,11 @@ export default defineComponent({
     const configuredFolderPath = ref('');
     const configuredCmisConfig = ref<any>(null);
     const configuredAlfrescoConfig = ref<any>(null);
+    const configuredNuxeoConfig = ref<any>(null);
+    // Live single-object form state for the self-contained Nuxeo/Alfresco forms
+    // (held here so it survives Sources<->Processing tab switches).
+    const nuxeoFormValue = ref<any>({});
+    const alfrescoFormValue = ref<any>({});
     const configuredWebConfig = ref<any>(null);
     const configuredWikipediaConfig = ref<any>(null);
     const configuredYoutubeConfig = ref<any>(null);
@@ -146,6 +154,7 @@ export default defineComponent({
       folderPath?: string;
       cmisConfig?: any;
       alfrescoConfig?: any;
+      nuxeoConfig?: any;
       webConfig?: any;
       wikipediaConfig?: any;
       youtubeConfig?: any;
@@ -158,6 +167,7 @@ export default defineComponent({
       configuredFolderPath.value = '';
       configuredCmisConfig.value = null;
       configuredAlfrescoConfig.value = null;
+      configuredNuxeoConfig.value = null;
       configuredWebConfig.value = null;
       configuredWikipediaConfig.value = null;
       configuredYoutubeConfig.value = null;
@@ -171,6 +181,7 @@ export default defineComponent({
       configuredFolderPath.value = data.folderPath || '';
       configuredCmisConfig.value = data.cmisConfig || null;
       configuredAlfrescoConfig.value = data.alfrescoConfig || null;
+      configuredNuxeoConfig.value = data.nuxeoConfig || null;
       configuredWebConfig.value = data.webConfig || null;
       configuredWikipediaConfig.value = data.wikipediaConfig || null;
       configuredYoutubeConfig.value = data.youtubeConfig || null;
@@ -198,6 +209,9 @@ export default defineComponent({
       configuredFolderPath,
       configuredCmisConfig,
       configuredAlfrescoConfig,
+      configuredNuxeoConfig,
+      nuxeoFormValue,
+      alfrescoFormValue,
       configuredWebConfig,
       configuredWikipediaConfig,
       configuredYoutubeConfig,

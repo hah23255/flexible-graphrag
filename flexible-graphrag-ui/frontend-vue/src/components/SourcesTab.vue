@@ -45,6 +45,7 @@ import axios from 'axios';
 import {
   FileUploadForm,
   AlfrescoSourceForm,
+  NuxeoSourceForm,
   CMISSourceForm,
   WebSourceForm,
   WikipediaSourceForm,
@@ -60,12 +61,18 @@ import {
 
 export default defineComponent({
   name: 'SourcesTab',
-  emits: ['configure-processing', 'sources-configured'],
-  setup(_, { emit }) {
+  props: {
+    // Single-object form state held in App (persists across tab switches).
+    nuxeoFormValue: { type: Object, default: () => ({}) },
+    alfrescoFormValue: { type: Object, default: () => ({}) },
+  },
+  emits: ['configure-processing', 'sources-configured', 'update:nuxeoFormValue', 'update:alfrescoFormValue'],
+  setup(props, { emit }) {
     // Data source options - matching React order exactly
     const dataSourceOptions = [
       { title: 'File Upload', value: 'upload' },
       { title: 'Alfresco Repository', value: 'alfresco' },
+      { title: 'Nuxeo Repository', value: 'nuxeo' },
       { title: 'CMIS Repository', value: 'cmis' },
       { title: '─── Web ───', value: '', disabled: true },
       { title: 'Web Page', value: 'web' },
@@ -93,11 +100,6 @@ export default defineComponent({
     const cmisUrl = ref(`${import.meta.env.VITE_CMIS_BASE_URL || 'http://localhost:8080'}/alfresco/api/-default-/public/cmis/versions/1.1/atom`);
     const cmisUsername = ref('admin');
     const cmisPassword = ref('admin');
-
-    // Alfresco state
-    const alfrescoUrl = ref(import.meta.env.VITE_ALFRESCO_BASE_URL || 'http://localhost:8080');
-    const alfrescoUsername = ref('admin');
-    const alfrescoPassword = ref('admin');
 
     // Web sources state
     const webUrl = ref('');
@@ -137,6 +139,7 @@ export default defineComponent({
         upload: FileUploadForm,
         cmis: CMISSourceForm,
         alfresco: AlfrescoSourceForm,
+        nuxeo: NuxeoSourceForm,
         web: WebSourceForm,
         wikipedia: WikipediaSourceForm,
         youtube: YouTubeSourceForm,
@@ -173,17 +176,17 @@ export default defineComponent({
             'onUpdate:password': (value: string) => { cmisPassword.value = value; },
             'onUpdate:folderPath': (value: string) => { folderPath.value = value; }
           };
+        case 'nuxeo':
+          return {
+            ...baseProps,
+            value: props.nuxeoFormValue,
+            'onUpdate:value': (val: any) => { emit('update:nuxeoFormValue', val); },
+          };
         case 'alfresco':
           return {
             ...baseProps,
-            url: alfrescoUrl.value,
-            username: alfrescoUsername.value,
-            password: alfrescoPassword.value,
-            path: folderPath.value,
-            'onUpdate:url': (value: string) => { alfrescoUrl.value = value; },
-            'onUpdate:username': (value: string) => { alfrescoUsername.value = value; },
-            'onUpdate:password': (value: string) => { alfrescoPassword.value = value; },
-            'onUpdate:path': (value: string) => { folderPath.value = value; }
+            value: props.alfrescoFormValue,
+            'onUpdate:value': (val: any) => { emit('update:alfrescoFormValue', val); },
           };
         case 'web':
           return {
@@ -306,6 +309,11 @@ export default defineComponent({
           break;
         case 'alfresco':
           sourceConfig.alfrescoConfig = currentConfig.value;
+          sourceConfig.folderPath = currentConfig.value?.path || '';
+          break;
+        case 'nuxeo':
+          sourceConfig.nuxeoConfig = currentConfig.value;
+          sourceConfig.folderPath = currentConfig.value?.path || '';
           break;
         case 'web':
           sourceConfig.webConfig = currentConfig.value;
