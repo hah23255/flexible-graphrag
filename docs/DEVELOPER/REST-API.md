@@ -205,7 +205,7 @@ POST /api/cancel-processing/abc123  →  cancel if needed
 
 When `PIPELINE_BACKEND=cocoindex`, additional endpoints (`/api/cocoindex/status`,
 `/api/cocoindex/sync-now`, `/api/cocoindex/config`) are available. See
-[CocoIndex Developer Guide — REST API](DEVELOPER-COCOINDEX.md#rest-api-fastapi-server-only).
+[CocoIndex Developer Guide — Running and driving it](DEVELOPER-COCOINDEX.md#running-and-driving-it).
 
 ---
 

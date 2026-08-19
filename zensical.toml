@@ -34,7 +34,7 @@ nav = [
     {"Python Backend"            = "GETTING-STARTED/PYTHON-BACKEND.md"},
     {"Frontend Setup"            = "GETTING-STARTED/FRONTEND-SETUP.md"},
     {"Docker Deployment"         = "GETTING-STARTED/DOCKER-DEPLOYMENT.md"},
-    {"Langflow Integration"      = "GETTING-STARTED/LANGFLOW-INTEGRATION.md"}
+    {"Langflow Integration"      = "GETTING-STARTED/LANGFLOW-INTEGRATION.md"},
     {"CocoIndex Integration"     = "GETTING-STARTED/COCOINDEX-INTEGRATION.md"}
   ]},
   {"Configuration" = [
