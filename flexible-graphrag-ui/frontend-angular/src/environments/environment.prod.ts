@@ -5,5 +5,6 @@ export const environment = {
   // Use localhost by default, can be overridden at runtime for Docker deployments
   cmisBaseUrl: 'http://localhost:8080', // Flexible for both standalone and Docker
   alfrescoBaseUrl: 'http://localhost:8080', // Flexible for both standalone and Docker
-  nuxeoBaseUrl: 'http://localhost:8081/nuxeo' // Flexible for both standalone and Docker
+  nuxeoBaseUrl: 'http://localhost:8081/nuxeo', // Flexible for both standalone and Docker
+  nuxeoPath: '/default-domain/workspaces/GraphRAG' // Default Nuxeo folder shown in the source dialog
 };

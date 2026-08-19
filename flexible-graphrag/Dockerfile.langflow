@@ -56,11 +56,18 @@ RUN if [ -n "$EXTRAS" ]; then \
         uv pip install --system -e .; \
     fi
 
-# Step 3: restore PyJWT. flexible-graphrag pulls nuxeo[oauth2], whose GehirnInc `jwt` package owns the
-# same top-level `jwt` module as PyJWT and evicts it — Langflow then fails to start with
-# `ImportError: cannot import name 'InvalidTokenError' from 'jwt'`. (Consequence: the Nuxeo data source
-# can't be used in Langflow flow mode; Alfresco + all other sources work — same as the host setup.)
-RUN uv pip uninstall --system jwt && uv pip install --system --reinstall "PyJWT>=2.12.1"
+# Step 3: verify PyJWT owns the `jwt` module.
+#
+# There used to be an uninstall/reinstall here, because flexible-graphrag pulled
+# nuxeo[oauth2] and its GehirnInc `jwt` package evicted PyJWT — Langflow then
+# failed to start with `ImportError: cannot import name 'InvalidTokenError'`.
+# flexible-graphrag now depends on plain `nuxeo` + `authlib` + `pyjwt[crypto]`,
+# so nothing evicts PyJWT and all three Nuxeo auth methods work in flow mode.
+#
+# This is a guard, not a fix: it fails the build loudly if some future
+# dependency reintroduces the collision, instead of shipping an image whose
+# Langflow cannot start.
+RUN python -c "import jwt, sys; sys.exit(0) if hasattr(jwt, 'InvalidTokenError') else sys.exit('PyJWT was evicted from the `jwt` module — a dependency pulled GehirnInc python-jwt (usually nuxeo[oauth2]). Langflow cannot start like this.')"
 
 # Application code (brings in langflow_components/, config, hybrid_system, ingest/, process/, rdf/, …).
 COPY . .
@@ -113,7 +120,7 @@ RUN mkdir -p /app/langflow-data
 
 EXPOSE 7860
 
-# Langflow 1.10.2 health endpoint — /health returns 200 (verified).
+# Langflow health endpoint — /health returns 200.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD curl -f http://localhost:7860/health || exit 1
 

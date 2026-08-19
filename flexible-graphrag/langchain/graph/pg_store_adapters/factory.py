@@ -99,11 +99,15 @@ def _build_vector_index_config(app_config: Any) -> Dict[str, Any]:
     """Return a ``vector_index_config`` dict from AppSettings, or ``{}`` if not needed."""
     if not getattr(app_config, "langchain_pg_vector_search", False):
         return {}
+    # Use get_lc_embedding_dimension so per-kind {KIND}_EMBEDDING_DIMENSION env vars and
+    # COCOINDEX_EMBEDDING_DIMENSION are honoured — same resolution as the vector store.
+    from langchain.llm.embedding_factory import get_lc_embedding_dimension
+    _dim = get_lc_embedding_dimension(app_config)
     return {
         "index_name":         getattr(app_config, "langchain_pg_vector_index", "entity"),
         "node_label":         getattr(app_config, "langchain_pg_vector_node_label", "__Entity__"),
         "embedding_property": getattr(app_config, "langchain_pg_vector_embedding_property", "embedding"),
-        "dimensions":         getattr(app_config, "embedding_dimension", 1536) or 1536,
+        "dimensions":         _dim,
     }
 
 

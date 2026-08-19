@@ -35,6 +35,12 @@ class LlamaIndexPostgresVectorAdapter(LlamaIndexVectorAdapter):
             embed_dim=embed_dim,
         )
         super().__init__(store)
+        # Stored for use by CocoIndexPostgresVectorRetriever when VECTOR_BACKEND=cocoindex:
+        # CocoIndex writes a different schema/table than PGVectorStore, so the retriever
+        # reads directly from the CocoIndex-written table using these connection details.
+        self._db_config = dict(config)
+        self._table_name = table_name
+        self._pg_schema = str(config.get("schema", config.get("pg_schema", "public")))
         logger.info("LlamaIndexPostgresVectorAdapter: host=%s table=%s embed_dim=%s",
                     config.get("host", "localhost"), table_name, embed_dim)
 

@@ -433,8 +433,16 @@ try:
             (~60 chars, no actual node labels).  Calling the LLM chain against an
             empty graph wastes a full LLM round-trip (200+ s for slow providers)
             and always returns a no-data answer anyway.
+
+            When ``graph_schema`` is absent (e.g. ``SurrealDBGraphQAChain``) the
+            chain is assumed to be non-empty and is allowed to run.
             """
-            schema: str = getattr(self._chain, "graph_schema", "") or ""
+            schema = getattr(self._chain, "graph_schema", None)
+            if schema is None:
+                # Chain doesn't expose graph_schema — let it run.
+                # SurrealDB, Gremlin, and other non-Cypher chains fall here.
+                return False
+            schema = schema or ""
             if not schema:
                 return True
             # Heuristic: meaningful schemas have at least one label in the node

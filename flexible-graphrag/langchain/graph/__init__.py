@@ -19,12 +19,10 @@ from adapters.graph.pg_store_adapter import (
     build_pg_store_adapter,
     nodes_to_graph_documents,
 )
-# RDF adapters — canonical home is adapters.graph.rdf_store_adapter
+# RDF ABC + factory — canonical home is adapters.graph.rdf_store_adapter
+# Concrete wrappers (FusekiGraphAdapter etc.) are loaded lazily by build_rdf_store_adapter()
 from adapters.graph.rdf_store_adapter import (
     RdfGraphStoreAdapter,
-    FusekiGraphAdapter,
-    OxigraphGraphAdapter,
-    OntotextGraphAdapter,
     build_rdf_store_adapter,
 )
 
@@ -44,8 +42,5 @@ __all__ = [
     "build_pg_store_adapter",
     "nodes_to_graph_documents",
     "RdfGraphStoreAdapter",
-    "FusekiGraphAdapter",
-    "OxigraphGraphAdapter",
-    "OntotextGraphAdapter",
     "build_rdf_store_adapter",
 ]

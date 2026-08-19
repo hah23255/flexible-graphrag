@@ -49,23 +49,74 @@ def _ensure_nuxeo_jwt_compat() -> None:
             "the Langflow venv). Mint the OAuth2 token via scripts/nuxeo, or run the source in the direct "
             "backend path. (Basic/token and pre-obtained-Bearer OAuth2 ingest do NOT hit this.)")
 
-    class _JWTStub:
-        # Instantiation is fine (nuxeo may build one at import); only real use raises.
-        def decode(self, *a, **k):
-            raise RuntimeError(_msg)
+    # PyJWT can do everything nuxeo asks of the GehirnInc package — it is only
+    # the spelling that differs.  ``nuxeo/auth/oauth2.py`` uses exactly three
+    # symbols, in exactly one method (``validate_access_token``):
+    #
+    #     jwk_from_dict(key_dict)                     -> PyJWK.from_dict()
+    #     JWT().decode(token, key, do_time_check=...) -> jwt.decode()
+    #     except JWTDecodeError                       -> jwt.exceptions.PyJWTError
+    #
+    # So rather than stubbing them out to raise, implement them on top of PyJWT.
+    # That makes client-side token validation genuinely work in a PyJWT
+    # environment, which is every environment we ship: the GehirnInc package is
+    # deliberately NOT a dependency (it claims the same ``jwt`` module name and
+    # would break python-arango / langchain-arangodb, authlib and Langflow).
 
-        def encode(self, *a, **k):
-            raise RuntimeError(_msg)
+    def _jwk_from_dict(key_dict, *_a, **_k):
+        """GehirnInc ``jwk_from_dict`` -> PyJWK."""
+        return _jwt.PyJWK.from_dict(key_dict)
 
-    def _jwk_from_dict(*a, **k):
-        raise RuntimeError(_msg)
+    class _JWTCompat:
+        """GehirnInc ``JWT`` API implemented with PyJWT."""
+
+        @staticmethod
+        def _split(key):
+            """Accept a PyJWK or a raw key; return ``(key_material, algorithms)``."""
+            material = getattr(key, "key", key)
+            alg = getattr(key, "algorithm_name", None)
+            return material, ([alg] if alg else None)
+
+        # Signatures mirror GehirnInc's jwt.JWT exactly (jwt/jwt.py), so a caller
+        # written against that package behaves identically here.
+        def decode(
+            self,
+            message,
+            key=None,
+            do_verify=True,
+            algorithms=None,
+            do_time_check=True,
+        ):
+            material, key_algs = self._split(key)
+            algs = list(algorithms) if algorithms else key_algs
+            return _jwt.decode(
+                message,
+                material,
+                algorithms=algs or ["RS256"],
+                options={
+                    "verify_signature": bool(do_verify),
+                    "verify_exp": bool(do_time_check),
+                },
+            )
+
+        def encode(self, payload, key=None, alg="HS256", optional_headers=None):
+            material, _ = self._split(key)
+            return _jwt.encode(
+                payload, material, algorithm=alg, headers=optional_headers or None
+            )
 
     if not hasattr(_jwt, "JWT"):
-        _jwt.JWT = _JWTStub
+        _jwt.JWT = _JWTCompat
     if not hasattr(_jwt, "jwk_from_dict"):
         _jwt.jwk_from_dict = _jwk_from_dict
 
-    # nuxeo also does `from jwt.exceptions import JWTDecodeError`
+    # nuxeo also does `from jwt.exceptions import JWTDecodeError`.  Alias it to
+    # PyJWT's base error rather than inventing a new class: nuxeo catches
+    # JWTDecodeError around the decode call, and PyJWT's failures
+    # (InvalidSignatureError, ExpiredSignatureError, DecodeError, ...) all derive
+    # from PyJWTError.  A fresh Exception subclass would catch none of them, so
+    # a bad token would escape as an unhandled error instead of the OAuth2Error
+    # nuxeo intends.
     try:
         import jwt.exceptions as _jwt_exc  # PyJWT ships this module
     except ImportError:
@@ -75,9 +126,12 @@ def _ensure_nuxeo_jwt_compat() -> None:
         sys.modules["jwt.exceptions"] = _jwt_exc
         _jwt.exceptions = _jwt_exc
     if not hasattr(_jwt_exc, "JWTDecodeError"):
-        _jwt_exc.JWTDecodeError = type("JWTDecodeError", (Exception,), {})
+        _jwt_exc.JWTDecodeError = getattr(_jwt_exc, "PyJWTError", Exception)
 
-    logger.info("Applied Nuxeo jwt-compat shim (PyJWT env): basic/token/oauth2-Bearer ingest OK; only client-side JWT decode (auth-code exchange) is unavailable.")
+    logger.debug(
+        "Applied Nuxeo jwt-compat shim (PyJWT backend): all three auth methods, "
+        "including client-side access-token validation, are functional."
+    )
 
 
 _ensure_nuxeo_jwt_compat()
@@ -173,6 +227,13 @@ class NuxeoSource(BaseDataSource):
             logger.error(f"[FAIL] Failed to initialize Nuxeo client: {str(e)}", exc_info=True)
             self.nuxeo = None
             self.nx_client = None
+            # Keep the cause.  Construction stays non-fatal so validate_config()
+            # can still report, but every later use must be able to say WHY —
+            # otherwise the first dereference of self.nuxeo raises
+            # "'NoneType' object has no attribute 'documents'", which hides a
+            # perfectly clear message like "token auth needs either a token or
+            # username+password".
+            self._init_error = e
 
         logger.info("=== NUXEO SOURCE INITIALIZATION COMPLETE ===")
 
@@ -258,6 +319,17 @@ class NuxeoSource(BaseDataSource):
 
     def validate_config(self) -> bool:
         """Validate the Nuxeo source configuration."""
+        # Check the client library FIRST.  Without it self.nuxeo stays None and
+        # every later call dies with "'NoneType' object has no attribute
+        # 'documents'" — four cascading tracebacks that say nothing about the
+        # actual problem, and that is the message the UI ends up showing.
+        if Nuxeo is None:
+            logger.error(
+                "nuxeo client library not installed - run: uv pip install -e . "
+                "(or: uv pip install \"nuxeo[oauth2]\")"
+            )
+            return False
+
         if not self.url:
             logger.error("No URL specified for Nuxeo source")
             return False
@@ -286,8 +358,24 @@ class NuxeoSource(BaseDataSource):
 
     # ------------------------------------------------------------------ listing
 
+    def _require_client(self) -> None:
+        """Raise the ORIGINAL initialisation failure if the client never built.
+
+        Every read path goes through ``list_files()``, so guarding here converts
+        a downstream ``'NoneType' object has no attribute 'documents'`` into the
+        actual reason — e.g. a missing token, bad credentials or an unreachable
+        server.
+        """
+        if self.nuxeo is None or self.nx_client is None:
+            cause = getattr(self, "_init_error", None)
+            raise RuntimeError(
+                f"Nuxeo client is not initialised ({self.auth_method} auth): "
+                f"{cause if cause else 'check url, credentials and connectivity'}"
+            )
+
     def list_files(self) -> List[dict]:
         """List all documents from the Nuxeo path or specific node id(s)."""
+        self._require_client()
         try:
             if self.node_details:
                 logger.info(f"=== NODEDETAILS MODE: {len(self.node_details)} nodes ===")
@@ -440,6 +528,37 @@ class NuxeoSource(BaseDataSource):
 
     # --------------------------------------------------------------- downloading
 
+    def read_file_bytes(self, node_id: str) -> bytes:
+        """Read raw bytes of a single Nuxeo document by uid.
+
+        Used by the lazy CocoIndex source path (``FlexibleMapView``), which lists
+        metadata first and only downloads documents whose fingerprint changed —
+        so this fetches exactly one document and never touches the filesystem.
+        Accepts a raw uid or a ``nuxeo://<uid>`` URI (the form the detector and
+        ``FileRecord.key`` use).
+
+        Note documents keep their content inline in ``note:note`` rather than in
+        a blob, so they are encoded here instead of fetched, mirroring
+        :meth:`_download_document`.
+        """
+        if node_id.startswith("nuxeo://"):
+            node_id = node_id[len("nuxeo://"):]
+
+        file_info = self._process_file_by_id(node_id)
+        if file_info and file_info.get("kind") == "note":
+            return (file_info.get("note_text") or "").encode("utf-8")
+
+        try:
+            content_bytes = self.nuxeo.documents.fetch_blob(uid=node_id)
+            if content_bytes:
+                return content_bytes
+        except Exception as exc:
+            logger.warning(
+                f"NuxeoSource.read_file_bytes blob fetch failed for {node_id}: {str(exc)}"
+            )
+        logger.warning(f"NuxeoSource.read_file_bytes: no bytes captured for {node_id}")
+        return b""
+
     def _download_document(self, document: dict, temp_dir: str) -> str:
         """Download a Nuxeo document's main blob to a temp file and return the path."""
         import os
@@ -543,11 +662,13 @@ class NuxeoSource(BaseDataSource):
 
     def get_documents(self) -> List[Document]:
         """Get documents from Nuxeo by downloading and processing them."""
+        import asyncio
         import tempfile
         import os
 
         files = self.list_files()
         documents = []
+        failures: List[str] = []
         temp_dir = tempfile.mkdtemp(prefix="nuxeo_download_")
 
         try:
@@ -555,7 +676,15 @@ class NuxeoSource(BaseDataSource):
             for file_info in files:
                 try:
                     temp_file_path = self._download_document(file_info, temp_dir)
-                    processed_doc = doc_processor.process_file(temp_file_path)
+                    # DocumentProcessor exposes process_documents(list) -> list and it
+                    # is async; there is no process_file().  See the async sibling
+                    # get_documents_with_progress() above, which does the same thing.
+                    processed_docs = asyncio.run(
+                        doc_processor.process_documents([temp_file_path])
+                    )
+                    if not processed_docs:
+                        raise ValueError(f"Parser returned nothing for {file_info['name']}")
+                    processed_doc = processed_docs[0]
                     self._apply_metadata(processed_doc, file_info)
                     documents.append(processed_doc)
 
@@ -563,6 +692,7 @@ class NuxeoSource(BaseDataSource):
                         os.unlink(temp_file_path)
                 except Exception as e:
                     logger.error(f"Error processing Nuxeo document {file_info['name']}: {str(e)}")
+                    failures.append(f"{file_info['name']}: {e}")
                     continue
         finally:
             try:
@@ -570,5 +700,16 @@ class NuxeoSource(BaseDataSource):
                     os.rmdir(temp_dir)
             except Exception as e:
                 logger.warning(f"Failed to clean up temp directory {temp_dir}: {str(e)}")
+
+        # A per-document failure must not abort the batch, but if EVERY file failed
+        # the caller has to hear about it: returning [] silently made ingest report
+        # "completed" having stored nothing, which is how a missing processor method
+        # went unnoticed.
+        if files and not documents:
+            raise RuntimeError(
+                f"Nuxeo: all {len(files)} document(s) failed to process. "
+                + "; ".join(failures[:3])
+                + ("..." if len(failures) > 3 else "")
+            )
 
         return documents

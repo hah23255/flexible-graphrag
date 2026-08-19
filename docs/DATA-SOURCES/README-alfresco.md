@@ -26,7 +26,7 @@ MCP server also exists — **[`python-alfresco-mcp-server`](https://github.com/s
 - **`python-alfresco-api >= 1.2.1`** — already declared in `pyproject.toml`, so a normal install pulls
   it in. To add to an existing venv:
   ```bash
-  uv pip install --system-certs "python-alfresco-api>=1.2.1"
+  uv pip install --system-certs "python-alfresco-api>=1.2.1"   # uv < 0.11: --native-tls
   ```
 
 ## Configuration

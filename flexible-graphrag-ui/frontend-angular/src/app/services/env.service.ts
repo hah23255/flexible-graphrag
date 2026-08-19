@@ -83,4 +83,15 @@ export class EnvService {
   get nuxeoBaseUrl(): string {
     return window.__env?.NUXEO_BASE_URL || environment.nuxeoBaseUrl;
   }
+
+  /**
+   * Default Nuxeo folder for the source dialog.
+   *
+   * Build-time / runtime config only: the browser cannot read the backend's
+   * .env, so setting NUXEO_PATH there does not reach this dialog.
+   */
+  get nuxeoPath(): string {
+    return window.__env?.NUXEO_PATH || (environment as any).nuxeoPath
+      || '/default-domain/workspaces/GraphRAG';
+  }
 }

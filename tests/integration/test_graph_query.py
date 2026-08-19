@@ -22,9 +22,11 @@ Run directly (backend must be running):
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -70,17 +72,66 @@ _DEFAULT_QUERIES: dict[str, tuple[str, str]] = {
     "neptune_rdf":       ("sparql",    "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 1"),
 }
 
-# Post-ingest Cypher that should return entity rows for Acme-family stores
+# Post-ingest entity search for Acme after company-ontology-test.txt ingest.
+# Lenient at assert time (0 rows = warning). Syntax must be store-valid.
 _ENTITY_QUERIES: dict[str, str] = {
-    "neo4j":      "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' OR toLower(n.id) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
-    "memgraph":   "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
-    "falkordb":   "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
-    "arcadedb":   "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
-    "ladybug":    "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
-    "arangodb":   "FOR v IN GRAPH 'knowledge_graph' FILTER CONTAINS(LOWER(v.id), 'acme') LIMIT 5 RETURN v.id",
-    # SurrealDB uses table-per-type; query all graph_* tables that might hold Acme
-    "surrealdb":  "SELECT name FROM graph_Company WHERE string::lowercase(name) CONTAINS 'acme' LIMIT 5",
+    "neo4j":             "MATCH (n) WHERE toLower(coalesce(n.name, n.id, '')) CONTAINS 'acme' RETURN coalesce(n.name, n.id) AS name LIMIT 5",
+    "memgraph":          "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
+    "falkordb":          "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
+    "arcadedb":          "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
+    "ladybug":           "MATCH (n) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
+    "arangodb":          "FOR v IN GRAPH 'knowledge_graph' FILTER CONTAINS(LOWER(v.id), 'acme') LIMIT 5 RETURN v.id",
+    # SurrealDB uses table-per-type; Company is the usual Acme host table
+    "surrealdb":         "SELECT name FROM graph_Company WHERE string::lowercase(name) CONTAINS 'acme' LIMIT 5",
+    # NebulaGraph: every vertex carries Props__; VIDs are entity names. Untagged
+    # MATCH (v) is invalid — always bind a tag. id(v) is the VID string.
+    "nebula":            "MATCH (v:Props__) WHERE toLower(id(v)) CONTAINS 'acme' RETURN id(v) AS name LIMIT 5",
+    # Apache AGE: entities keyed by id; name may be absent until normalize
+    "apache_age":        "MATCH (n) WHERE toLower(n.id) CONTAINS 'acme' OR toLower(n.name) CONTAINS 'acme' RETURN n.id AS name LIMIT 5",
+    # HugeGraph: all entities are __Entity__; display name is n.name
+    "hugegraph":         "MATCH (n:__Entity__) WHERE toLower(n.name) CONTAINS 'acme' RETURN n.name AS name LIMIT 5",
+    # TigerGraph: INTERPRET QUERY; graph name substituted at runtime (default MyGraph)
+    "tigergraph":        (
+        'INTERPRET QUERY() FOR GRAPH {graph} {{\n'
+        '  Seed = {{__Entity__.*}};\n'
+        '  R = SELECT s FROM Seed:s WHERE lower(s.name) LIKE "%acme%" OR lower(s.id) LIKE "%acme%";\n'
+        '  PRINT R;\n'
+        '}}'
+    ),
+    # Cosmos / TinkerPop Gremlin — TextP.containing is case-sensitive; use 'Acme'
+    "cosmos_gremlin":    "g.V().has('id', TextP.containing('Acme')).limit(5).values('id')",
+    # Neptune / Analytics — OpenCypher; id is the primary entity key
+    "neptune":           "MATCH (n) WHERE toLower(coalesce(n.id, n.name, '')) CONTAINS 'acme' RETURN coalesce(n.id, n.name) AS name LIMIT 5",
+    "neptune_analytics": "MATCH (n) WHERE toLower(coalesce(n.id, n.name, '')) CONTAINS 'acme' RETURN coalesce(n.id, n.name) AS name LIMIT 5",
+    # Spanner Graph GQL — LI structured_query prepends GRAPH `name`; project a property
+    "spanner":           "MATCH (n) WHERE LOWER(n.id) LIKE '%acme%' RETURN n.id LIMIT 5",
+    # RDF via /api/graph/query SPARQL path
+    "fuseki":            'SELECT ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o . FILTER(CONTAINS(LCASE(STR(?o)), "acme")) } } LIMIT 10',
+    "graphdb":           'SELECT ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o . FILTER(CONTAINS(LCASE(STR(?o)), "acme")) } } LIMIT 10',
+    "oxigraph":          'SELECT ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o . FILTER(CONTAINS(LCASE(STR(?o)), "acme")) } } LIMIT 10',
+    "neptune_rdf":       'SELECT ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o . FILTER(CONTAINS(LCASE(STR(?o)), "acme")) } } LIMIT 10',
 }
+
+
+def _tigergraph_graph_name() -> str:
+    """Resolve TigerGraph graph name from TIGERGRAPH_GRAPH_DB_CONFIG (default MyGraph)."""
+    raw = os.getenv("TIGERGRAPH_GRAPH_DB_CONFIG", "") or ""
+    try:
+        cfg = json.loads(raw) if raw.strip() else {}
+        name = (cfg.get("database") or cfg.get("graphname") or "MyGraph").strip()
+        return name or "MyGraph"
+    except Exception:
+        return "MyGraph"
+
+
+def _entity_query_for(db: str) -> Optional[str]:
+    """Return the entity query for *db*, applying store-specific substitutions."""
+    q = _ENTITY_QUERIES.get(db)
+    if q is None:
+        return None
+    if db == "tigergraph":
+        return q.format(graph=_tigergraph_graph_name())
+    return q
 
 
 def _pg_db() -> str:
@@ -169,12 +220,12 @@ def test_graph_query_entity_search(client: APIClient, graph_query_ingested):
     """
     _skip_if_no_graph()
     db = _active_db()
-    if db not in _ENTITY_QUERIES:
+    query = _entity_query_for(db)
+    if query is None:
         pytest.skip(f"No entity query defined for db={db!r} — store may use different schema")
 
     lang_hint = _DEFAULT_QUERIES.get(db, (None, None))[0]
-    query = _ENTITY_QUERIES[db]
-    logger.info("graph_query entity: db=%s  lang=%s  query=%r", db, lang_hint, query[:80])
+    logger.info("graph_query entity: db=%s  lang=%s  query=%r", db, lang_hint, query[:120])
 
     resp = client.graph_query(query, language=lang_hint)
     rows = resp.get("row_count", 0)

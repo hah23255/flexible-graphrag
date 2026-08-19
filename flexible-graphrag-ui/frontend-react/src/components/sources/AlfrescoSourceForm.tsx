@@ -23,8 +23,12 @@ export const AlfrescoSourceForm: React.FC<AlfrescoSourceFormProps> = ({
     () => import.meta.env.VITE_ALFRESCO_BASE_URL || 'http://localhost:8080',
     []
   );
+  // VITE_ALFRESCO_PATH, not VITE_PROCESS_FOLDER_PATH: the latter is the LOCAL
+  // filesystem folder for the Process Folder feature (a Windows path),
+  // so reusing it here put a Windows path in an Alfresco repository field and the
+  // '/Shared/GraphRAG' fallback never applied.
   const defaultPath = useMemo(
-    () => import.meta.env.VITE_PROCESS_FOLDER_PATH || '/Shared/GraphRAG',
+    () => import.meta.env.VITE_ALFRESCO_PATH || '/Shared/GraphRAG',
     []
   );
 

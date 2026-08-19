@@ -9,6 +9,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,35 @@ class OneDriveSource(BaseDataSource):
         
         return True
     
+    def read_file_bytes(self, file_id: str) -> bytes:
+        """
+        Read raw bytes of a single OneDrive file by file_id, reusing cached
+        credentials and the LlamaIndex ``OneDriveReader`` restricted to one file.
+        NO new SDK code.  Accepts a raw file_id or an ``onedrive://<id>`` URI.
+        """
+        from llama_index.readers.microsoft_onedrive import OneDriveReader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        if file_id.startswith("onedrive://"):
+            file_id = file_id[len("onedrive://"):]
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+        reader = OneDriveReader(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            tenant_id=self.tenant_id,
+            userprincipalname=self.user_principal_name,
+            file_extractor=file_extractor,
+        )
+        docs = reader.load_data(file_ids=[file_id])
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("OneDriveSource.read_file_bytes: no bytes captured for %s", file_id)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """
         Retrieve documents from Microsoft OneDrive using PassthroughExtractor.

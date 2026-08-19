@@ -133,7 +133,9 @@ export default defineComponent({
     const v: any = props.value || {};
     const url = ref(v.url ?? (import.meta.env.VITE_NUXEO_BASE_URL || 'http://localhost:8081/nuxeo'));
     const authMethod = ref(v.auth_method ?? 'basic');
-    const path = ref(v.path ?? '/default-domain/workspaces');
+    // VITE_NUXEO_PATH is a build-time var: the browser cannot read the
+    // backend's .env, so NUXEO_PATH there does not reach this dialog.
+    const path = ref(v.path ?? (import.meta.env.VITE_NUXEO_PATH || '/default-domain/workspaces/GraphRAG'));
 
     const username = ref(v.username ?? 'Administrator');
     const password = ref(v.password ?? 'Administrator');

@@ -10,6 +10,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 # Suppress llama-index-readers-file warning by importing it if available
 try:
@@ -83,6 +84,39 @@ class BoxSource(BaseDataSource):
         logger.error("Box authentication requires either access_token OR (client_id + client_secret + enterprise_id/user_id)")
         return False
     
+    def _build_box_client(self):
+        """Build an authenticated BoxClient (shared by get_documents + read_file_bytes)."""
+        from box_sdk_gen import BoxClient, BoxDeveloperTokenAuth, BoxCCGAuth, CCGConfig
+        if self.access_token:
+            auth = BoxDeveloperTokenAuth(token=self.access_token)
+            return BoxClient(auth=auth)
+        ccg_config = CCGConfig(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            enterprise_id=self.enterprise_id if self.enterprise_id else None,
+            user_id=self.user_id if self.user_id else None,
+        )
+        return BoxClient(auth=BoxCCGAuth(config=ccg_config))
+
+    def read_file_bytes(self, file_id: str) -> bytes:
+        """
+        Read raw bytes of a single Box file by file_id, reusing cached credentials
+        and the LlamaIndex ``BoxReader`` restricted to one file.  NO new SDK code.
+        """
+        from llama_index.readers.box import BoxReader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+        reader = BoxReader(box_client=self._build_box_client(), file_extractor=file_extractor)
+        docs = reader.load_data(file_ids=[file_id])
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("BoxSource.read_file_bytes: no bytes captured for %s", file_id)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """
         Retrieve documents from Box using PassthroughExtractor.

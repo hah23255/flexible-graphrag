@@ -6,6 +6,7 @@ import os
 import json
 
 class DataSourceType(str, Enum):
+    NONE = ""  # Empty DATA_SOURCE — no startup source (bridge not auto-started)
     FILESYSTEM = "filesystem"
     CMIS = "cmis"
     ALFRESCO = "alfresco"
@@ -136,6 +137,20 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
         description="Default sample text for testing"
     )
     
+    @field_validator('data_source', mode='before')
+    @classmethod
+    def coerce_empty_data_source(cls, v):
+        """Preserve DATA_SOURCE="" (or "none") as an explicit "no startup source" value.
+
+        Both the empty string and "none" map to the first-class value
+        DataSourceType.NONE meaning "no bridge startup" — checked in main.py
+        before the bridge is created.  We must NOT coerce these to FILESYSTEM;
+        only a missing/None env var falls back to the field default.
+        """
+        if isinstance(v, str) and v.strip().lower() in ("", "none"):
+            return DataSourceType.NONE
+        return v
+
     @field_validator('source_paths', mode='before')
     @classmethod
     def parse_source_paths(cls, v):
@@ -229,7 +244,64 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
             "Options: recursive | character | token | markdown | python | sentence_transformers"
         ),
     )
-    kg_extractor_backend: str = Field("llamaindex", description="KG extractor backend: llamaindex | langchain")
+    # Custom extractors are only honoured by the CocoIndex pipeline
+    # (cocoindex_integration/functions/kg_extractors.py); the default pipeline
+    # uses the two built-ins via adapters/process/kg_extractor_adapter.py.
+    kg_extractor_backend: str = Field(
+        "llamaindex",
+        description=(
+            "KG extractor backend: llamaindex | langchain, or a custom "
+            "KGExtractor — a registered name, module:Class, or /path/mod.py:Class"
+        ),
+    )
+
+    # CocoIndex integration (optional — requires pip install flexible-graphrag[cocoindex])
+    # PIPELINE_BACKEND=cocoindex routes ingest through a CocoIndex coco.App instead of the
+    # default per-stage pipeline. CocoIndex adds per-document and per-chunk LMDB memoization
+    # (unchanged files are skipped automatically on re-runs).
+    # Any value other than "cocoindex" uses the default per-stage config
+    # (CHUNKER_BACKEND, GRAPH_BACKEND, VECTOR_BACKEND, KG_EXTRACTOR_BACKEND, etc.).
+    pipeline_backend: str = Field(
+        "default",
+        description=(
+            "Ingest pipeline backend. Set to 'cocoindex' to use the CocoIndex engine "
+            "(requires: uv pip install flexible-graphrag[cocoindex]). "
+            "Any other value (or omit) uses the default per-stage config: "
+            "CHUNKER_BACKEND, GRAPH_BACKEND, VECTOR_BACKEND, KG_EXTRACTOR_BACKEND, etc."
+        ),
+    )
+    cocoindex_app_name: str = Field(
+        "FlexibleGraphRAG",
+        description="CocoIndex App name (used as LMDB state key prefix).",
+    )
+    cocoindex_db_path: Optional[str] = Field(
+        None,
+        description=(
+            "Path to CocoIndex LMDB state DB. Defaults to COCOINDEX_DB env var. "
+            "Set COCOINDEX_DB=./cocoindex.db or absolute path."
+        ),
+    )
+    cocoindex_poll_interval: int = Field(
+        0,
+        description=(
+            "Seconds between background CocoIndex update cycles when "
+            "PIPELINE_BACKEND=cocoindex. 0 = disabled (manual / REST-triggered only). "
+            "Set COCOINDEX_POLL_INTERVAL=60 to poll every minute."
+        ),
+    )
+    # source_backend controls how the CocoIndex pipeline READS documents (only
+    # consulted when PIPELINE_BACKEND=cocoindex):
+    #   'flexible'  (default) — always use FlexibleDataSource (flexible-graphrag's
+    #                           13 data sources), even for filesystem.
+    #   'cocoindex'           — use CocoIndex-native connectors for sources that
+    #                           have a native read path wired and available
+    #                           (localfs, amazon_s3, azure_blob, google_drive);
+    #                           fall back to FlexibleDataSource for any source
+    #                           where the native path is not available.
+    source_backend: str = Field(
+        "flexible",
+        description="CocoIndex source backend: flexible | cocoindex",
+    )
 
     # LangChain Property Graph Store Configuration
     # When use_langchain_pg=true the LangChain PG store is used for the graph
@@ -473,15 +545,16 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
         # e.g. OPENAI_EMBEDDING_MODEL=text-embedding-3-small when EMBEDDING_KIND=openai
         _emb_kind = (self.embedding_kind or "").lower()
         _emb_kind_env_map = {
-            "openai":      "OPENAI_EMBEDDING_MODEL",
-            "ollama":      "OLLAMA_EMBEDDING_MODEL",
-            "google":      "GOOGLE_EMBEDDING_MODEL",
-            "vertex":      "VERTEX_EMBEDDING_MODEL",
-            "azure":       "AZURE_EMBEDDING_MODEL",
-            "bedrock":     "BEDROCK_EMBEDDING_MODEL",
-            "fireworks":   "FIREWORKS_EMBEDDING_MODEL",
-            "openai_like": "OPENAI_LIKE_EMBEDDING_MODEL",
-            "litellm":     "LITELLM_EMBEDDING_MODEL",
+            "openai":           "OPENAI_EMBEDDING_MODEL",
+            "ollama":           "OLLAMA_EMBEDDING_MODEL",
+            "google":           "GOOGLE_EMBEDDING_MODEL",
+            "vertex":           "VERTEX_EMBEDDING_MODEL",
+            "azure":            "AZURE_EMBEDDING_MODEL",
+            "bedrock":          "BEDROCK_EMBEDDING_MODEL",
+            "fireworks":        "FIREWORKS_EMBEDDING_MODEL",
+            "openai_like":      "OPENAI_LIKE_EMBEDDING_MODEL",
+            "litellm":          "LITELLM_EMBEDDING_MODEL",
+            "huggingface":      "HUGGINGFACE_EMBEDDING_MODEL",
         }
         _emb_kind_var = _emb_kind_env_map.get(_emb_kind)
         if _emb_kind_var and os.getenv(_emb_kind_var):
@@ -901,6 +974,8 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
         _gb = (self.graph_backend or "llamaindex").strip().lower()
         if _gb == "langchain":
             self.use_langchain_pg = True
+        elif _gb == "cocoindex":
+            pass  # CocoIndex native backend — USE_LANGCHAIN_PG must not override it
         elif self.use_langchain_pg:
             self.graph_backend = "langchain"
         if self.use_langchain_pg and not self.langchain_pg_store_type:

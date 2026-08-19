@@ -10,6 +10,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +65,8 @@ class GCSSource(BaseDataSource):
         # Create passthrough extractor with progress tracking
         passthrough = PassthroughExtractor(progress_callback=progress_callback)
         
-        # Map all supported file types to passthrough extractor
-        file_extractor = {
-            ".pdf": passthrough,
-            ".docx": passthrough,
-            ".pptx": passthrough,
-            ".xlsx": passthrough,
-            ".doc": passthrough,
-            ".ppt": passthrough,
-            ".xls": passthrough,
-            ".txt": passthrough,
-            ".md": passthrough,
-            ".html": passthrough,
-            ".csv": passthrough,
-            ".png": passthrough,
-            ".jpg": passthrough,
-            ".jpeg": passthrough,
-        }
+        # Map all supported file types to passthrough extractor (not hardcoded here)
+        file_extractor = {ext: passthrough for ext in PASSTHROUGH_EXTENSIONS}
         
         # Initialize GCSReader with credentials and passthrough extractors
         reader_kwargs = {
@@ -105,7 +91,80 @@ class GCSSource(BaseDataSource):
         reader = GCSReader(**reader_kwargs)
         
         return reader, passthrough
-    
+
+    def get_placeholder_docs(self, extractor=None) -> List[Document]:
+        """
+        Return reader-level placeholder documents WITHOUT calling DocumentProcessor.
+
+        Parameters
+        ----------
+        extractor:
+            Optional custom extractor.  Pass ``BytesCaptureExtractor()`` from the
+            CocoIndex pipeline to capture raw bytes immediately.
+            When None, uses a plain PassthroughExtractor (returns path + _fs).
+        """
+        from llama_index.readers.gcs import GCSReader
+
+        actual_extractor = extractor or PassthroughExtractor()
+        file_extractor = {ext: actual_extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "bucket": self.bucket,
+            "file_extractor": file_extractor,
+            "recursive": True,
+        }
+        if self.prefix:
+            reader_kwargs["prefix"] = self.prefix
+        if self.service_account_key:
+            reader_kwargs["service_account_key"] = self.service_account_key
+        elif self.service_account_key_path:
+            reader_kwargs["service_account_key_path"] = self.service_account_key_path
+
+        reader = GCSReader(**reader_kwargs)
+        return reader.load_data()
+
+    def read_file_bytes(self, object_key: str) -> bytes:
+        """
+        Read the raw bytes of a single GCS object, reusing the source's cached
+        credentials/config and the LlamaIndex ``GCSReader`` restricted to one key.
+
+        NO new SDK code — uses the same reader machinery as the full listing with
+        a ``BytesCaptureExtractor`` that captures bytes in-line (via fsspec).
+
+        Parameters
+        ----------
+        object_key:
+            The GCS object key (without the ``bucket/`` prefix).
+
+        Returns
+        -------
+        Raw file bytes (``b""`` if the object could not be read).
+        """
+        from llama_index.readers.gcs import GCSReader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "bucket": self.bucket,
+            "key": object_key,  # single object — restricts reader to one key
+            "file_extractor": file_extractor,
+        }
+        if self.service_account_key:
+            reader_kwargs["service_account_key"] = self.service_account_key
+        elif self.service_account_key_path:
+            reader_kwargs["service_account_key_path"] = self.service_account_key_path
+
+        reader = GCSReader(**reader_kwargs)
+        docs = reader.load_data()
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("GCSSource.read_file_bytes: no bytes captured for key %s", object_key)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """Load files via GCSReader (with passthrough), then process with DocumentProcessor"""
         try:

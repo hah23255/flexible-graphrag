@@ -220,13 +220,30 @@ class CmisSource(BaseDataSource):
                         processed_doc = processed_docs[0]
                         
                         # Update metadata to include CMIS information
-                        processed_doc.metadata.update({
+                        cmis_obj = file_info.get('cmis_object')
+                        last_mod = ""
+                        if cmis_obj is not None:
+                            try:
+                                raw = cmis_obj.properties.get('cmis:lastModificationDate')
+                                if raw:
+                                    # May be a datetime or a string; normalise to ISO-8601
+                                    last_mod = raw.isoformat() if hasattr(raw, 'isoformat') else str(raw)
+                            except Exception:
+                                pass
+                        meta_update: dict = {
                             "source": "cmis",
                             "cmis_id": file_info['id'],
                             "file_name": file_info['name'],
                             "file_path": file_info['path'],
-                            "content_type": file_info['content_type']
-                        })
+                            "content_type": file_info['content_type'],
+                        }
+                        if last_mod:
+                            # Use both the CMIS property key and the generic key so that
+                            # downstream code (source.py _iter_cmis, detectors, etc.) can
+                            # find the date regardless of which key it looks up.
+                            meta_update["cmis:lastModificationDate"] = last_mod
+                            meta_update["modified_at"] = last_mod
+                        processed_doc.metadata.update(meta_update)
                         
                         documents.append(processed_doc)
                         
@@ -259,6 +276,7 @@ class CmisSource(BaseDataSource):
         """
         import tempfile
         import os
+        import asyncio
         
         files = self.list_files()
         documents = []
@@ -276,16 +294,34 @@ class CmisSource(BaseDataSource):
                     temp_file_path = self._download_document(file_info, temp_dir)
                     
                     # Process the downloaded file
-                    processed_doc = doc_processor.process_file(temp_file_path)
+                    processed_docs = asyncio.run(
+                        doc_processor.process_documents([temp_file_path])
+                    )
+                    if not processed_docs:
+                        raise ValueError(f"Failed to process document: {file_info['name']}")
+                    processed_doc = processed_docs[0]
                     
                     # Update metadata to include CMIS information
-                    processed_doc.metadata.update({
+                    cmis_obj = file_info.get('cmis_object')
+                    last_mod = ""
+                    if cmis_obj is not None:
+                        try:
+                            raw = cmis_obj.properties.get('cmis:lastModificationDate')
+                            if raw:
+                                last_mod = raw.isoformat() if hasattr(raw, 'isoformat') else str(raw)
+                        except Exception:
+                            pass
+                    meta_update: dict = {
                         "source": "cmis",
                         "cmis_id": file_info['id'],
                         "file_name": file_info['name'],
                         "file_path": file_info['path'],
-                        "content_type": file_info['content_type']
-                    })
+                        "content_type": file_info['content_type'],
+                    }
+                    if last_mod:
+                        meta_update["cmis:lastModificationDate"] = last_mod
+                        meta_update["modified_at"] = last_mod
+                    processed_doc.metadata.update(meta_update)
                     
                     documents.append(processed_doc)
                     

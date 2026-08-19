@@ -378,38 +378,48 @@ class GoogleDriveDetector(ChangeDetector):
                                         # Truly new file - CREATE
                                         logger.info(f"EVENT: CREATE detected for {file_name} (new file_id)")
                                         self.known_file_ids.add(file_id)  # Add to known files
-                                        try:
-                                            await self._process_via_backend(file_id, file_name)
-                                            logger.info(f"SUCCESS: Processed {file_name} via backend pipeline")
-                                        except Exception as e:
-                                            logger.error(f"ERROR: Failed to process {file_name} via backend: {e}")
+                                        if self.backend:
+                                            try:
+                                                await self._process_via_backend(file_id, file_name)
+                                                logger.info(f"SUCCESS: Processed {file_name} via backend pipeline")
+                                            except Exception as e:
+                                                logger.error(f"ERROR: Failed to process {file_name} via backend: {e}")
+                                        else:
+                                            # CocoIndex mode: yield CREATE so FlexibleMapView.watch() ingests it
+                                            logger.info(f"EVENT: new file {file_name} (CocoIndex mode): yielding CREATE")
+                                            yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                                     else:
                                         # Already known - treat as MODIFY (DELETE + ADD)
                                         logger.info(f"EVENT: MODIFY detected for {file_name} (known file_id)")
-                                        logger.info(f"MODIFY: Emitting DELETE event with callback for {file_name}")
-                                        
-                                        async def add_callback():
-                                            logger.info(f"MODIFY: DELETE completed, now processing ADD for {file_name}")
-                                            try:
-                                                await self._process_via_backend(file_id, file_name)
-                                                logger.info(f"SUCCESS: MODIFY completed for {file_name}")
-                                            except Exception as e:
-                                                logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
-                                        
-                                        delete_metadata = FileMetadata(
+                                        _mod_meta = FileMetadata(
                                             source_type='google_drive',
                                             path=file_id,
                                             ordinal=event.metadata.ordinal,
                                             extra={'file_id': file_id}
                                         )
-                                        delete_event = ChangeEvent(
-                                            metadata=delete_metadata,
-                                            change_type=ChangeType.DELETE,
-                                            timestamp=event.timestamp,
-                                            is_modify_delete=True,
-                                            modify_callback=add_callback
-                                        )
-                                        yield delete_event
+                                        if self.backend:
+                                            logger.info(f"MODIFY: Emitting DELETE event with callback for {file_name}")
+                                            async def add_callback():
+                                                logger.info(f"MODIFY: DELETE completed, now processing ADD for {file_name}")
+                                                try:
+                                                    await self._process_via_backend(file_id, file_name)
+                                                    logger.info(f"SUCCESS: MODIFY completed for {file_name}")
+                                                except Exception as e:
+                                                    logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
+                                            yield ChangeEvent(
+                                                metadata=_mod_meta,
+                                                change_type=ChangeType.DELETE,
+                                                timestamp=event.timestamp,
+                                                is_modify_delete=True,
+                                                modify_callback=add_callback
+                                            )
+                                        else:
+                                            # CocoIndex mode: DELETE then CREATE
+                                            # DELETE uses _mod_meta (key only); CREATE uses event.metadata
+                                            # so that file_name/file_path propagate correctly for download.
+                                            logger.info(f"EVENT: modify for {file_name} (CocoIndex mode): DELETE then CREATE")
+                                            yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                            yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                                 else:
                                     logger.warning(f"SKIP: No file_id for {file_name}")
                             
@@ -430,40 +440,48 @@ class GoogleDriveDetector(ChangeDetector):
                                         # Truly new file - treat as CREATE (not MODIFY)
                                         logger.info(f"EVENT: CREATE detected for {file_name} (new file_id, reported as UPDATE)")
                                         self.known_file_ids.add(file_id)  # Add to known files
-                                        try:
-                                            await self._process_via_backend(file_id, file_name)
-                                            logger.info(f"SUCCESS: Processed {file_name} via backend pipeline")
-                                        except Exception as e:
-                                            logger.error(f"ERROR: Failed to process {file_name} via backend: {e}")
+                                        if self.backend:
+                                            try:
+                                                await self._process_via_backend(file_id, file_name)
+                                                logger.info(f"SUCCESS: Processed {file_name} via backend pipeline")
+                                            except Exception as e:
+                                                logger.error(f"ERROR: Failed to process {file_name} via backend: {e}")
+                                        else:
+                                            # CocoIndex mode: yield CREATE so FlexibleMapView.watch() ingests it
+                                            logger.info(f"EVENT: new file {file_name} from UPDATE (CocoIndex mode): yielding CREATE")
+                                            yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                                     else:
                                         # Already known - true MODIFY (DELETE + ADD)
                                         logger.info(f"EVENT: MODIFY detected for {file_name}")
-                                        logger.info(f"MODIFY: Emitting DELETE event with callback for {file_name}")
-                                        
-                                        # Create callback for ADD operation (to be called after DELETE completes)
-                                        async def add_callback():
-                                            logger.info(f"MODIFY: DELETE completed, now processing ADD for {file_name}")
-                                            try:
-                                                await self._process_via_backend(file_id, file_name)
-                                                logger.info(f"SUCCESS: MODIFY completed for {file_name}")
-                                            except Exception as e:
-                                                logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
-                                        
-                                        # Create DELETE event with callback
-                                        delete_metadata = FileMetadata(
+                                        _upd_meta = FileMetadata(
                                             source_type='google_drive',
-                                            path=file_id,  # Use file ID as path
+                                            path=file_id,
                                             ordinal=event.metadata.ordinal,
                                             extra={'file_id': file_id}
                                         )
-                                        delete_event = ChangeEvent(
-                                            metadata=delete_metadata,
-                                            change_type=ChangeType.DELETE,
-                                            timestamp=event.timestamp,
-                                            is_modify_delete=True,  # Mark as part of MODIFY
-                                            modify_callback=add_callback  # Callback for ADD
-                                        )
-                                        yield delete_event
+                                        if self.backend:
+                                            logger.info(f"MODIFY: Emitting DELETE event with callback for {file_name}")
+                                            async def add_callback():
+                                                logger.info(f"MODIFY: DELETE completed, now processing ADD for {file_name}")
+                                                try:
+                                                    await self._process_via_backend(file_id, file_name)
+                                                    logger.info(f"SUCCESS: MODIFY completed for {file_name}")
+                                                except Exception as e:
+                                                    logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
+                                            yield ChangeEvent(
+                                                metadata=_upd_meta,
+                                                change_type=ChangeType.DELETE,
+                                                timestamp=event.timestamp,
+                                                is_modify_delete=True,
+                                                modify_callback=add_callback
+                                            )
+                                        else:
+                                            # CocoIndex mode: DELETE then CREATE
+                                            # DELETE uses _upd_meta (key only); CREATE uses event.metadata
+                                            # so that file_name/file_path propagate correctly for download.
+                                            logger.info(f"EVENT: modify for {file_name} (CocoIndex mode): DELETE then CREATE")
+                                            yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                            yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                                 else:
                                     logger.warning(f"SKIP: No file_id for {file_name}")
                     

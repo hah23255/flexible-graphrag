@@ -1,6 +1,6 @@
 [project]
 name = "flexible-graphrag"
-version = "0.7.2"
+version = "0.8.0"
 description = "Open source AI context platform: document processing, knowledge graph auto-building, ontologies, GraphRAG/RAG, hybrid search (vector, property graph, RDF/SPARQL, fulltext), 13 LLM providers, 15 property graph DBs, 4 RDF triple stores, 10 vector DBs, LlamaIndex + LangChain, FastAPI, MCP server"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -70,10 +70,32 @@ dependencies = [
     "passlib[bcrypt]",
     "python-dotenv",
     "nest-asyncio",
+    "truststore",            # verify TLS against the OS cert store (AV/proxy re-signing)
     "wikipedia",
     "cmislib",
     "python-alfresco-api>=1.2.1",
-    "nuxeo[oauth2]",                # Nuxeo REST client (basic/oauth2/token) for the Nuxeo data source
+    # Nuxeo REST client (basic/oauth2/token) for the Nuxeo data source.
+    #
+    # NOT nuxeo[oauth2].  That extra is `authlib` + `jwt`, and the `jwt` there is
+    # GehirnInc python-jwt, which installs the same top-level `jwt` module name
+    # as PyJWT and overwrites it.  That breaks every PyJWT consumer in the venv:
+    # python-arango (so langchain-arangodb, so the ArangoDB graph store), authlib
+    # (which the same extra installs), and Langflow.  The two cannot coexist, and
+    # no pin or override can fix it -- only one package can own `jwt`.
+    #
+    # We install the extra's two halves ourselves instead: authlib below, and
+    # PyJWT in place of GehirnInc's.  nuxeo/auth/oauth2.py uses exactly three
+    # symbols from `jwt` (JWT, jwk_from_dict, JWTDecodeError) in one method, and
+    # sources/nuxeo.py::_ensure_nuxeo_jwt_compat() implements all three on top of
+    # PyJWT -- so all three auth methods, including client-side access-token
+    # validation, are fully functional.
+    "nuxeo",
+    "authlib>=1.6.7",               # OAuth2 helper from nuxeo's oauth2 extra (PyJWT-compatible)
+    # PyJWT must be an explicit base dependency, not a transitive one: the Nuxeo
+    # compat layer above is written against its API (PyJWK.from_dict,
+    # PyJWK.algorithm_name, jwt.exceptions.PyJWTError).  [crypto] pulls
+    # `cryptography`, needed to verify the RS256 keys Nuxeo publishes.
+    "pyjwt[crypto]>=2.10",
     "kafka-python-ng",              # Nuxeo real-time change detection via the audit Kafka stream
     "docling-slim[standard]",
     "llama-cloud>=2.1",      # v2 unified SDK — LlamaParse now uses AsyncLlamaCloud from this package
@@ -375,6 +397,21 @@ langflow = [
     "langflow>=1.0.0",
 ]
 
+# CocoIndex 1.x integration — incremental pipeline + target/source connectors.
+# Install: uv pip install -e ".[cocoindex]"
+cocoindex = [
+    "cocoindex>=1.0.16",
+]
+
+# Install: uv pip install -e ".[huggingface]"
+# Enables EMBEDDING_KIND=huggingface for the main LI/LC pipeline (any HuggingFace Hub model).
+# (COCOINDEX_EMBEDDING_KIND=sentence_transformer is already covered by cocoindex[sentence-transformers].)
+huggingface = [
+    "sentence-transformers>=3.0.0",
+    "llama-index-embeddings-huggingface>=0.3.0",  # LI: HuggingFaceEmbedding
+    "langchain-huggingface>=0.1.0",               # LC: HuggingFaceEmbeddings
+]
+
 [project.urls]
 Homepage = "https://github.com/stevereiner/flexible-graphrag"
 Documentation = "https://stevereiner.github.io/flexible-graphrag/"
@@ -428,6 +465,7 @@ only-include = [
     "stores",
     "llamaindex",
     "langflow_components",
+    "cocoindex_integration",
 ]
 
 # App/deploy files shipped inside the wheel (previously [tool.setuptools.data-files]).
@@ -442,7 +480,7 @@ include = [
     "*.py",
     "adapters/", "ingest/", "process/", "sources/", "observability/",
     "incremental_updates/", "rdf/", "langchain/", "stores/", "llamaindex/",
-    "langflow_components/",
+    "langflow_components/", "cocoindex_integration/",
     "Dockerfile", "env-sample.txt", "uv.toml", "extras-overrides.txt",
     "pyproject.toml", "README.md",
 ]

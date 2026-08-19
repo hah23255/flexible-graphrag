@@ -24,10 +24,17 @@ export const NuxeoSourceForm: React.FC<NuxeoSourceFormProps> = ({
     () => import.meta.env.VITE_NUXEO_BASE_URL || 'http://localhost:8081/nuxeo',
     []
   );
+  // The browser cannot read the backend's .env, so NUXEO_PATH there has no
+  // effect here -- set VITE_NUXEO_PATH at build time to point the dialog at
+  // your own workspace.  Default is a workspace, not the folder above it.
+  const defaultPath = useMemo(
+    () => import.meta.env.VITE_NUXEO_PATH || '/default-domain/workspaces/GraphRAG',
+    []
+  );
 
   const [url, setUrl] = useState<string>(value?.url ?? defaultUrl);
   const [authMethod, setAuthMethod] = useState<AuthMethod>(value?.auth_method ?? 'basic');
-  const [path, setPath] = useState<string>(value?.path ?? '/default-domain/workspaces');
+  const [path, setPath] = useState<string>(value?.path ?? defaultPath);
 
   // Basic auth
   const [username, setUsername] = useState<string>(value?.username ?? 'Administrator');

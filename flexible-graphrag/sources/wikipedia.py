@@ -5,6 +5,7 @@ Enhanced with Neo4j LLM Graph Builder URL parsing approach.
 
 from typing import List, Dict, Any, Optional, Iterator
 import logging
+import os
 import re
 from urllib.parse import unquote
 from llama_index.core import Document
@@ -12,6 +13,41 @@ from llama_index.core import Document
 from .base import BaseDataSource
 
 logger = logging.getLogger(__name__)
+
+# The `wikipedia` package (also used internally by LlamaIndex's WikipediaReader)
+# ships a shared default User-Agent that Wikimedia now rate-limits: the API
+# answers HTTP 429 with a text/plain body, which surfaces as the misleading
+# "Expecting value: line 1 column 1 (char 0)" JSON decode error.
+# Wikimedia requires a descriptive UA identifying the application.
+# See https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits
+DEFAULT_WIKIPEDIA_USER_AGENT = (
+    "flexible-graphrag/0.6 "
+    "(https://github.com/stevereiner/flexible-graphrag) python-requests"
+)
+
+_user_agent_configured = False
+
+
+def _configure_wikipedia_user_agent() -> None:
+    """Set a descriptive User-Agent on the global `wikipedia` module (once).
+
+    Must run before any WikipediaReader / wikipedia call, since both share the
+    same module-level UA. Override with the WIKIPEDIA_USER_AGENT env var.
+    """
+    global _user_agent_configured
+    if _user_agent_configured:
+        return
+    _user_agent_configured = True
+    try:
+        import wikipedia as _wikipedia
+
+        ua = os.getenv("WIKIPEDIA_USER_AGENT") or DEFAULT_WIKIPEDIA_USER_AGENT
+        _wikipedia.set_user_agent(ua)
+        logger.info(f"Wikipedia User-Agent set to: {ua}")
+    except ImportError:
+        logger.debug("wikipedia library not installed - User-Agent not configured")
+    except Exception as e:
+        logger.warning(f"Could not set Wikipedia User-Agent: {e}")
 
 
 class WikipediaSource(BaseDataSource):
@@ -26,6 +62,10 @@ class WikipediaSource(BaseDataSource):
         # Parse the query to extract proper Wikipedia title and language
         self.query, self.language = self._parse_wikipedia_input(self.raw_query, self.language)
         
+        # WikipediaReader calls the `wikipedia` package internally, so the UA
+        # has to be set before the reader runs, not just on the fallback path.
+        _configure_wikipedia_user_agent()
+
         # Import LlamaIndex Wikipedia reader
         try:
             from llama_index.readers.wikipedia import WikipediaReader
@@ -46,6 +86,7 @@ class WikipediaSource(BaseDataSource):
             self._wikipedia_import_attempted = True
             try:
                 import wikipedia
+                _configure_wikipedia_user_agent()
                 self._wikipedia = wikipedia
                 logger.info("Wikipedia search library lazy-loaded for enhanced title resolution")
             except ImportError as e:

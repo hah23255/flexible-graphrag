@@ -148,6 +148,11 @@ python ..\scripts\cleanup.py
 python ../scripts/cleanup.py
 ```
 
+!!! warning
+    **Cleanup is irreversible.** All ingested data is permanently deleted. Use selective flags
+    (`--graph`, `--vector`, `--search`, etc.) to wipe only the stores you need to reset.
+    See the [Cleanup Reference](../DEVELOPER/DEVELOPER-TESTING-CLEANUP.md) for full details.
+
 !!! note
     `cleanup.py` uses internal modules and must be run with a source install (`uv pip install -e .`).
     If you only have the PyPI install, clean up via each database's dashboard instead.

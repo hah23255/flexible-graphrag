@@ -6,6 +6,8 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Set
 
+from ._graph_docs import normalize_graph_documents
+
 logger = logging.getLogger(__name__)
 
 _MAX_ID_LEN = 128       # HugeGraph custom string vertex ID length limit (conservative)
@@ -480,6 +482,30 @@ Cypher query:"""
 
         _created.add(cache_key)
 
+    def _ensure_secondary_index(
+        self,
+        schema,
+        index_name: str,
+        label: str,
+        prop: str,
+        _created: Optional[Set[str]] = None,
+    ) -> None:
+        """Create a secondary index on ``label.prop`` if it does not exist.
+
+        HugeGraph rejects any query filtering on a non-indexed property
+        (``Don't accept query based on properties [x] that are not indexed``),
+        so every property used in a WHERE clause needs one of these.
+        """
+        cache_key = f"IL:{index_name}"
+        if _created is not None and cache_key in _created:
+            return
+        try:
+            schema.indexLabel(index_name).onV(label).by(prop).secondary().ifNotExist().create()
+        except Exception as exc:
+            logger.debug("HugeGraph indexLabel %r on %s.%s: %s", index_name, label, prop, exc)
+        if _created is not None:
+            _created.add(cache_key)
+
     def _ensure_edge_label(
         self,
         schema,
@@ -530,6 +556,12 @@ Cypher query:"""
 
         _schema_created: Set[str] = set()
 
+        # Fold relationship endpoints into gd.nodes and stamp name/ref_doc_id.
+        # HugeGraph rejects undeclared properties, so this must run before
+        # all_props is collected below — otherwise an endpoint-only ref_doc_id
+        # would never get a property key and addVertex would 400.
+        normalize_graph_documents(graph_docs)
+
         # ---- 1. Collect all property names from the batch ---------------
         all_props: Set[str] = {"name", "node_type"}
         for gd in graph_docs:
@@ -579,13 +611,25 @@ Cypher query:"""
                 except Exception as exc:
                     logger.debug("HugeGraph edgeLabel append %r.%r: %s", edge_label, prop, exc)
 
-        # ---- 5b. Secondary index on __Entity__.name (enables WHERE n.name = ...) ---
+        # ---- 5b. Secondary indexes (HugeGraph refuses WHERE on unindexed props) ---
+        self._ensure_secondary_index(
+            schema, "entity_by_name", "__Entity__", "name", _schema_created
+        )
+        # ref_doc_id index is what makes delete() (incremental modify/delete) work.
+        self._ensure_property_key(schema, "ref_doc_id", _schema_created)
         try:
-            schema.indexLabel("entity_by_name").onV("__Entity__").by("name").secondary().ifNotExist().create()
+            schema.vertexLabel("__Entity__").properties("ref_doc_id").nullableKeys("ref_doc_id").append()
         except Exception as exc:
-            logger.debug("HugeGraph indexLabel entity_by_name: %s", exc)
+            logger.debug("HugeGraph __Entity__ append ref_doc_id: %s", exc)
+        self._ensure_secondary_index(
+            schema, "entity_by_ref_doc_id", "__Entity__", "ref_doc_id", _schema_created
+        )
 
         # ---- 6. Add vertices (batch) ------------------------------------
+        # Endpoints were folded into gd.nodes by normalize_graph_documents (see
+        # the call at the top of this method), so this loop covers them — as does
+        # the all_props collection in step 1, which is what declares their
+        # ref_doc_id property key.
         vertex_batch: List[Any] = []
         vertex_ids: Set[str] = set()
 
@@ -597,7 +641,7 @@ Cypher query:"""
                 vertex_ids.add(vid)
                 props: Dict[str, str] = {
                     "name": _safe_val(node.properties.get("name", node.id)),
-                    "node_type": _safe_val(node.type),
+                    "node_type": _safe_val(node.type or "Entity"),
                 }
                 for k, v in node.properties.items():
                     safe_k = _safe_label(k)
@@ -613,18 +657,32 @@ Cypher query:"""
                 logger.debug("HugeGraph addVertex id=%r: %s", vid, exc)
 
         # ---- 7. Add source document vertices ----------------------------
-        chunk_vertex_ids: Dict[str, str] = {}
+        # Prefix chunk IDs so they never collide with __Entity__ custom IDs
+        # (LLM often extracts the file path as an entity → same _safe_id → 400).
+        chunk_vertex_ids: Dict[int, str] = {}
         if include_source:
+            self._ensure_property_key(schema, "ref_doc_id", _schema_created)
+            try:
+                schema.vertexLabel("__Chunk__").properties("ref_doc_id").nullableKeys("ref_doc_id").append()
+            except Exception as exc:
+                logger.debug("HugeGraph __Chunk__ append ref_doc_id: %s", exc)
+            self._ensure_secondary_index(
+                schema, "chunk_by_ref_doc_id", "__Chunk__", "ref_doc_id", _schema_created
+            )
             for gd in graph_docs:
                 if gd.source is None:
                     continue
-                src_path = gd.source.metadata.get("file_path") or gd.source.metadata.get("source", "")
-                chunk_vid = _safe_id(src_path or gd.source.page_content[:64])
+                src_meta = gd.source.metadata or {}
+                src_path = src_meta.get("file_path") or src_meta.get("source", "")
+                chunk_vid = "chunk__" + _safe_id(src_path or gd.source.page_content[:64])
                 chunk_vertex_ids[id(gd)] = chunk_vid
+                _rid = src_meta.get("ref_doc_id") or src_meta.get("doc_id") or ""
                 chunk_props = {
                     "source_id": _safe_val(src_path),
                     "source_text": _safe_val(gd.source.page_content[:512]),
                 }
+                if _rid:
+                    chunk_props["ref_doc_id"] = _safe_val(_rid)
                 try:
                     graph_api.addVertex("__Chunk__", chunk_props, id=chunk_vid)
                 except Exception as exc:
@@ -673,22 +731,71 @@ Cypher query:"""
         )
 
     def delete(self, ref_doc_id: str) -> None:
-        """Delete all ``__Entity__`` nodes tagged with *ref_doc_id* from HugeGraph.
+        """Delete all ``__Entity__`` / ``__Chunk__`` nodes tagged with *ref_doc_id*.
 
         Uses the openCypher endpoint via :meth:`_cypher_request`.
         HugeGraph UNION rules apply (no UNION across delete branches) so we
-        issue a single query matching all entity types by ``ref_doc_id``.
+        issue separate queries.  ``ref_doc_id`` is JSON-escaped so Windows
+        backslashes in paths do not break Cypher string literals.
         """
-        _rid = ref_doc_id.replace("'", "\\'")
-        # DETACH DELETE removes the node and all incident edges automatically.
-        cypher = (
-            f"MATCH (n:__Entity__) WHERE n.ref_doc_id = '{_rid}' DETACH DELETE n"
-        )
+        import json as _json
+
+        # HugeGraph refuses WHERE on unindexed properties.  Graphs written by an
+        # earlier version have no ref_doc_id index, so create it here too — the
+        # call is idempotent and cheap.
+        self._ensure_ref_doc_id_indexes()
+
+        _rid_lit = _json.dumps(ref_doc_id)  # "..." with \\ escaped
+        cyphers = [
+            f"MATCH (n:__Entity__) WHERE n.ref_doc_id = {_rid_lit} DETACH DELETE n",
+            f"MATCH (c:__Chunk__) WHERE c.ref_doc_id = {_rid_lit} DETACH DELETE c",
+        ]
         try:
-            self._cypher_request(cypher)
-            logger.info("HugeGraph: deleted __Entity__ nodes for ref_doc_id=%s", ref_doc_id)
+            for cypher in cyphers:
+                self._cypher_request(cypher)
         except Exception as exc:
             logger.warning("HugeGraph delete failed for ref_doc_id=%s: %s", ref_doc_id, exc)
+            return
+
+        # _cypher_request swallows server-side errors, so confirm the nodes are
+        # actually gone rather than reporting a delete that silently no-opped.
+        leftover = self._cypher_request(
+            f"MATCH (n) WHERE n.ref_doc_id = {_rid_lit} RETURN count(n) AS cnt"
+        )
+        remaining = 0
+        if leftover:
+            row = leftover[0]
+            remaining = int(row.get("cnt", 0)) if isinstance(row, dict) else 0
+        if remaining:
+            logger.warning(
+                "HugeGraph: %d node(s) still tagged ref_doc_id=%s after delete",
+                remaining,
+                ref_doc_id,
+            )
+        else:
+            logger.info(
+                "HugeGraph: deleted __Entity__/__Chunk__ nodes for ref_doc_id=%s",
+                ref_doc_id,
+            )
+
+    def _ensure_ref_doc_id_indexes(self) -> None:
+        """Create the ``ref_doc_id`` property key + secondary indexes (idempotent)."""
+        try:
+            schema = self._get_pyhugeclient().schema()
+        except Exception as exc:
+            logger.debug("HugeGraph: schema client unavailable for index setup: %s", exc)
+            return
+        created: Set[str] = set()
+        self._ensure_property_key(schema, "ref_doc_id", created)
+        for label, index_name in (
+            ("__Entity__", "entity_by_ref_doc_id"),
+            ("__Chunk__", "chunk_by_ref_doc_id"),
+        ):
+            try:
+                schema.vertexLabel(label).properties("ref_doc_id").nullableKeys("ref_doc_id").append()
+            except Exception as exc:
+                logger.debug("HugeGraph %s append ref_doc_id: %s", label, exc)
+            self._ensure_secondary_index(schema, index_name, label, "ref_doc_id", created)
 
     def normalize_entity_names(self) -> None:
         """Copy the vertex custom-string ID into the ``name`` property for any

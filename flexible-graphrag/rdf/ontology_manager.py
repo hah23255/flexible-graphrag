@@ -69,6 +69,8 @@ class OntologyManager:
         self.entities: Dict[str, OntologyEntity] = {}
         self.relations: Dict[str, OntologyRelation] = {}
         self.properties: Dict[str, List[str]] = {}  # entity_type -> [property_names]
+        #: property_name -> rdfs:comment, used to describe properties to the LLM
+        self.property_descriptions: Dict[str, str] = {}
         self.relation_properties: Dict[str, List[str]] = {}  # relation_type -> [property_names]
         self.validation_schema: List[tuple] = []  # List of (subject, predicate, object) tuples
     
@@ -192,17 +194,28 @@ class OntologyManager:
         PREFIX owl: <http://www.w3.org/2002/07/owl#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-        SELECT DISTINCT ?prop ?label ?domain ?range WHERE {
+        SELECT DISTINCT ?prop ?label ?domain ?range ?comment WHERE {
             ?prop a owl:DatatypeProperty .
             OPTIONAL { ?prop rdfs:label ?label }
             OPTIONAL { ?prop rdfs:domain ?domain }
             OPTIONAL { ?prop rdfs:range ?range }
+            OPTIONAL { ?prop rdfs:comment ?comment }
         }
         """
-        
+
         for row in self.graph.query(datatype_property_query):
             prop_name = self._uri_to_name(row.prop)
             domain_name = self._uri_to_name(row.domain) if row.domain else None
+
+            # Keep rdfs:comment: LlamaIndex's SchemaLLMPathExtractor accepts
+            # possible_entity_props / possible_relation_props as (name, description)
+            # tuples and puts the description straight into the prompt
+            # ("Property label `X` with description (...)").  Passing bare names
+            # makes it emit the *data type* there instead, which tells the model
+            # nothing about what to extract — a likely reason properties come
+            # back empty.  See schema_manager.create_extractor().
+            if getattr(row, "comment", None):
+                self.property_descriptions[prop_name] = str(row.comment)
             
             # Extract XSD type from range
             prop_type = "string"  # Default

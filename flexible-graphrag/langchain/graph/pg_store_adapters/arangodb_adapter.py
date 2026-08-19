@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
+from ._graph_docs import normalize_graph_documents
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -83,54 +85,59 @@ class ArangoDBAdapter:
         return self.lc_graph
 
     def add_graph_documents(self, graph_documents, **kwargs):
-        """Write graph documents, creating a named ArangoDB graph if configured."""
+        """Write graph documents, creating a named ArangoDB graph if configured.
+
+        ``langchain_arangodb`` creates endpoint-only nodes via ``_get_node_key``
+        without going through ``doc.nodes``, so relationship endpoints never
+        received a ``ref_doc_id`` and survived incremental delete.  The shared
+        normalizer folds them into ``doc.nodes`` and stamps the delete key.
+        """
         graph_name = self.config.get("graph_name")
         if graph_name:
             kwargs.setdefault("graph_name", graph_name)
+
+        normalize_graph_documents(graph_documents)
+
         self.lc_graph.add_graph_documents(graph_documents, **kwargs)
 
     def delete(self, ref_doc_id: str) -> None:
-        """Delete all entity nodes tagged with *ref_doc_id* using AQL.
+        """Delete SOURCE + ENTITY nodes/edges for *ref_doc_id* using AQL.
 
         ArangoDB uses AQL (not Cypher), so the default Cypher delete in
-        ``LangChainPGAdapter`` would fail.  This override queries the
-        *_ENTITY and *_LINKS_TO collections directly.
+        ``LangChainPGAdapter`` would fail.
 
         IMPORTANT: always use AQL bind variables (@rid) rather than string
         interpolation.  AQL interprets backslash sequences in string literals
         (e.g. \\n as newline, \\i as invalid escape) so a Windows path like
         'c:\\newdev3\\...' will NOT match what was stored — the filter silently
         returns 0 rows.  Bind variables bypass this entirely.
+
+        Order matters: remove this document's ``*_SOURCE`` doc and its
+        ``*_HAS_SOURCE`` edges first, then the entities stamped with this rid,
+        then sweep entities left with **no** remaining source link.  Deleting
+        everything reachable from the source instead would take out entities
+        that other documents still reference.
+
+        Each step is a separate query — AQL restricts reading a collection that
+        is modified in the same query, so a combined nested-``REMOVE`` version
+        can be rejected outright.
         """
         graph_name = self.config.get("graph_name", "knowledge_graph")
         entity_col = f"{graph_name}_ENTITY"
         # langchain-arangodb names the edge collection *_LINKS_TO (not *_RELATIONSHIP)
         # when use_one_entity_collection=True (the default).
         relationship_col = f"{graph_name}_LINKS_TO"
+        source_col = f"{graph_name}_SOURCE"
+        has_source_col = f"{graph_name}_HAS_SOURCE"
 
         # Access the underlying python-arango db object directly for bind-var support.
         # ArangoGraph stores it as self.__db which Python mangles to _ArangoGraph__db.
         _db = getattr(self.lc_graph, "_ArangoGraph__db", None)
 
         if _db is not None:
-            # Remove dangling edges first (edges don't carry ref_doc_id; identify them
-            # by looking up each edge's source/target vertex).
-            edge_aql = (
-                f"FOR e IN `{relationship_col}` "
-                f"  LET from_doc = DOCUMENT(e._from) "
-                f"  LET to_doc   = DOCUMENT(e._to) "
-                f"  FILTER from_doc.ref_doc_id == @rid OR to_doc.ref_doc_id == @rid "
-                f"  REMOVE e IN `{relationship_col}` OPTIONS {{ignoreErrors: true}}"
-            )
-            node_aql = (
-                f"FOR n IN `{entity_col}` "
-                f"  FILTER n.ref_doc_id == @rid "
-                f"  REMOVE n IN `{entity_col}` OPTIONS {{ignoreErrors: true}}"
-            )
-            # Debug: count matching nodes before deletion
             count_aql = (
                 f"RETURN LENGTH(FOR n IN `{entity_col}` "
-                f"  FILTER n.ref_doc_id == @rid RETURN 1)"
+                f"  FILTER n.ref_doc_id == @rid OR n.doc_id == @rid RETURN 1)"
             )
             try:
                 count_cursor = _db.aql.execute(count_aql, bind_vars={"rid": ref_doc_id})
@@ -138,18 +145,78 @@ class ArangoDBAdapter:
                 logger.info("ArangoDB: %d entity node(s) match ref_doc_id for deletion", count)
             except Exception as exc:
                 logger.debug("ArangoDB count check failed: %s", exc)
-            for aql in [edge_aql, node_aql]:
+
+            _sids = (
+                f"LET sids = (FOR s IN `{source_col}` "
+                f"  FILTER s.ref_doc_id == @rid OR s.doc_id == @rid RETURN s._id) "
+            )
+            steps = [
+                # 1) Scoped orphan sweep — must run BEFORE the HAS_SOURCE edges are
+                #    removed.  Candidates are only entities linked to *this*
+                #    document's sources; any that another document also links to
+                #    keeps that edge and survives.  Reads SOURCE/HAS_SOURCE and
+                #    writes ENTITY — different collections, so this is legal AQL.
+                (
+                    _sids
+                    + f"FOR e IN `{has_source_col}` "
+                    f"  FILTER e._to IN sids "
+                    f"  LET others = LENGTH(FOR e2 IN `{has_source_col}` "
+                    f"    FILTER e2._from == e._from AND e2._to NOT IN sids "
+                    f"    LIMIT 1 RETURN 1) "
+                    f"  FILTER others == 0 "
+                    f"  REMOVE PARSE_IDENTIFIER(e._from).key IN `{entity_col}` "
+                    f"    OPTIONS {{ignoreErrors: true}}"
+                ),
+                # 2) HAS_SOURCE edges pointing at this document's SOURCE docs.
+                (
+                    _sids
+                    + f"FOR e IN `{has_source_col}` "
+                    f"  FILTER e._to IN sids "
+                    f"  REMOVE e IN `{has_source_col}` OPTIONS {{ignoreErrors: true}}"
+                ),
+                # 3) The SOURCE docs themselves.
+                (
+                    f"FOR s IN `{source_col}` "
+                    f"  FILTER s.ref_doc_id == @rid OR s.doc_id == @rid "
+                    f"  REMOVE s IN `{source_col}` OPTIONS {{ignoreErrors: true}}"
+                ),
+                # 4) LINKS_TO edges touching entities stamped with this rid.
+                (
+                    f"FOR e IN `{relationship_col}` "
+                    f"  LET from_doc = DOCUMENT(e._from) "
+                    f"  LET to_doc   = DOCUMENT(e._to) "
+                    f"  FILTER (from_doc != null AND "
+                    f"          (from_doc.ref_doc_id == @rid OR from_doc.doc_id == @rid)) "
+                    f"      OR (to_doc != null AND "
+                    f"          (to_doc.ref_doc_id == @rid OR to_doc.doc_id == @rid)) "
+                    f"  REMOVE e IN `{relationship_col}` OPTIONS {{ignoreErrors: true}}"
+                ),
+                # 5) ENTITY nodes stamped with this rid (the normalizer stamps
+                #    relationship endpoints too, so this is now complete).
+                (
+                    f"FOR n IN `{entity_col}` "
+                    f"  FILTER n.ref_doc_id == @rid OR n.doc_id == @rid "
+                    f"  REMOVE n IN `{entity_col}` OPTIONS {{ignoreErrors: true}}"
+                ),
+                # 6) LINKS_TO edges left dangling by the removals above.
+                (
+                    f"FOR e IN `{relationship_col}` "
+                    f"  FILTER DOCUMENT(e._from) == null OR DOCUMENT(e._to) == null "
+                    f"  REMOVE e IN `{relationship_col}` OPTIONS {{ignoreErrors: true}}"
+                ),
+            ]
+            for aql in steps:
                 try:
                     _db.aql.execute(aql, bind_vars={"rid": ref_doc_id})
                 except Exception as exc:
-                    logger.debug("ArangoDB delete (bind-var) failed (non-fatal): %s", exc)
+                    logger.warning("ArangoDB delete step failed: %s — AQL: %s", exc, aql)
         else:
             # Fallback: use langchain-arangodb query() with a simpler AQL.
             # This path may fail for ref_doc_ids containing backslashes (Windows paths).
             _rid = ref_doc_id.replace("'", "\\'")
             node_aql = (
                 f"FOR n IN `{entity_col}` "
-                f"  FILTER n.ref_doc_id == '{_rid}' "
+                f"  FILTER n.ref_doc_id == '{_rid}' OR n.doc_id == '{_rid}' "
                 f"  REMOVE n IN `{entity_col}` OPTIONS {{ignoreErrors: true}}"
             )
             try:

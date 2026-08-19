@@ -1,26 +1,15 @@
-"""
-langchain.graph.rdf_store_adapters
-=====================================================
+"""langchain.graph.rdf_store_adapters — per-backend LC RDF/SPARQL adapters.
 
-One module per LangChain RDF (SPARQL) store adapter. Each module wraps a
-SPARQL endpoint and builds a QA chain for natural-language-to-SPARQL retrieval.
-
-Modules
--------
+Adapters available
+------------------
 graphdb_langchain_adapter    GraphDBLangChainAdapter   — Ontotext GraphDB (RDF4J)
 fuseki_langchain_adapter     FusekiLangChainAdapter    — Apache Jena Fuseki
 oxigraph_langchain_adapter   OxigraphLangChainAdapter  — Oxigraph
-neptune_rdf_adapter          NeptuneRDFAdapter         — Amazon Neptune RDF (SPARQL/IAM)
+neptune_rdf_adapter          NeptuneRDFAdapter         — Amazon Neptune RDF
+
+Each adapter module is loaded lazily by :func:`build_rdf_store_adapter`
+(in :mod:`adapters.graph.rdf_store_adapter`) based on the configured
+``RDF_GRAPH_DB`` value.  Nothing is imported here at package load time.
 """
 
-from .graphdb_langchain_adapter import GraphDBLangChainAdapter
-from .fuseki_langchain_adapter import FusekiLangChainAdapter
-from .oxigraph_langchain_adapter import OxigraphLangChainAdapter
-from .neptune_rdf_adapter import NeptuneRDFAdapter
-
-__all__ = [
-    "GraphDBLangChainAdapter",
-    "FusekiLangChainAdapter",
-    "OxigraphLangChainAdapter",
-    "NeptuneRDFAdapter",
-]
+__all__: list = []

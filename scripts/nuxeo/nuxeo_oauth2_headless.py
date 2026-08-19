@@ -8,9 +8,18 @@ import os, sys
 # Allow importing the flexible-graphrag backend package (sources.*) from scripts/nuxeo/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "flexible-graphrag"))
 
-import httpx
-from nuxeo.client import Nuxeo
-from nuxeo.auth import OAuth2
+# MUST come before `import nuxeo...`.  nuxeo/auth/oauth2.py does
+# `from jwt import JWT, jwk_from_dict` at module load — the GehirnInc `jwt` API —
+# and we deliberately ship PyJWT instead (the two packages claim the same `jwt`
+# module name, and GehirnInc's breaks python-arango / langchain-arangodb,
+# authlib and Langflow).  Importing sources.nuxeo installs a PyJWT-backed
+# compatibility layer for those symbols; without it this script dies with
+# `ImportError: cannot import name 'JWT' from 'jwt'`.
+import sources.nuxeo as _fg_nuxeo  # noqa: F401,E402  (import for its side effect)
+
+import httpx  # noqa: E402
+from nuxeo.client import Nuxeo  # noqa: E402
+from nuxeo.auth import OAuth2  # noqa: E402
 
 HOST = "http://localhost:8081/nuxeo/"
 CID = "flexible-graphrag"

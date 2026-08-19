@@ -164,10 +164,10 @@ class IngestionManager:
                     ]
                     logger.info(f"Initialized progress tracking for {total} files from {source_type}")
                 
-                # Calculate progress: 20% (connection) + 70% (loading) = 90% max
-                base_progress = 20
-                loading_progress = int((current / total) * 70) if total > 0 else 0
-                total_progress = min(base_progress + loading_progress, 90)
+                # Calculate progress: 10% (connection) + 30% (loading) = 40% max before pipeline
+                base_progress = 10
+                loading_progress = int((current / total) * 30) if total > 0 else 0
+                total_progress = min(base_progress + loading_progress, 40)
                 
                 # Update individual file progress
                 if current > 0 and current <= len(file_progress):
@@ -175,7 +175,7 @@ class IngestionManager:
                     file_progress[file_index] = {
                         "filename": current_file or f"File {current}",
                         "status": "processing",
-                        "progress": min(total_progress, 90),  # Don't complete until final phase
+                        "progress": min(total_progress, 40),  # Don't complete until pipeline finishes
                         "phase": "loading",
                         "message": message or f"Processing {current_file}"
                     }

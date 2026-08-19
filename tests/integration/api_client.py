@@ -492,6 +492,61 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    # ── CocoIndex-specific endpoints ─────────────────────────────────────────
+
+    def cocoindex_sync_now(self, full_reprocess: bool = False) -> dict:
+        """POST /api/cocoindex/sync-now — trigger a CocoIndex pipeline update."""
+        r = self._session.post(
+            f"{self.base_url}/api/cocoindex/sync-now",
+            json={"full_reprocess": full_reprocess},
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def cocoindex_wait_for_content(
+        self,
+        query: str,
+        terms: list[str],
+        *,
+        max_wait: int = 300,
+        poll: float = 10.0,
+    ) -> bool:
+        """Trigger CocoIndex sync and poll until vector search finds *terms*.
+
+        Returns True when matching content is found, False on timeout.
+        Used by cloud-native source tests (S3, Azure Blob, Google Drive)
+        that cannot upload local files via HTTP.
+        """
+        import time
+
+        logger.info("cocoindex_wait_for_content: triggering sync-now …")
+        try:
+            self.cocoindex_sync_now()
+        except Exception as exc:
+            logger.warning("cocoindex/sync-now failed: %s", exc)
+
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                result = self.search(query, top_k=10)
+                if result.total > 0:
+                    content_all = " ".join(
+                        (r.get("content") or r.get("text") or "").lower()
+                        for r in result.results
+                    )
+                    if any(t.lower() in content_all for t in terms):
+                        logger.info(
+                            "cocoindex_wait_for_content: found results (total=%d)", result.total
+                        )
+                        return True
+            except Exception as exc:
+                logger.debug("cocoindex_wait_for_content poll error: %s", exc)
+            time.sleep(poll)
+
+        logger.warning("cocoindex_wait_for_content: timed out after %ds", max_wait)
+        return False
+
     def wait_for_watching(self, min_updaters: int = 1, max_wait: int = 60, poll: float = 2.0) -> bool:
         """Poll /api/sync/status until active_updaters >= min_updaters (watchdog is live)."""
         import time

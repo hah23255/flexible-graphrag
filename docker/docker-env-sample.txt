@@ -106,7 +106,7 @@ QDRANT_VECTOR_DB_CONFIG={"host": "host.docker.internal", "port": 6333, "collecti
 # SCENARIO B: #MILVUS_VECTOR_DB_CONFIG={"host": "milvus-standalone", "port": 19530, "collection_name": "hybrid_search", "username": "root", "password": "milvus"}
 
 # Weaviate (active when VECTOR_DB=weaviate)
-# SCENARIO A: #WEAVIATE_VECTOR_DB_CONFIG={"url": "http://host.docker.internal:8081", "index_name": "HybridSearch"}
+# SCENARIO A: #WEAVIATE_VECTOR_DB_CONFIG={"url": "http://host.docker.internal:8086", "index_name": "HybridSearch"}
 # SCENARIO B: #WEAVIATE_VECTOR_DB_CONFIG={"url": "http://weaviate:8080", "index_name": "HybridSearch"}
 
 # PostgreSQL pgvector (active when VECTOR_DB=postgres)

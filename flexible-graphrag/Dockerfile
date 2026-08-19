@@ -44,12 +44,28 @@ COPY pyproject.toml uv.toml extras-overrides.txt README.md Dockerfile env-sample
 #   docling-ocr-easyocr/tesserocr  — alternative OCR engines needing extra system libs
 #   docling-ocr-ocrmac              — macOS only
 #   surrealdb-extras, age-extras, spanner-extras — niche integrations
-ARG EXTRAS="langchain,langchain-extras"
+#
+# cocoindex is in the DEFAULT set on purpose: a pip user can add an extra after the fact,
+# an image user cannot, so omitting it would make PIPELINE_BACKEND=cocoindex unusable in
+# the published image. The flexible-graphrag extra is just `cocoindex` itself.
+ARG EXTRAS="langchain,langchain-extras,cocoindex"
 
 RUN if [ -n "$EXTRAS" ]; then \
         uv pip install --override extras-overrides.txt --system -e ".[$EXTRAS]"; \
     else \
         uv pip install --system -e .; \
+    fi
+
+# CocoIndex's own extras (not reachable through EXTRAS above, which passes
+# flexible-graphrag extras). Same reasoning — an image cannot add them later.
+#   text               CHUNKER_BACKEND=cocoindex (tree-sitter splitter)
+#   entity_resolution  ENTITY_RESOLUTION=llm (faiss-cpu)
+# Deliberately NOT included:
+#   litellm                 litellm is already a base dependency, pinned <1.92
+#   sentence-transformers   pulls torch; use the huggingface extra if you want it
+ARG COCOINDEX_EXTRAS="text,entity_resolution"
+RUN if echo "$EXTRAS" | grep -q cocoindex && [ -n "$COCOINDEX_EXTRAS" ]; then \
+        uv pip install --system "cocoindex[$COCOINDEX_EXTRAS]"; \
     fi
 
 # Copy application code

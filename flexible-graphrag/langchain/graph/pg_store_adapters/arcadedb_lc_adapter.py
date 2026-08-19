@@ -17,6 +17,8 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, Set
 
+from ._graph_docs import normalize_graph_documents
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +37,11 @@ _LI_METADATA_SKIP: frozenset = frozenset({
     "file_path", "modified_at", "modified at", "doc_id",
     # ref_doc_id is explicitly added as a baseline — don't skip it here
 })
+
+# Inherited on Entity base type (same contract as LlamaIndex ArcadeDB adapter).
+# CREATE PROPERTY of these on subtypes fails with SchemaException when the type
+# EXTENDS Entity (LI leaves that schema after cleanup).  Declare only on Entity.
+_ENTITY_INHERITED_PROPS: frozenset = frozenset({"id", "name", "ref_doc_id"})
 
 try:
     from langchain_arcadedb import ArcadeDBGraph
@@ -262,29 +269,75 @@ class ArcadeDBLangChainAdapter:
         password = self.config.get("password", "playwithdata")
         database = self.config.get("database", "flexible_graphrag")
 
-        # Collect every vertex type referenced in this batch (nodes + rel endpoints)
+        # Fold relationship endpoints into doc.nodes and stamp name/ref_doc_id so
+        # the loops below (type collection, property DDL, post-import stamping)
+        # all cover endpoints without re-deriving them.  Also strips the LI
+        # ingestion metadata that would otherwise become schema columns.
+        _rids = normalize_graph_documents(
+            graph_documents, metadata_skip=_LI_METADATA_SKIP
+        )
+
+        # What the database already calls each name.  Must happen BEFORE types
+        # are created, because a node label that collides with an existing EDGE
+        # type has to be renamed first — otherwise CREATE VERTEX TYPE silently
+        # does nothing (the name exists) and the later MERGE fails with a bare
+        # Neo.DatabaseError.General.UnknownError that names no cause.
+        db_vertex_types, db_edge_types = self._fetch_type_kinds(
+            host, http_port, username, password, database
+        )
+
+        # A node label already taken by an edge type cannot be MERGEd as a
+        # vertex.  Rename it (suffix _NODE) consistently, everywhere it appears
+        # — including relationship endpoints, which are the same objects' labels.
+        if db_edge_types:
+            renamed_labels: dict = {}
+            for doc in graph_documents:
+                for n in doc.nodes:
+                    if n.type and n.type in db_edge_types:
+                        renamed_labels.setdefault(n.type, f"{n.type}_NODE")
+                        n.type = renamed_labels[n.type]
+                for rel in doc.relationships:
+                    for endpoint in ("source", "target"):
+                        ep = getattr(rel, endpoint, None)
+                        ep_type = getattr(ep, "type", None) if ep is not None else None
+                        if ep_type and ep_type in db_edge_types:
+                            renamed_labels.setdefault(ep_type, f"{ep_type}_NODE")
+                            ep.type = renamed_labels[ep_type]
+            if renamed_labels:
+                logger.info(
+                    "ArcadeDB: %d node label(s) collided with existing edge types "
+                    "and were renamed: %s",
+                    len(renamed_labels),
+                    ", ".join(f"{k} -> {v}" for k, v in sorted(renamed_labels.items())),
+                )
+
+        # Collect every vertex type referenced in this batch.
         all_types: set = set()
         for doc in graph_documents:
             for n in doc.nodes:
                 if n.type:
                     all_types.add(n.type)
-            for rel in doc.relationships:
-                if rel.source.type:
-                    all_types.add(rel.source.type)
-                if rel.target.type:
-                    all_types.add(rel.target.type)
 
         if include_source:
             all_types.add("Document")
 
         if all_types:
-            self._ensure_vertex_types(host, http_port, username, password, database, all_types)
+            # Entity base first (inherited id/name/ref_doc_id), then subtypes EXTENDS Entity.
+            self._ensure_entity_base_and_types(
+                host, http_port, username, password, database, all_types
+            )
 
         # ArcadeDB (like Apache AGE) shares a namespace for vertex and edge types.
         # If the LLM produces a relationship type that collides with a vertex type
         # (e.g. DATE as both a node and a relationship), ArcadeDB rejects the MERGE.
         # Rename colliding relationship types by appending _REL.
-        vertex_type_names = all_types  # already collected above
+        #
+        # The batch's own labels are not enough: the same token routinely arrives
+        # as a relationship in one document and an entity label in another, and
+        # each add_graph_documents call only ever saw its own batch.  Union in
+        # the vertex types the database already has so the decision is the same
+        # whichever order the documents happen to arrive in.
+        vertex_type_names = all_types | db_vertex_types
         for doc in graph_documents:
             for rel in doc.relationships:
                 if rel.type and rel.type in vertex_type_names:
@@ -303,45 +356,73 @@ class ArcadeDBLangChainAdapter:
             for n in doc.nodes:
                 if not n.type:
                     continue
-                if n.properties is None:
-                    n.properties = {}
-                # Match normalize_entity_names / Surreal-style adapters: QA chains filter on name.
-                n.properties.setdefault("name", str(n.id))
-                # Skip LI ingestion-metadata keys — they are not graph-model properties
-                # and would flood the schema with filesystem columns on every type.
                 vprops[n.type].update(
-                    k for k in n.properties if k not in _LI_METADATA_SKIP
+                    k for k in n.properties if k not in _ENTITY_INHERITED_PROPS
                 )
             for rel in doc.relationships:
                 if rel.type:
                     edge_types.add(rel.type)
-                rp = rel.properties
-                if rel.type and isinstance(rp, dict):
-                    eprops[rel.type].update(rp.keys())
+                if rel.type and isinstance(rel.properties, dict):
+                    eprops[rel.type].update(rel.properties.keys())
         if include_source:
             edge_types.add("MENTIONED_IN")
-            vprops["Document"].add("content")
-        for t in all_types:
-            vprops[t].update(("id", "name", "ref_doc_id"))
+            # Document does NOT extend Entity, so it needs its own declarations —
+            # inherited props are only declared on Entity itself (see
+            # _ensure_entity_base_and_types), and subtypes must never redeclare
+            # them or ArcadeDB raises SchemaException.
+            vprops["Document"].update(("content", "id", "ref_doc_id"))
         self._ensure_edge_types(host, http_port, username, password, database, edge_types)
         self._ensure_type_properties_sql(
             host, http_port, username, password, database, vprops, eprops
         )
 
+        # Bolt ``SET n += row.properties`` auto-creates missing properties on the
+        # *concrete* type.  When the type EXTENDS Entity, CREATE PROPERTY for
+        # name/ref_doc_id on the subtype fails the whole MERGE transaction.  Pop
+        # those inherited fields out of the payload and stamp them after import
+        # via an explicit SET instead.
+        _stamps: list[tuple[str, str, str, str]] = []
+        for doc in graph_documents:
+            _doc_rid = _rids.get(id(doc), "")
+            for n in doc.nodes:
+                if not n.type:
+                    continue
+                _name = str(n.properties.pop("name", n.id))
+                _rid = str(n.properties.pop("ref_doc_id", "") or _doc_rid or "")
+                _stamps.append((n.type, str(n.id), _name, _rid))
+
         self.lc_graph.add_graph_documents(
             graph_documents, include_source=include_source, **kwargs
         )
 
+        for _vtype, _vid, _name, _rid in _stamps:
+            try:
+                if _rid:
+                    self.lc_graph.query(
+                        f"MATCH (n:`{_vtype}` {{id: $id}}) "
+                        f"SET n.name = $name, n.ref_doc_id = $rid",
+                        {"id": _vid, "name": _name, "rid": _rid},
+                    )
+                else:
+                    self.lc_graph.query(
+                        f"MATCH (n:`{_vtype}` {{id: $id}}) SET n.name = $name",
+                        {"id": _vid, "name": _name},
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "ArcadeDB: stamp name/ref_doc_id on %s/%s failed: %s",
+                    _vtype, _vid, exc,
+                )
+
     @staticmethod
-    def _ensure_vertex_types(
+    def _ensure_entity_base_and_types(
         host: str, port: int, username: str, password: str,
         database: str, type_names: set,
     ) -> None:
-        """Create vertex types via ``DatabaseDao.query()`` if they don't exist.
+        """Create Entity base with inherited props, then subtypes ``EXTENDS Entity``.
 
-        Uses the same ``SyncClient`` + ``DatabaseDao`` pattern as
-        ``_ensure_database_http`` so there is no raw-requests dependency here.
-        Falls back silently if ``arcadedb_python`` is not installed.
+        Matches the LlamaIndex ArcadeDB schema so CREATE PROPERTY name/ref_doc_id
+        on subtypes is never needed (and would SchemaException if attempted).
         """
         try:
             from arcadedb_python.api.sync import SyncClient
@@ -355,23 +436,114 @@ class ArcadeDBLangChainAdapter:
                 content_type="application/json",
             )
             db = DatabaseDao(client, database)
-            for type_name in sorted(type_names):
+
+            def _sql(stmt: str) -> None:
+                db.query("sql", stmt, is_command=True)
+
+            try:
+                _sql("CREATE VERTEX TYPE Entity IF NOT EXISTS")
+            except Exception as exc:
+                logger.debug("ArcadeDB: CREATE VERTEX TYPE Entity: %s", exc)
+            for prop in sorted(_ENTITY_INHERITED_PROPS):
                 try:
-                    db.query(
-                        "sql",
-                        f"CREATE VERTEX TYPE {_sql_id(type_name)} IF NOT EXISTS",
-                        is_command=True,
+                    _sql(
+                        f"CREATE PROPERTY Entity.{_sql_id(prop)} IF NOT EXISTS STRING"
                     )
-                    logger.debug("ArcadeDB: ensured vertex type '%s'", type_name)
+                except Exception as exc:
+                    logger.debug("ArcadeDB: CREATE PROPERTY Entity.%s: %s", prop, exc)
+
+            for type_name in sorted(type_names):
+                if not type_name or type_name == "Entity":
+                    continue
+                # Document is a source node, not an entity subtype.
+                if type_name == "Document":
+                    try:
+                        _sql(f"CREATE VERTEX TYPE {_sql_id(type_name)} IF NOT EXISTS")
+                    except Exception as exc:
+                        logger.debug(
+                            "ArcadeDB: CREATE VERTEX TYPE '%s': %s", type_name, exc
+                        )
+                    continue
+                try:
+                    _sql(
+                        f"CREATE VERTEX TYPE {_sql_id(type_name)} IF NOT EXISTS "
+                        f"EXTENDS Entity"
+                    )
                 except Exception as exc:
                     logger.debug(
-                        "ArcadeDB: CREATE VERTEX TYPE '%s' (non-fatal): %s",
+                        "ArcadeDB: CREATE VERTEX TYPE '%s' EXTENDS Entity: %s",
                         type_name, exc,
                     )
+                    # Type may already exist without EXTENDS — try to attach super type.
+                    try:
+                        _sql(f"ALTER TYPE {_sql_id(type_name)} SUPERTYPE +Entity")
+                    except Exception as exc2:
+                        logger.debug(
+                            "ArcadeDB: ALTER TYPE '%s' SUPERTYPE +Entity: %s",
+                            type_name, exc2,
+                        )
         except Exception as exc:
             logger.warning(
-                "ArcadeDB _ensure_vertex_types failed (non-fatal): %s", exc
+                "ArcadeDB _ensure_entity_base_and_types failed (non-fatal): %s", exc
             )
+
+    @staticmethod
+    def _fetch_type_kinds(
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        database: str,
+    ) -> tuple:
+        """Return ``(vertex_type_names, edge_type_names)`` already in the database.
+
+        ArcadeDB shares ONE namespace between vertex and edge types, so a name
+        already taken by an edge cannot be used for a vertex (and vice versa).
+        Knowing which kind each existing name is, is the only way to avoid the
+        collision across separate ``add_graph_documents`` calls — within a
+        single call the batch's own labels are enough, but the LLM routinely
+        emits the same token as a relationship type in one document and an
+        entity label in the next.
+
+        Returns two empty sets on any failure: the caller then falls back to
+        batch-local collision handling, which is what it did before this
+        existed.
+        """
+        vertices: Set[str] = set()
+        edges: Set[str] = set()
+        try:
+            from arcadedb_python.api.sync import SyncClient
+            from arcadedb_python.dao.database import DatabaseDao
+
+            client = SyncClient(
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                content_type="application/json",
+            )
+            db = DatabaseDao(client, database)
+            rows = db.query("sql", "SELECT FROM schema:types") or []
+            if isinstance(rows, dict):  # some client versions wrap in {"result": [...]}
+                rows = rows.get("result", []) or []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = row.get("name")
+                kind = str(row.get("type") or "").lower()
+                if not name:
+                    continue
+                if kind == "vertex":
+                    vertices.add(str(name))
+                elif kind == "edge":
+                    edges.add(str(name))
+            logger.debug(
+                "ArcadeDB schema: %d vertex type(s), %d edge type(s)",
+                len(vertices), len(edges),
+            )
+        except Exception as exc:  # noqa: BLE001 - fall back to batch-local handling
+            logger.debug("ArcadeDB _fetch_type_kinds failed (non-fatal): %s", exc)
+        return vertices, edges
 
     @staticmethod
     def _ensure_edge_types(
@@ -442,6 +614,13 @@ class ArcadeDBLangChainAdapter:
             for vtype, props in sorted(vertex_props.items()):
                 for prop in sorted(props):
                     if not prop:
+                        continue
+                    # Never re-declare Entity-inherited props on subtypes.
+                    if (
+                        vtype != "Entity"
+                        and vtype != "Document"
+                        and prop in _ENTITY_INHERITED_PROPS
+                    ):
                         continue
                     stmt = (
                         f"CREATE PROPERTY {_sql_id(vtype)}.{_sql_id(prop)} IF NOT EXISTS STRING"

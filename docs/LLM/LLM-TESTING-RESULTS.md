@@ -583,7 +583,7 @@ LITELLM_TIMEOUT=300.0                # critical — prevents silent hang on 2-ch
 
 Proxy startup (WSL2 Ubuntu):
 ```bash
-OPENAI_API_KEY="sk-..." litellm --config /mnt/c/newdev3/flexible-graphrag/flexible-graphrag/litellm_config.yaml --port 4000
+OPENAI_API_KEY="sk-..." litellm --config /mnt/c/newdev3/flexible-graphrag/scripts/litellm_config.yaml --port 4000
 ```
 
 ### Known Issues / Fixes

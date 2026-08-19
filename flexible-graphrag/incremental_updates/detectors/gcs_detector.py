@@ -484,29 +484,32 @@ class GCSDetector(ChangeDetector):
                     else:
                         # Already known - treat as UPDATE (DELETE + ADD)
                         logger.info(f"GCS EVENT: UPDATE (reported as CREATE) for {object_name}")
-                        
-                        async def add_callback():
-                            logger.info(f"UPDATE: DELETE completed, now processing ADD for {object_name}")
-                            try:
-                                await self._process_via_backend(object_name)
-                                logger.info(f"SUCCESS: UPDATE completed for {object_name}")
-                            except Exception as e:
-                                logger.error(f"ERROR: Failed to process ADD for {object_name}: {e}")
-                        
-                        delete_metadata = FileMetadata(
+                        _mod_meta = FileMetadata(
                             source_type='gcs',
                             path=object_name,
                             ordinal=event.metadata.ordinal,
                             extra={'bucket': self.bucket}
                         )
-                        delete_event = ChangeEvent(
-                            metadata=delete_metadata,
-                            change_type=ChangeType.DELETE,
-                            timestamp=event.timestamp,
-                            is_modify_delete=True,
-                            modify_callback=add_callback
-                        )
-                        yield delete_event
+                        if self.backend:
+                            async def add_callback():
+                                logger.info(f"UPDATE: DELETE completed, now processing ADD for {object_name}")
+                                try:
+                                    await self._process_via_backend(object_name)
+                                    logger.info(f"SUCCESS: UPDATE completed for {object_name}")
+                                except Exception as e:
+                                    logger.error(f"ERROR: Failed to process ADD for {object_name}: {e}")
+                            yield ChangeEvent(
+                                metadata=_mod_meta,
+                                change_type=ChangeType.DELETE,
+                                timestamp=event.timestamp,
+                                is_modify_delete=True,
+                                modify_callback=add_callback
+                            )
+                        else:
+                            # CocoIndex mode: DELETE then CREATE
+                            logger.info(f"GCS EVENT: modify for {object_name} (CocoIndex mode): DELETE then CREATE")
+                            yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                            yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                 
                 elif event.change_type == ChangeType.UPDATE:
                     # UPDATE event - DELETE first, then ADD via callback
@@ -534,29 +537,32 @@ class GCSDetector(ChangeDetector):
                     else:
                         # True UPDATE - DELETE + ADD
                         logger.info(f"GCS EVENT: UPDATE - emitting DELETE with callback")
-                        
-                        async def add_callback():
-                            logger.info(f"UPDATE: DELETE completed, now processing ADD for {object_name}")
-                            try:
-                                await self._process_via_backend(object_name)
-                                logger.info(f"SUCCESS: UPDATE completed for {object_name}")
-                            except Exception as e:
-                                logger.error(f"ERROR: Failed to process ADD for {object_name}: {e}")
-                        
-                        delete_metadata = FileMetadata(
+                        _upd_meta = FileMetadata(
                             source_type='gcs',
                             path=object_name,
                             ordinal=event.metadata.ordinal,
                             extra={'bucket': self.bucket}
                         )
-                        delete_event = ChangeEvent(
-                            metadata=delete_metadata,
-                            change_type=ChangeType.DELETE,
-                            timestamp=event.timestamp,
-                            is_modify_delete=True,
-                            modify_callback=add_callback
-                        )
-                        yield delete_event
+                        if self.backend:
+                            async def add_callback():
+                                logger.info(f"UPDATE: DELETE completed, now processing ADD for {object_name}")
+                                try:
+                                    await self._process_via_backend(object_name)
+                                    logger.info(f"SUCCESS: UPDATE completed for {object_name}")
+                                except Exception as e:
+                                    logger.error(f"ERROR: Failed to process ADD for {object_name}: {e}")
+                            yield ChangeEvent(
+                                metadata=_upd_meta,
+                                change_type=ChangeType.DELETE,
+                                timestamp=event.timestamp,
+                                is_modify_delete=True,
+                                modify_callback=add_callback
+                            )
+                        else:
+                            # CocoIndex mode: DELETE then CREATE
+                            logger.info(f"GCS EVENT: modify for {object_name} (CocoIndex mode): DELETE then CREATE")
+                            yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                            yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                 
             except asyncio.TimeoutError:
                 # No events, continue

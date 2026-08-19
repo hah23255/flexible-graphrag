@@ -1,22 +1,21 @@
-"""llamaindex.graph.adapters — per-backend LlamaIndex property graph adapter classes."""
-from .factory import create_graph_store
-from .neo4j_adapter import LlamaIndexNeo4jGraphAdapter
-from .ladybug_adapter import LlamaIndexLadybugAdapter
-from .falkordb_adapter import LlamaIndexFalkorDBAdapter
-from .arcadedb_adapter import LlamaIndexArcadeDBAdapter
-from .memgraph_adapter import LlamaIndexMemgraphAdapter
-from .nebula_adapter import LlamaIndexNebulaAdapter
-from .neptune_adapter import LlamaIndexNeptuneAdapter
-from .neptune_analytics_adapter import LlamaIndexNeptuneAnalyticsAdapter
+"""llamaindex.graph.adapters — per-backend LlamaIndex property graph adapters.
 
-__all__ = [
-    "create_graph_store",
-    "LlamaIndexNeo4jGraphAdapter",
-    "LlamaIndexLadybugAdapter",
-    "LlamaIndexFalkorDBAdapter",
-    "LlamaIndexArcadeDBAdapter",
-    "LlamaIndexMemgraphAdapter",
-    "LlamaIndexNebulaAdapter",
-    "LlamaIndexNeptuneAdapter",
-    "LlamaIndexNeptuneAnalyticsAdapter",
-]
+Adapters available
+------------------
+neo4j_adapter              LlamaIndexNeo4jGraphAdapter
+ladybug_adapter            LlamaIndexLadybugAdapter
+falkordb_adapter           LlamaIndexFalkorDBAdapter
+arcadedb_adapter           LlamaIndexArcadeDBAdapter
+memgraph_adapter           LlamaIndexMemgraphAdapter
+nebula_adapter             LlamaIndexNebulaAdapter
+neptune_adapter            LlamaIndexNeptuneAdapter
+neptune_analytics_adapter  LlamaIndexNeptuneAnalyticsAdapter
+
+Each adapter module is loaded lazily by :func:`create_graph_store`
+based on the configured ``PG_GRAPH_DB`` value.  Nothing is imported here
+at package load time so that optional backend libraries are only imported
+when the selected adapter is actually instantiated.
+"""
+from .factory import create_graph_store
+
+__all__ = ["create_graph_store"]

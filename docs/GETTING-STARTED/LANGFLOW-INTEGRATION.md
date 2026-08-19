@@ -42,32 +42,32 @@ Langflow executes the flow's component code **in its own process**, so it needs 
 | Reads `.env`? | uses `.env` when it executes the pipeline | yes — sets `ENABLE_LANGFLOW_FLOWS`, `LANGFLOW_URL` |
 
 !!! warning "Python build matters for Langflow"
-    Create the Langflow venv on **Python 3.14.5 or newer** (or 3.13) — use an explicit patch version: `uv venv --python 3.14.5` (or greater). Plain `uv venv --python 3.14` resolves to **3.14.0**, whose OpenSSL build aborts on SSL and makes Langflow crash on startup. Litmus test for any venv: `python -c "import ssl; ssl.create_default_context(); print('OK')"`.
+    Create the Langflow venv on **any Python 3.14 except 3.14.0** (3.14.4 and 3.14.5 are both known good), or 3.13 — use an explicit patch version: `uv venv --python 3.14.4` (or greater). Plain `uv venv --python 3.14` resolves to **3.14.0**, whose OpenSSL build aborts on SSL and makes Langflow crash on startup. Litmus test for any venv: `python -c "import ssl; ssl.create_default_context(); print('OK')"`.
 
 ### Terminal 1 — Langflow venv
 
 ```powershell
-# Create the venv on Python 3.14.5 or newer (NOT plain --python 3.14, which resolves to 3.14.0)
-uv venv --python 3.14.5 venv-langflow
+# Any 3.14 except 3.14.0 (NOT plain --python 3.14, which resolves to 3.14.0)
+uv venv --python 3.14.4 venv-langflow
 
 # Staged install (the combined flexible-graphrag[langflow] extra is unsatisfiable).
 # --system-certs is needed behind an SSL-inspecting corporate proxy.
+# (uv < 0.11 calls it --native-tls; newer uv deprecates that name. Either sets UV_NATIVE_TLS.)
 uv pip install --system-certs langflow==1.11.2
 uv pip install --system-certs --override extras-overrides.txt -e ".[langchain,langchain-extras]"   # LlamaIndex + fuller LangChain backends (e.g. Neo4j)
 
-# flexible-graphrag pulls nuxeo[oauth2], whose `jwt` (GehirnInc) package OWNS the same `jwt`
-# module as PyJWT and evicts it -> Langflow fails at startup with
-#   ImportError: cannot import name 'InvalidTokenError' from 'jwt'
-# Restore PyJWT (REQUIRED for Langflow to start):
-uv pip uninstall jwt
-uv pip install --system-certs --reinstall "PyJWT>=2.12.1"
-# NUXEO IN FLOW MODE: PyJWT and nuxeo's `jwt` can't coexist, so `sources/nuxeo.py` applies a compat
-# shim that grafts the symbols nuxeo imports (`JWT`, `jwk_from_dict`, `JWTDecodeError`) onto the PyJWT
-# `jwt` module. Result: **all 3 Nuxeo auths (basic/token/oauth2) work in Langflow flow mode** — OAuth2
-# uses a pre-obtained Bearer token (minted separately by scripts/nuxeo), so the ingest path never decodes
-# a JWT. The stub raises only if nuxeo does a client-side JWT decode (its auth-code exchange / id_token
-# path), which ingest never hits. No-op in the backend venv, and never touches PyJWT's own symbols, so
-# Langflow is unaffected. Alfresco + all other sources work fully in flow mode.
+# NOTE: no PyJWT restore step is needed any more.  flexible-graphrag depends on
+# plain `nuxeo` + `authlib` + `pyjwt[crypto]`, never `nuxeo[oauth2]` — so the
+# GehirnInc `jwt` package that used to evict PyJWT is never installed, and
+# Langflow's `from jwt import InvalidTokenError` keeps working.
+#
+# NUXEO IN FLOW MODE: `nuxeo/auth/oauth2.py` imports three symbols from the
+# GehirnInc `jwt` API (`JWT`, `jwk_from_dict`, `JWTDecodeError`).
+# `sources/nuxeo.py` implements all three on top of PyJWT, so **all 3 Nuxeo
+# auths (basic/token/oauth2) work in Langflow flow mode**, including client-side
+# access-token validation.  It only adds those names when PyJWT owns `jwt` and
+# never touches PyJWT's own symbols, so Langflow is unaffected.  Alfresco and
+# all other sources work fully in flow mode.
 
 # Run Langflow from the flexible-graphrag backend dir. The "Flexible GraphRAG" palette
 # auto-registers via the extension bundle (shipped with flexible-graphrag ≥ 0.7.1), so no
@@ -173,7 +173,7 @@ Run flow mode in one of **two clean shapes** — keep the backend and Langflow *
 !!! warning "Don't mix host + container across the flow boundary"
     A **host** backend pointed at a **container** Langflow (or vice-versa) runs **cloud sources** fine, but **file upload fails** — the backend passes absolute host paths a container can't resolve (`c:\…\uploads\file` → `Path does not exist`). Pick shape 1 **or** 2; use cloud sources if you must run a mixed setup.
 
-**Images (share one base):** both the backend `Dockerfile` and `Dockerfile.langflow` build on `ghcr.io/astral-sh/uv:python3.14-trixie-slim` — Langflow's own build base (Python 3.14, uv pre-installed). `Dockerfile.langflow` = that base + `langflow==1.11.2` + `flexible-graphrag[extras]` (then restores PyJWT, since `nuxeo[oauth2]` pulls a conflicting `jwt`). The **Flexible GraphRAG** palette auto-registers via the extension bundle (no `LANGFLOW_COMPONENTS_PATH`). (The 12 components import the real backend machinery at runtime, so — unlike a stock Langflow image — this image must install flexible-graphrag too.)
+**Images (share one base):** both the backend `Dockerfile` and `Dockerfile.langflow` build on `ghcr.io/astral-sh/uv:python3.14-trixie-slim` — Langflow's own build base (Python 3.14, uv pre-installed). `Dockerfile.langflow` = that base + `langflow==1.11.2` + `flexible-graphrag[extras]` (plus a guard asserting PyJWT still owns the `jwt` module — see the note on `nuxeo[oauth2]` above). The **Flexible GraphRAG** palette auto-registers via the extension bundle (no `LANGFLOW_COMPONENTS_PATH`). (The 12 components import the real backend machinery at runtime, so — unlike a stock Langflow image — this image must install flexible-graphrag too.)
 
 **Enable the all-Docker stack:** in `docker/docker-compose.yaml` uncomment `- includes/app-stack.yaml` (backend + UIs), `- includes/langflow.yaml`, and optionally `- includes/proxy.yaml`. Flow mode is **opt-in** — in `app-stack.yaml` flip the backend's `ENABLE_LANGFLOW_FLOWS` to `"true"` (it defaults to `"false"` / direct mode); the rest of the flow config is already there:
 

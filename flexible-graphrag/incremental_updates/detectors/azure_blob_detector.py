@@ -163,9 +163,9 @@ class AzureBlobDetector(ChangeDetector):
                     self.change_feed_client = None
             
             if not self.change_feed_client:
-                logger.info("Azure Blob detector started in PERIODIC MODE")
+                logger.debug("Azure Blob detector started in PERIODIC MODE")
             
-            logger.info(f"Azure Blob detector started successfully for container: {self.container_name}")
+            logger.debug(f"Azure Blob detector started successfully for container: {self.container_name}")
             
         except Exception as e:
             self._running = False
@@ -215,7 +215,7 @@ class AzureBlobDetector(ChangeDetector):
         
         self.change_feed_client = None
         
-        logger.info(f"Azure Blob detector stopped. Events processed: {self.events_processed}, Errors: {self.errors_count}")
+        logger.debug(f"Azure Blob detector stopped. Events processed: {self.events_processed}, Errors: {self.errors_count}")
     
     async def list_all_files(self) -> List[FileMetadata]:
         """List all blobs in the container (for initial/periodic sync)"""
@@ -371,11 +371,16 @@ class AzureBlobDetector(ChangeDetector):
                                     logger.info(f"Azure Blob EVENT: CREATE for {blob_name}")
                                     self.known_blob_names.add(full_path)
                                     self._last_processed[full_path] = datetime.now(timezone.utc)
-                                    try:
-                                        await self._process_via_backend(blob_name)
-                                        logger.info(f"SUCCESS: Processed CREATE for {blob_name}")
-                                    except Exception as e:
-                                        logger.error(f"ERROR: Failed to process CREATE for {blob_name}: {e}")
+                                    if self.backend:
+                                        try:
+                                            await self._process_via_backend(blob_name)
+                                            logger.info(f"SUCCESS: Processed CREATE for {blob_name}")
+                                        except Exception as e:
+                                            logger.error(f"ERROR: Failed to process CREATE for {blob_name}: {e}")
+                                    else:
+                                        # CocoIndex mode: yield CREATE so FlexibleMapView.watch() ingests it
+                                        logger.info(f"Azure Blob EVENT: new blob {blob_name} (CocoIndex mode): yielding CREATE")
+                                        yield event
                                 else:
                                     # Already known - but Azure often emits duplicate CREATE events
                                     # (e.g. BlobCreated + BlobPropertiesUpdated) within seconds.
@@ -388,30 +393,33 @@ class AzureBlobDetector(ChangeDetector):
                                     # Treat as UPDATE (DELETE + ADD)
                                     logger.info(f"Azure Blob EVENT: UPDATE (reported as CREATE) for {blob_name}")
                                     self._last_processed[full_path] = datetime.now(timezone.utc)
-                                    
-                                    async def add_callback(bn=blob_name, fp=full_path):
-                                        logger.info(f"UPDATE: DELETE completed, now processing ADD for {bn}")
-                                        try:
-                                            await self._process_via_backend(bn)
-                                            self._last_processed[fp] = datetime.now(timezone.utc)
-                                            logger.info(f"SUCCESS: UPDATE completed for {bn}")
-                                        except Exception as e:
-                                            logger.error(f"ERROR: Failed to process ADD for {bn}: {e}")
-                                    
-                                    delete_metadata = FileMetadata(
+                                    _mod_meta = FileMetadata(
                                         source_type='azure_blob',
                                         path=full_path,
                                         ordinal=event.metadata.ordinal,
                                         extra={'container': self.container_name, 'blob_name': full_path}
                                     )
-                                    delete_event = ChangeEvent(
-                                        metadata=delete_metadata,
-                                        change_type=ChangeType.DELETE,
-                                        timestamp=event.timestamp,
-                                        is_modify_delete=True,
-                                        modify_callback=add_callback
-                                    )
-                                    yield delete_event
+                                    if self.backend:
+                                        async def add_callback(bn=blob_name, fp=full_path):
+                                            logger.info(f"UPDATE: DELETE completed, now processing ADD for {bn}")
+                                            try:
+                                                await self._process_via_backend(bn)
+                                                self._last_processed[fp] = datetime.now(timezone.utc)
+                                                logger.info(f"SUCCESS: UPDATE completed for {bn}")
+                                            except Exception as e:
+                                                logger.error(f"ERROR: Failed to process ADD for {bn}: {e}")
+                                        yield ChangeEvent(
+                                            metadata=_mod_meta,
+                                            change_type=ChangeType.DELETE,
+                                            timestamp=event.timestamp,
+                                            is_modify_delete=True,
+                                            modify_callback=add_callback
+                                        )
+                                    else:
+                                        # CocoIndex mode: DELETE then CREATE
+                                        logger.info(f"Azure Blob EVENT: modify for {blob_name} (CocoIndex mode): DELETE then CREATE")
+                                        yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                        yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                             
                             elif event.change_type == ChangeType.UPDATE:
                                 # UPDATE event - DELETE first, then ADD via callback
@@ -442,39 +450,47 @@ class AzureBlobDetector(ChangeDetector):
                                     logger.info(f"Azure Blob EVENT: CREATE (reported as UPDATE) for {blob_name}")
                                     self.known_blob_names.add(full_path)
                                     self._last_processed[full_path] = datetime.now(timezone.utc)
-                                    try:
-                                        await self._process_via_backend(blob_name)
-                                        logger.info(f"SUCCESS: Processed CREATE for {blob_name}")
-                                    except Exception as e:
-                                        logger.error(f"ERROR: Failed to process CREATE for {blob_name}: {e}")
+                                    if self.backend:
+                                        try:
+                                            await self._process_via_backend(blob_name)
+                                            logger.info(f"SUCCESS: Processed CREATE for {blob_name}")
+                                        except Exception as e:
+                                            logger.error(f"ERROR: Failed to process CREATE for {blob_name}: {e}")
+                                    else:
+                                        # CocoIndex mode: yield CREATE so FlexibleMapView.watch() ingests it
+                                        logger.info(f"Azure Blob EVENT: new blob {blob_name} from UPDATE (CocoIndex mode): yielding CREATE")
+                                        yield event
                                 else:
                                     # True UPDATE - DELETE + ADD
                                     logger.info(f"Azure Blob EVENT: UPDATE - emitting DELETE with callback")
                                     self._last_processed[full_path] = datetime.now(timezone.utc)
-                                    
-                                    async def add_callback(bn=blob_name, fp=full_path):
-                                        logger.info(f"UPDATE: DELETE completed, now processing ADD for {bn}")
-                                        try:
-                                            await self._process_via_backend(bn)
-                                            self._last_processed[fp] = datetime.now(timezone.utc)
-                                            logger.info(f"SUCCESS: UPDATE completed for {bn}")
-                                        except Exception as e:
-                                            logger.error(f"ERROR: Failed to process ADD for {bn}: {e}")
-                                    
-                                    delete_metadata = FileMetadata(
+                                    _upd_meta = FileMetadata(
                                         source_type='azure_blob',
                                         path=full_path,
                                         ordinal=event.metadata.ordinal,
                                         extra={'container': self.container_name, 'blob_name': full_path}
                                     )
-                                    delete_event = ChangeEvent(
-                                        metadata=delete_metadata,
-                                        change_type=ChangeType.DELETE,
-                                        timestamp=event.timestamp,
-                                        is_modify_delete=True,
-                                        modify_callback=add_callback
-                                    )
-                                    yield delete_event
+                                    if self.backend:
+                                        async def add_callback(bn=blob_name, fp=full_path):
+                                            logger.info(f"UPDATE: DELETE completed, now processing ADD for {bn}")
+                                            try:
+                                                await self._process_via_backend(bn)
+                                                self._last_processed[fp] = datetime.now(timezone.utc)
+                                                logger.info(f"SUCCESS: UPDATE completed for {bn}")
+                                            except Exception as e:
+                                                logger.error(f"ERROR: Failed to process ADD for {bn}: {e}")
+                                        yield ChangeEvent(
+                                            metadata=_upd_meta,
+                                            change_type=ChangeType.DELETE,
+                                            timestamp=event.timestamp,
+                                            is_modify_delete=True,
+                                            modify_callback=add_callback
+                                        )
+                                    else:
+                                        # CocoIndex mode: DELETE then CREATE
+                                        logger.info(f"Azure Blob EVENT: modify for {blob_name} (CocoIndex mode): DELETE then CREATE")
+                                        yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                        yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                     
                 # Also save after exhausting all pages (final position)
                 if hasattr(pages, 'continuation_token') and pages.continuation_token:

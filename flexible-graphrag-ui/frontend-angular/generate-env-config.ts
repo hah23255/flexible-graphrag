@@ -16,6 +16,7 @@ interface EnvConfig {
   CMIS_BASE_URL?: string;
   ALFRESCO_BASE_URL?: string;
   NUXEO_BASE_URL?: string;
+  NUXEO_PATH?: string;
 }
 
 // Default values (for standalone mode)
@@ -23,7 +24,8 @@ const defaultConfig: EnvConfig = {
   PROCESS_FOLDER_PATH: process.env.PROCESS_FOLDER_PATH || '/Shared/GraphRAG',
   CMIS_BASE_URL: process.env.CMIS_BASE_URL || 'http://localhost:8080',
   ALFRESCO_BASE_URL: process.env.ALFRESCO_BASE_URL || 'http://localhost:8080',
-  NUXEO_BASE_URL: process.env.NUXEO_BASE_URL || 'http://localhost:8081/nuxeo'
+  NUXEO_BASE_URL: process.env.NUXEO_BASE_URL || 'http://localhost:8081/nuxeo',
+  NUXEO_PATH: process.env.NUXEO_PATH || '/default-domain/workspaces/GraphRAG'
 };
 
 // For Docker mode, override with Docker networking URLs

@@ -30,10 +30,26 @@ Then in the UI (Nuxeo source, Authentication = OAuth2):
 
 import os, sys
 # Allow importing the flexible-graphrag backend package (sources.*) from scripts/nuxeo/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "flexible-graphrag"))
+_BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "flexible-graphrag")
+sys.path.insert(0, _BACKEND_DIR)
 
-from nuxeo.client import Nuxeo
-from nuxeo.auth import OAuth2
+# Read the backend's .env so NUXEO_PATH (and anything else) matches what the app
+# uses.  pydantic's Settings resolves env_file relative to the working directory,
+# and this script does not run from the backend directory.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(_BACKEND_DIR, ".env"), override=False)
+except ImportError:
+    pass
+
+# MUST come before `import nuxeo...` — see the note in nuxeo_oauth2_headless.py.
+# nuxeo/auth/oauth2.py imports the GehirnInc `jwt` API at module load; we ship
+# PyJWT, and sources.nuxeo installs the compatibility layer on import.
+import sources.nuxeo as _fg_nuxeo  # noqa: F401,E402  (import for its side effect)
+
+from nuxeo.client import Nuxeo  # noqa: E402
+from nuxeo.auth import OAuth2  # noqa: E402
 
 HOST = "http://localhost:8081/nuxeo/"
 CLIENT_ID = "flexible-graphrag"
@@ -81,7 +97,15 @@ src = NuxeoSource({
         "refresh_token": token.get("refresh_token"),
         "expires_in": token.get("expires_in"),
     },
-    "path": "/default-domain/workspaces/test",
+    # Whatever workspace you actually have.  Reads NUXEO_PATH from the
+    # environment so the smoke test follows the backend's own configuration
+    # instead of a hard-coded folder that only existed on one machine.
+    "path": os.getenv("NUXEO_PATH") or "/default-domain/workspaces",
+    "recursive": True,
 })
+_probe_path = os.getenv("NUXEO_PATH") or "/default-domain/workspaces"
 files = src.list_files()
-print("\noauth2 list_files FOUND:", len(files), [f["name"] for f in files])
+print(f"\noauth2 list_files on {_probe_path} FOUND:", len(files), [f["name"] for f in files])
+if not files:
+    print("  (no documents there — set NUXEO_PATH to a workspace that has files, "
+          "e.g. NUXEO_PATH=/default-domain/workspaces/GraphRAG)")

@@ -1,25 +1,11 @@
-"""
-langchain.search.adapters
-=========================
+"""langchain.search.adapters — per-backend LangChain search adapters.
 
-One module per LangChain search backend.
-
-Modules
--------
-bm25_adapter           BM25SearchAdapter, create_langchain_bm25_adapter
-elasticsearch_adapter  ElasticsearchSearchAdapter
-opensearch_adapter     OpenSearchSearchAdapter
-factory                build_langchain_search_store
+Each adapter module is loaded lazily by :func:`build_langchain_search_store`
+based on the configured ``SEARCH_DB`` value.  Nothing is imported here
+at package load time so that optional backend libraries (elasticsearch,
+opensearch-py, rank_bm25, etc.) are only imported when the selected adapter
+is actually instantiated.
 """
-from .bm25_adapter import BM25SearchAdapter, create_langchain_bm25_adapter
-from .elasticsearch_adapter import ElasticsearchSearchAdapter
-from .opensearch_adapter import OpenSearchSearchAdapter
 from .factory import build_langchain_search_store
 
-__all__ = [
-    "BM25SearchAdapter",
-    "create_langchain_bm25_adapter",
-    "ElasticsearchSearchAdapter",
-    "OpenSearchSearchAdapter",
-    "build_langchain_search_store",
-]
+__all__ = ["build_langchain_search_store"]

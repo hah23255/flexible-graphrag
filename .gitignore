@@ -205,6 +205,14 @@ tests/integration/results/
 flexible-graphrag/parsing_output/
 parsing_output/
 
+# CocoIndex pipeline source staging directory (default WATCH_DIR)
+flexible-graphrag/cocoindex-docs/
+cocoindex-docs/
+
+# CocoIndex LMDB pipeline state
+flexible-graphrag/cocoindex.db/
+cocoindex.db/
+
 
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
@@ -218,9 +226,10 @@ parsing_output/
 .cursormemory
 memory-bank/
 
-# Claude AI settings (local configuration)
-flexible-graphrag/.claude/settings.local.json
-.claude/settings.local.json
+# Local agent / skill tooling (machine-specific)
+.agents/
+.claude/
+skills-lock.json
 
 # GCS service account credentials (machine-specific, never commit)
 flexible-graphrag/gcs.json

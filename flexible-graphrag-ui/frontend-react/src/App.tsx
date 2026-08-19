@@ -118,7 +118,12 @@ const App: React.FC = () => {
 
   // PERSISTENT STATE - Sources Tab (prevents data loss on tab navigation)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [sourcesfolderPath, setSourcesFolderPath] = useState<string>(import.meta.env.VITE_PROCESS_FOLDER_PATH || '/Shared/GraphRAG');
+  // CMIS repository folder (SourcesTab passes this only to the CMIS form -
+  // Alfresco/Nuxeo use their own form state).  VITE_CMIS_PATH, NOT
+  // VITE_PROCESS_FOLDER_PATH: the latter is the LOCAL filesystem folder for
+  // Process Folder, so reusing it here showed a Windows path in the CMIS
+  // dialog and shadowed this fallback.
+  const [sourcesfolderPath, setSourcesFolderPath] = useState<string>(import.meta.env.VITE_CMIS_PATH || '/Shared/GraphRAG');
   const [cmisUrl, setCmisUrl] = useState<string>(`${import.meta.env.VITE_CMIS_BASE_URL || 'http://localhost:8080'}/alfresco/api/-default-/public/cmis/versions/1.1/atom`);
   const [cmisUsername, setCmisUsername] = useState<string>('admin');
   const [cmisPassword, setCmisPassword] = useState<string>('admin');

@@ -103,7 +103,9 @@ export interface NuxeoSourceConfig {
 export class NuxeoSourceFormComponent implements OnInit {
   url: string = environment.nuxeoBaseUrl || 'http://localhost:8081/nuxeo';
   authMethod: string = 'basic';
-  path: string = '/default-domain/workspaces';
+  // Set NUXEO_PATH at build time (generate-env-config.ts) to point the dialog at
+  // your own workspace.  The backend's .env NUXEO_PATH cannot reach the browser.
+  path: string = environment.nuxeoPath || '/default-domain/workspaces/GraphRAG';
 
   username: string = 'Administrator';
   password: string = 'Administrator';

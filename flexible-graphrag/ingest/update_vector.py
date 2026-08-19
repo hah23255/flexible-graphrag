@@ -89,20 +89,46 @@ async def update_vector(
                 await loop.run_in_executor(None, lc_raw_store.add_documents, lc_docs)
                 logger.info("Added %d docs to %s via LC add_documents", len(lc_docs), store_type)
 
-        elif _inner_store_type == "ElasticsearchStore":
-            # Elasticsearch uses aiohttp internally.  Running insert_nodes / VectorStoreIndex
-            # via run_in_executor creates the aiohttp ClientSession in a worker-thread event
-            # loop; that session's Futures are attached to the thread loop, not uvicorn's loop,
-            # causing "Future attached to a different loop" on the first query.
-            # Call async_add directly from this async context so the session is created in
-            # the correct running loop from the start.
-            node_ids = await system.vector_store.async_add(nodes)
-            logger.info(f"Added {len(node_ids)} nodes to Elasticsearch via async_add")
+        elif _inner_store_type in ("ElasticsearchStore", "OpensearchVectorStore"):
+            # Elasticsearch and OpenSearch both use aiohttp internally.  Running
+            # insert_nodes / VectorStoreIndex via run_in_executor creates the aiohttp
+            # ClientSession in a worker-thread event loop; that session's Futures are
+            # attached to the thread loop, not uvicorn's loop, causing "Future attached
+            # to a different loop" on the first query.
+            # Call async_add directly from this async context so the session is created
+            # in the correct running loop from the start.
+            li_store = system.vector_store.get_store()
+            node_ids = await li_store.async_add(nodes)
+            logger.info(f"Added {len(node_ids)} nodes to {_inner_store_type} via async_add")
             if system.vector_index is None:
-                sc = StorageContext.from_defaults(vector_store=system.vector_store)
+                sc = StorageContext.from_defaults(vector_store=li_store)
                 system.vector_index = VectorStoreIndex.from_vector_store(
-                    system.vector_store, storage_context=sc
+                    li_store, storage_context=sc
                 )
+
+        elif _inner_store_type == "WeaviateVectorStore":
+            # Weaviate async client must be used from the running uvicorn loop — not
+            # from run_in_executor(insert_nodes).  Never access li_store.client when
+            # only an async client was provided (raises SyncClientNotProvidedError).
+            li_store = system.vector_store.get_store()
+            aclient = getattr(li_store, "_aclient", None)
+            if aclient is not None and not aclient.is_connected():
+                await aclient.connect()
+            node_ids = await li_store.async_add(nodes)
+            logger.info("Added %d nodes to Weaviate via async_add", len(node_ids))
+            if system.vector_index is None:
+                sc = StorageContext.from_defaults(vector_store=li_store)
+                system.vector_index = VectorStoreIndex.from_vector_store(
+                    li_store, storage_context=sc
+                )
+
+        elif _inner_store_type == "LanceDBVectorStore":
+            li_store = system.vector_store.get_store()
+            node_ids = await li_store.async_add(nodes)
+            refresh = getattr(system.vector_store, "_refresh_table", None)
+            if callable(refresh):
+                refresh()
+            logger.info("Added %d nodes to LanceDB via async_add", len(node_ids))
 
         elif system.vector_index is None:
             sc = StorageContext.from_defaults(vector_store=system.vector_store)
@@ -116,16 +142,6 @@ async def update_vector(
             system.vector_index.refresh_ref_docs(
                 [LIDocument(text=n.text, metadata=n.metadata) for n in nodes if hasattr(n, "text")]
             )
-
-        elif (
-            (store_type == "WeaviateVectorStore" or _inner_store_type == "WeaviateVectorStore")
-            and hasattr(system.vector_store, "_aclient")
-            and system.vector_store._aclient is not None
-        ):
-            if not system.vector_store._aclient.is_connected():
-                await system.vector_store._aclient.connect()
-            node_ids = await system.vector_store.async_add(nodes)
-            logger.info(f"Added {len(node_ids)} nodes to Weaviate via async_add")
 
         else:
             await loop.run_in_executor(None, system.vector_index.insert_nodes, nodes)

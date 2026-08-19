@@ -381,13 +381,60 @@ class SchemaManager:
                 "num_workers": workers
             }
 
+            # Describe each property to the LLM where the ontology says what it
+            # means.  SchemaLLMPathExtractor accepts either List[str] or
+            # List[Tuple[name, description]]; with bare names it prints the data
+            # TYPE in the description slot ("Property label `TIME` with
+            # description (str)"), which tells the model nothing.  rdfs:comment
+            # gives it something usable instead.
+            # entity_props / relation_props are already (name, data_type) tuples,
+            # and LlamaIndex prints the second element as the description —
+            # "Property label `TIME` with description (str)".  Swap the type for
+            # the ontology's rdfs:comment where there is one, keeping the type as
+            # a fallback so the hint is never worse than before.
+            _descs = getattr(ontology_manager, "property_descriptions", None) or {}
+
+            def _describe(props):
+                if not _descs:
+                    return props
+                out = []
+                for p in props:
+                    if isinstance(p, tuple) and len(p) == 2:
+                        name, dtype = p
+                        out.append((name, _descs.get(name) or dtype))
+                    else:
+                        out.append((p, _descs[p]) if p in _descs else p)
+                return out
+
             # Add entity properties if available (unless disabled)
             if entity_props and not disable_properties:
-                extractor_kwargs["possible_entity_props"] = entity_props
+                extractor_kwargs["possible_entity_props"] = _describe(entity_props)
 
             # Add relation properties if available (unless disabled)
             if relation_props and not disable_properties:
-                extractor_kwargs["possible_relation_props"] = relation_props
+                extractor_kwargs["possible_relation_props"] = _describe(relation_props)
+
+            # Triple constraints: which (subject_type, relation, object_type)
+            # combinations are legal.  OntologyManager derives these from
+            # rdfs:domain / rdfs:range, so an ontology already describes them.
+            #
+            # NOTE: LlamaIndex only consults kg_validation_schema when
+            # strict=True — see SchemaLLMPathExtractor, where both the triple
+            # check and property pruning sit behind `if self.strict:`.  Passing
+            # it is still correct when strict=False (it is simply unused), and
+            # without it strict mode validates against a half-specified model.
+            validation_schema = None
+            try:
+                validation_schema = ontology_manager.get_validation_schema()
+            except Exception:  # noqa: BLE001 - optional refinement, never fatal
+                validation_schema = None
+            if validation_schema:
+                extractor_kwargs["kg_validation_schema"] = validation_schema
+                logger.info(
+                    "Using ontology validation schema: %d allowed triple pattern(s)%s",
+                    len(validation_schema),
+                    "" if strict_mode else " (ignored unless STRICT_SCHEMA_VALIDATION=true)",
+                )
 
             return SchemaLLMPathExtractor(**extractor_kwargs)
         elif self.schema_config:
@@ -439,6 +486,18 @@ class SchemaManager:
             # Add relation properties if available (unless disabled)
             if relation_props and not disable_properties:
                 extractor_kwargs["possible_relation_props"] = relation_props
+
+            # Triple constraints from the schema's own "validation_schema" list
+            # (see SAMPLE_SCHEMA in config.py).  Only consulted by LlamaIndex
+            # when strict=True — see the note in the ontology branch above.
+            schema_validation = self.schema_config.get("validation_schema")
+            if schema_validation:
+                extractor_kwargs["kg_validation_schema"] = schema_validation
+                logger.info(
+                    "Using schema validation rules: %d allowed triple pattern(s)%s",
+                    len(schema_validation),
+                    "" if strict_mode else " (ignored unless STRICT_SCHEMA_VALIDATION=true)",
+                )
 
             return SchemaLLMPathExtractor(**extractor_kwargs)
         else:

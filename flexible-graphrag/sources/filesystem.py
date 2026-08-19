@@ -134,6 +134,14 @@ class FileSystemSource(BaseDataSource):
         logger.info(f"FileSystemSource found {len(files)} files")
         return files
     
+    def read_file_bytes(self, path_str: str) -> bytes:
+        """Read raw bytes of a single local file (single-key read for CocoIndex)."""
+        try:
+            return Path(path_str).read_bytes()
+        except Exception as exc:
+            logger.warning("FileSystemSource.read_file_bytes failed for %s: %s", path_str, exc)
+            return b""
+
     def get_documents(self) -> List[Document]:
         """
         Get documents from filesystem paths.

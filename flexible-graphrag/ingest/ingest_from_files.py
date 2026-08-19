@@ -48,6 +48,7 @@ async def ingest_documents(
         skip_graph: If True, skip KG extraction for this ingest (temporary override)
     """
     from retriever_setup import setup_hybrid_retriever
+    from ingest._helpers import warmup_hybrid_retriever
     from stores.index_manager import persist_indexes
 
     def _update_progress(message, progress, current_file=None, current_phase=None, files_completed=0):
@@ -134,25 +135,31 @@ async def ingest_documents(
         system, nodes, documents, loop, skip_graph=skip_graph,
     )
     if not system.graph_intentionally_skipped:
-        _update_progress("Knowledge graph ready", 90, current_phase="kg_extraction")
+        _update_progress("Knowledge graph ready", 78, current_phase="kg_extraction")
 
     # Step 4b: RDF graph
-    rdf_kg_duration, rdf_store_duration = await update_rdf_graph(system, nodes, nodes_kg_extracted=nodes_kg_extracted, skip_graph=skip_graph)
+    if not skip_graph and str(getattr(system.config, "rdf_graph_db", "none")) != "none":
+        _update_progress("Writing RDF graph…", 85, current_phase="rdf_indexing")
+    rdf_kg_duration, rdf_store_duration = await update_rdf_graph(
+        system, nodes, nodes_kg_extracted=nodes_kg_extracted, skip_graph=skip_graph
+    )
 
     if _check_cancellation(processing_id):
         raise RuntimeError("Processing cancelled by user")
 
     # Step 5: Setup hybrid retriever + persist
     setup_hybrid_retriever(system)
+    await warmup_hybrid_retriever(system)
     persist_indexes(system.config, system.vector_index, system.graph_index)
 
     total_duration = time.time() - _ingest_start
-    logger.info(
-        f"Document ingestion completed in {total_duration:.2f}s — "
-        f"Chunk: {chunk_duration:.2f}s, Vector: {vector_duration:.2f}s, "
-        f"Search: {search_duration:.2f}s, KG: {kg_duration + rdf_kg_duration:.2f}s, "
+    timing_summary = (
+        f"{total_duration:.2f}s — Chunk: {chunk_duration:.2f}s, "
+        f"Vector: {vector_duration:.2f}s, Search: {search_duration:.2f}s, "
+        f"KG: {kg_duration + rdf_kg_duration:.2f}s, "
         f"Graph: {graph_duration:.2f}s, RDF: {rdf_store_duration:.2f}s"
     )
+    logger.info(f"Document ingestion completed in {timing_summary}")
 
     if OBSERVABILITY_AVAILABLE and get_rag_metrics:
         try:
@@ -172,7 +179,7 @@ async def ingest_documents(
 
     if status_callback:
         from backend import PROCESSING_STATUS
-        data_source = PROCESSING_STATUS.get(processing_id, {}).get("data_source", "")
+        data_source = PROCESSING_STATUS.get(processing_id, {}).get("data_source") or "filesystem"
         file_count = PROCESSING_STATUS.get(processing_id, {}).get("file_count")
         chunk_count = PROCESSING_STATUS.get(processing_id, {}).get("chunk_count")
         logger.info(f"Completion - data_source={data_source!r}, file_count={file_count}, chunk_count={chunk_count}")
@@ -184,9 +191,11 @@ async def ingest_documents(
         else:
             doc_count = len(documents)
 
+        ui_message = generate_completion_message(system.config, doc_count, skip_graph=skip_graph)
+        logger.info(f"Ingestion complete: {ui_message} ({timing_summary})")
         status_callback(
             processing_id=processing_id,
             status="completed",
-            message=generate_completion_message(system.config, doc_count, skip_graph=skip_graph),
+            message=ui_message,
             progress=100,
         )

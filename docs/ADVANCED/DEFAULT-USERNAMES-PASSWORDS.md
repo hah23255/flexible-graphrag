@@ -29,7 +29,7 @@ Complete reference for all databases, dashboards, and web interfaces organized b
 | **Qdrant** | http://localhost:6333/dashboard | *(none)* | *(none)* | 6333/6334 | 🔵 |
 | **Chroma** | http://localhost:8001/docs/ | *(none)* | *(none)* | 8001 | 🟢 |
 | **Milvus** | http://localhost:3003/ (Attu) | *(none)* | *(none)* | 19530 | 🟢 |
-| **Weaviate** | http://localhost:8081/ | *(none)* | *(none)* | 8081/50051 | 🟢 |
+| **Weaviate** | http://localhost:8086/ | *(none)* | *(none)* | 8086/50051 | 🟢 |
 | **LanceDB** | http://localhost:3005/ | *(none)* | *(none)* | *(embedded)* | 🟢 |
 | **PostgreSQL+pgvector** | http://localhost:5050/ (pgAdmin) | `admin@flexible-graphrag.com` | `admin` | 5433 | 🟢 |
 | **Pinecone** | http://localhost:3004/ (Info) | *(API Key)* | *(API Key)* | *(cloud)* | 🟢 |

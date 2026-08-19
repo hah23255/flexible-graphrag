@@ -10,6 +10,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -82,23 +83,8 @@ class S3Source(BaseDataSource):
         # Create passthrough extractor with progress tracking
         passthrough = PassthroughExtractor(progress_callback=progress_callback)
         
-        # Map all supported file types to passthrough extractor
-        file_extractor = {
-            ".pdf": passthrough,
-            ".docx": passthrough,
-            ".pptx": passthrough,
-            ".xlsx": passthrough,
-            ".doc": passthrough,
-            ".ppt": passthrough,
-            ".xls": passthrough,
-            ".txt": passthrough,
-            ".md": passthrough,
-            ".html": passthrough,
-            ".csv": passthrough,
-            ".png": passthrough,
-            ".jpg": passthrough,
-            ".jpeg": passthrough,
-        }
+        # Map all supported file types to passthrough extractor (not hardcoded here)
+        file_extractor = {ext: passthrough for ext in PASSTHROUGH_EXTENSIONS}
         
         # Initialize S3Reader with credentials and passthrough extractors
         reader_kwargs = {
@@ -119,7 +105,88 @@ class S3Source(BaseDataSource):
         reader = S3Reader(**reader_kwargs)
         
         return reader, passthrough
-    
+
+    def get_placeholder_docs(self, extractor=None) -> List[Document]:
+        """
+        Return reader-level placeholder documents WITHOUT calling DocumentProcessor.
+
+        Parameters
+        ----------
+        extractor:
+            Optional custom extractor to replace PassthroughExtractor.
+            Pass ``BytesCaptureExtractor()`` from the CocoIndex pipeline to
+            capture raw bytes immediately (before temp files are deleted).
+            When None, uses a plain PassthroughExtractor (returns path + _fs).
+
+        Returns
+        -------
+        List[Document] of placeholder docs ready for downstream processing.
+        """
+        from llama_index.readers.s3 import S3Reader
+
+        actual_extractor = extractor or PassthroughExtractor()
+        file_extractor = {ext: actual_extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "bucket": self.bucket_name,
+            "file_extractor": file_extractor,
+        }
+        if self.prefix:
+            reader_kwargs["key"] = self.prefix
+        if self.aws_access_key_id and self.aws_secret_access_key:
+            reader_kwargs["aws_access_id"] = self.aws_access_key_id
+            reader_kwargs["aws_access_secret"] = self.aws_secret_access_key
+        if self.region_name:
+            reader_kwargs["region_name"] = self.region_name
+
+        reader = S3Reader(**reader_kwargs)
+        return reader.load_data()
+
+    def read_file_bytes(self, object_key: str) -> bytes:
+        """
+        Read the raw bytes of a single S3 object, reusing the source's cached
+        credentials/config and the LlamaIndex ``S3Reader`` restricted to one key.
+
+        NO new SDK code — this uses the same reader machinery as the full listing,
+        with a ``BytesCaptureExtractor`` so the object bytes are captured in-line
+        (via fsspec) without parsing or DocumentProcessor.
+
+        Parameters
+        ----------
+        object_key:
+            The S3 object key (without the ``bucket/`` prefix), e.g.
+            ``sample-docs/cmispress.txt``.
+
+        Returns
+        -------
+        Raw file bytes (``b""`` if the object could not be read).
+        """
+        from llama_index.readers.s3 import S3Reader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "bucket": self.bucket_name,
+            "key": object_key,  # single object — restricts reader to one key
+            "file_extractor": file_extractor,
+        }
+        if self.aws_access_key_id and self.aws_secret_access_key:
+            reader_kwargs["aws_access_id"] = self.aws_access_key_id
+            reader_kwargs["aws_access_secret"] = self.aws_secret_access_key
+        if self.region_name:
+            reader_kwargs["region_name"] = self.region_name
+
+        reader = S3Reader(**reader_kwargs)
+        docs = reader.load_data()
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("S3Source.read_file_bytes: no bytes captured for key %s", object_key)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """
         Get documents from S3 using S3Reader for download, DocumentProcessor for parsing.

@@ -20,11 +20,12 @@ from llama_index.core.schema import BaseNode
 from typing import List, Dict, Any, Union
 from pathlib import Path
 import logging
+import os
 
 from config import Settings as AppSettings, LLMProvider
 from schema_manager import SchemaManager
 from factories import LLMFactory
-from process.document_processor import DocumentProcessor
+from process.document_processor import DocumentProcessor, format_parser_display_name
 from stores.index_manager import setup_databases, initialize_indexes, persist_indexes
 from process.kg_extractor import count_extracted_entities_and_relations
 from ingest.ingest_from_files import (
@@ -73,62 +74,78 @@ class HybridSearchSystem:
 
         self.schema_manager = SchemaManager(active_schema, config)
 
-        # LLM + embedding model
-        logger.info(f"=== LLM CONFIGURATION ===")
-        provider_name = getattr(config.llm_provider, 'value', config.llm_provider)
-        logger.info(f"LLM Provider: {provider_name}")
+        # CocoIndex bridge emits its own combined config log (pipeline backend +
+        # LLM + DB + framework) after main.py starts it.  Skip all config logging
+        # here to avoid a duplicate block.
+        _cocoindex_active = os.getenv("PIPELINE_BACKEND", "").lower() == "cocoindex"
+
+        # Always create LLM / embedding regardless of logging.
         self.llm = LLMFactory.create_llm(config.llm_provider, config.llm_config)
         self.embed_model = LLMFactory.create_embedding_model(config.llm_provider, config.llm_config, settings=config)
 
-        if hasattr(self.llm, 'model'): logger.info(f"LLM Model: {self.llm.model}")
-        if hasattr(self.llm, 'base_url'): logger.info(f"LLM Base URL: {self.llm.base_url}")
-        if hasattr(self.llm, 'request_timeout'): logger.info(f"LLM Timeout: {self.llm.request_timeout}s")
-        if hasattr(self.llm, 'temperature'): logger.info(f"LLM Temperature: {self.llm.temperature}")
-        if hasattr(self.embed_model, 'model_name'): logger.info(f"Embedding Model: {self.embed_model.model_name}")
-        elif hasattr(self.embed_model, '_model_name'): logger.info(f"Embedding Model: {self.embed_model._model_name}")
-        if hasattr(self.embed_model, 'base_url'): logger.info(f"Embedding Base URL: {self.embed_model.base_url}")
+        if not _cocoindex_active:
+            logger.info(f"=== PIPELINE BACKEND ===")
+            logger.info(f"Pipeline Backend  : Regular Flexible GraphRAG pipeline with LlamaIndex / LangChain stages supported")
 
-        logger.info(f"=== DATABASE CONFIGURATION ===")
-        graph_db_name  = getattr(config.pg_graph_db,  'value', config.pg_graph_db)  if config.pg_graph_db  else 'none'
-        rdf_db_name    = getattr(config.rdf_graph_db, 'value', config.rdf_graph_db) if hasattr(config, 'rdf_graph_db') and config.rdf_graph_db else 'none'
-        vector_db_name = getattr(config.vector_db,    'value', config.vector_db)    if config.vector_db    else 'none'
-        search_db_name = getattr(config.search_db,    'value', config.search_db)    if config.search_db    else 'none'
-        logger.info(f"Property Graph DB: {graph_db_name}")
-        logger.info(f"RDF Graph DB: {rdf_db_name}")
-        logger.info(f"Vector DB: {vector_db_name}")
-        logger.info(f"Search DB: {search_db_name}")
-        logger.info(f"KG Extraction / Store: {config.enable_knowledge_graph}")
+            _L = 21  # LLM label column width
+            provider_name = getattr(config.llm_provider, 'value', config.llm_provider)
+            logger.info(f"=== LLM CONFIGURATION ===")
+            logger.info(f"{'LLM Provider':<{_L}}: {provider_name}")
+            if hasattr(self.llm, 'model'): logger.info(f"{'LLM Model':<{_L}}: {self.llm.model}")
+            if hasattr(self.llm, 'base_url'): logger.info(f"{'LLM Base URL':<{_L}}: {self.llm.base_url}")
+            if hasattr(self.llm, 'request_timeout'): logger.info(f"{'LLM Timeout':<{_L}}: {self.llm.request_timeout}s")
+            if hasattr(self.llm, 'temperature'): logger.info(f"{'LLM Temperature':<{_L}}: {self.llm.temperature}")
+            _emb_kind = getattr(config, 'embedding_kind', None) or getattr(config, 'llm_provider', '')
+            _emb_kind_str = getattr(_emb_kind, 'value', _emb_kind)
+            logger.info(f"{'Embedding Kind':<{_L}}: {_emb_kind_str}")
+            _emb_model = (
+                getattr(self.embed_model, 'model_name', None)
+                or getattr(self.embed_model, '_model_name', None)
+                or ''
+            )
+            if _emb_model: logger.info(f"{'Embedding Model':<{_L}}: {_emb_model}")
+            if hasattr(self.embed_model, 'base_url'): logger.info(f"{'Embedding Base URL':<{_L}}: {self.embed_model.base_url}")
 
-        _pg_str  = str(graph_db_name).lower()
-        _rdf_str = str(rdf_db_name).lower()
-        _vec_str = str(vector_db_name).lower()
-        _src_str = str(search_db_name).lower()
+            graph_db_name  = getattr(config.pg_graph_db,  'value', config.pg_graph_db)  if config.pg_graph_db  else 'none'
+            rdf_db_name    = getattr(config.rdf_graph_db, 'value', config.rdf_graph_db) if hasattr(config, 'rdf_graph_db') and config.rdf_graph_db else 'none'
+            vector_db_name = getattr(config.vector_db,    'value', config.vector_db)    if config.vector_db    else 'none'
+            search_db_name = getattr(config.search_db,    'value', config.search_db)    if config.search_db    else 'none'
+            logger.info(f"=== DATABASE CONFIGURATION ===")
+            logger.info(f"{'Property Graph DB':<22}: {graph_db_name}")
+            logger.info(f"{'RDF Graph DB':<22}: {rdf_db_name}")
+            logger.info(f"{'Vector DB':<22}: {vector_db_name}")
+            logger.info(f"{'Search DB':<22}: {search_db_name}")
+            logger.info(f"{'KG Extraction / Store':<22}: {config.enable_knowledge_graph}")
 
-        def _fw(db_str, backend_attr, lc_label, li_label="LlamaIndex"):
-            if db_str in ("none", ""):
-                return "none"
-            return lc_label if (getattr(config, backend_attr, "llamaindex") or "llamaindex").lower() == "langchain" else li_label
+            _pg_str  = str(graph_db_name).lower()
+            _vec_str = str(vector_db_name).lower()
+            _src_str = str(search_db_name).lower()
 
-        # Property Graph Store framework is always LlamaIndex or LangChain regardless of db choice
-        _pg_fw  = "LangChain" if (getattr(config, "graph_backend", "llamaindex") or "llamaindex").lower() == "langchain" else "LlamaIndex"
-        _vec_fw = _fw(_vec_str, "vector_backend", "LangChain")
-        _src_fw = _fw(_src_str, "search_backend", "LangChain")
-        _kg_ext = (getattr(config, "kg_extractor_backend", "llamaindex") or "llamaindex").strip().lower()
-        _kg_fw  = "LangChain" if _kg_ext == "langchain" else "LlamaIndex"
-        _fusion_setting = (getattr(config, "retrieval_fusion", "llamaindex") or "llamaindex").strip().lower()
-        _fusion_fw = "LangChain (EnsembleRetriever, RRF)" if _fusion_setting == "langchain" else "LlamaIndex (QueryFusionRetriever)"
+            def _fw(db_str, backend_attr, lc_label, li_label="LlamaIndex"):
+                if db_str in ("none", ""):
+                    return "none"
+                return lc_label if (getattr(config, backend_attr, "llamaindex") or "llamaindex").lower() == "langchain" else li_label
 
-        _chunker_backend = (getattr(config, "chunker_backend", "llamaindex") or "llamaindex").strip().lower()
-        _chunker_fw = "LangChain" if _chunker_backend == "langchain" else "LlamaIndex"
+            _pg_fw  = "LangChain" if (getattr(config, "graph_backend", "llamaindex") or "llamaindex").lower() == "langchain" else "LlamaIndex"
+            _vec_fw = _fw(_vec_str, "vector_backend", "LangChain")
+            _src_fw = _fw(_src_str, "search_backend", "LangChain")
+            _kg_ext = (getattr(config, "kg_extractor_backend", "llamaindex") or "llamaindex").strip().lower()
+            _kg_fw  = "LangChain" if _kg_ext == "langchain" else "LlamaIndex"
+            _fusion_setting = (getattr(config, "retrieval_fusion", "llamaindex") or "llamaindex").strip().lower()
+            _fusion_fw = "LangChain (EnsembleRetriever, RRF)" if _fusion_setting == "langchain" else "LlamaIndex (QueryFusionRetriever)"
+            _chunker_backend = (getattr(config, "chunker_backend", "llamaindex") or "llamaindex").strip().lower()
+            _chunker_fw = "LangChain" if _chunker_backend == "langchain" else "LlamaIndex"
 
-        logger.info(f"=== FRAMEWORK CONFIGURATION ===")
-        logger.info(f"Property Graph Store: {_pg_fw}")
-        logger.info(f"RDF Graph Store: LangChain / RDFLib")
-        logger.info(f"Vector Store: {_vec_fw}")
-        logger.info(f"Search Store: {_src_fw}")
-        logger.info(f"Doc Chunking / Splitting Pipeline: {_chunker_fw}")
-        logger.info(f"KG Extraction: {_kg_fw}")
-        logger.info(f"Retrieval Fusion: {_fusion_fw}")
+            logger.info(f"=== FRAMEWORK CONFIGURATION ===")
+            logger.info(f"{'Property Graph Store':<21}: {_pg_fw}")
+            logger.info(f"{'RDF Graph Store':<21}: LangChain / RDFLib")
+            logger.info(f"{'Vector Store':<21}: {_vec_fw}")
+            logger.info(f"{'Search Store':<21}: {_src_fw}")
+            _parser_raw = getattr(config.document_parser, 'value', config.document_parser) if hasattr(config, 'document_parser') else 'docling'
+            logger.info(f"{'Document Parser':<21}: {format_parser_display_name(_parser_raw)}")
+            logger.info(f"{'Chunking / Splitting':<21}: {_chunker_fw}")
+            logger.info(f"{'KG Extraction':<21}: {_kg_fw}")
+            logger.info(f"{'Retrieval Fusion':<21}: {_fusion_fw}")
 
         # Global LlamaIndex settings
         Settings.llm = self.llm
@@ -184,10 +201,13 @@ class HybridSearchSystem:
 
         # Build property graph adapter: LangChain for langchain backend / LC-only stores,
         # LlamaIndex for everything else (including disabled graph_store=None).
+        # When GRAPH_BACKEND=cocoindex, CocoIndex owns graph ingestion — no LangChain
+        # adapter is needed even for LC-only stores (e.g. SurrealDB).
         graph_backend_str = (getattr(config, "graph_backend", "llamaindex") or "llamaindex").lower()
         db_type_str = str(getattr(config, "pg_graph_db", "none") or "none").lower()
         is_lc_backend = (
-            (graph_backend_str == "langchain" or db_type_str in LC_ONLY_PG_STORES)
+            graph_backend_str != "cocoindex"
+            and (graph_backend_str == "langchain" or db_type_str in LC_ONLY_PG_STORES)
             and db_type_str not in LI_ONLY_PG_STORES
         )
 

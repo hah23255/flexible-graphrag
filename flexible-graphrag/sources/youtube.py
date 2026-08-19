@@ -117,6 +117,9 @@ class YouTubeSource(BaseDataSource):
                     
                     start_time = counter - self.chunk_size_seconds
                     end_time = segment['start']
+                    start_label = str(timedelta(seconds=start_time)).split('.')[0]
+                    end_label = str(timedelta(seconds=end_time)).split('.')[0]
+                    chunk_name = f"{self.video_id}_{start_label.replace(':', '-')}.txt"
                     
                     doc = Document(
                         text=transcript_content.strip(),
@@ -124,8 +127,10 @@ class YouTubeSource(BaseDataSource):
                             'source': 'youtube',
                             'video_id': self.video_id,
                             'url': self.url,
-                            'start_timestamp': str(timedelta(seconds=start_time)).split('.')[0],
-                            'end_timestamp': str(timedelta(seconds=end_time)).split('.')[0],
+                            'file_name': chunk_name,
+                            'file_path': f"youtube://{self.video_id}/{start_label}",
+                            'start_timestamp': start_label,
+                            'end_timestamp': end_label,
                             'chunk_size_seconds': self.chunk_size_seconds,
                             'source_type': 'youtube_transcript'
                         }
@@ -139,6 +144,9 @@ class YouTubeSource(BaseDataSource):
             if transcript_content.strip():
                 start_time = counter - self.chunk_size_seconds
                 end_time = transcript_data[-1]['start'] if transcript_data else counter
+                start_label = str(timedelta(seconds=start_time)).split('.')[0]
+                end_label = str(timedelta(seconds=end_time)).split('.')[0]
+                chunk_name = f"{self.video_id}_{start_label.replace(':', '-')}.txt"
                 
                 doc = Document(
                     text=transcript_content.strip(),
@@ -146,8 +154,10 @@ class YouTubeSource(BaseDataSource):
                         'source': 'youtube',
                         'video_id': self.video_id,
                         'url': self.url,
-                        'start_timestamp': str(timedelta(seconds=start_time)).split('.')[0],
-                        'end_timestamp': str(timedelta(seconds=end_time)).split('.')[0],
+                        'file_name': chunk_name,
+                        'file_path': f"youtube://{self.video_id}/{start_label}",
+                        'start_timestamp': start_label,
+                        'end_timestamp': end_label,
                         'chunk_size_seconds': self.chunk_size_seconds,
                         'source_type': 'youtube_transcript'
                     }

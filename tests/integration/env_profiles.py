@@ -41,6 +41,26 @@ PROFILES: dict[str, dict[str, str]] = {
         "SEARCH_DB": "bm25",
         "SEARCH_BACKEND": "llamaindex",
     },
+    # Neo4j LlamaIndex + Qdrant vector + Elasticsearch search + Ontotext GraphDB RDF
+    # Full stack: all four DB types active simultaneously.
+    "neo4j-elastic-graphdb": {
+        "PG_GRAPH_DB": "neo4j",
+        "GRAPH_BACKEND": "llamaindex",
+        "USE_ONTOLOGY": "true",
+        "INGESTION_STORAGE_MODE": "both",
+        "NEO4J_GRAPH_DB_CONFIG": '{"url": "bolt://localhost:7687", "username": "neo4j", "password": "password"}',
+        "VECTOR_DB": "qdrant",
+        "VECTOR_BACKEND": "llamaindex",
+        "QDRANT_VECTOR_DB_CONFIG": '{"host": "localhost", "port": 6333, "collection_name": "hybrid_search_vector", "https": false}',
+        "SEARCH_DB": "elasticsearch",
+        "SEARCH_BACKEND": "llamaindex",
+        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "hybrid_search_fulltext"}',
+        "RDF_GRAPH_DB": "graphdb",
+        "GRAPHDB_URL": "http://localhost:7200",
+        "GRAPHDB_REPOSITORY": "flexible-graphrag",
+        "GRAPHDB_USERNAME": "admin",
+        "GRAPHDB_PASSWORD": "admin",
+    },
     "falkordb-llamaindex": {
         "PG_GRAPH_DB": "falkordb",
         "GRAPH_BACKEND": "llamaindex",
@@ -170,7 +190,7 @@ PROFILES: dict[str, dict[str, str]] = {
     },
     "elasticsearch-vector": {
         "VECTOR_DB": "elasticsearch",
-        "ELASTICSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "flexible_graphrag_vectors"}',
+        "ELASTICSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "hybrid_search_vector"}',
         "PG_GRAPH_DB": "none",
     },
     "postgres-vector": {
@@ -186,13 +206,13 @@ PROFILES: dict[str, dict[str, str]] = {
     "opensearch-vector": {
         "VECTOR_DB": "opensearch",
         "VECTOR_BACKEND": "llamaindex",
-        "OPENSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "flexible_graphrag_vectors"}',
+        "OPENSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "hybrid_search_vector"}',
         "PG_GRAPH_DB": "none",
     },
     "opensearch-vector-langchain": {
         "VECTOR_DB": "opensearch",
         "VECTOR_BACKEND": "langchain",
-        "OPENSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "flexible_graphrag_vectors"}',
+        "OPENSEARCH_VECTOR_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "hybrid_search_vector"}',
         "PG_GRAPH_DB": "none",
     },
     "milvus-vector": {
@@ -204,7 +224,10 @@ PROFILES: dict[str, dict[str, str]] = {
     "weaviate-vector": {
         "VECTOR_DB": "weaviate",
         "VECTOR_BACKEND": "langchain",
-        "WEAVIATE_VECTOR_DB_CONFIG": '{"url": "http://localhost:8081", "grpc_port": 50051, "index_name": "HybridSearch", "text_key": "content"}',
+        # 8086, not 8081 — 8081 is Nuxeo (docker/includes/weaviate.yaml).  A stale
+        # 8081 here reaches Nuxeo instead and fails as
+        # "Meta endpoint! Unexpected status code: 404".
+        "WEAVIATE_VECTOR_DB_CONFIG": '{"url": "http://localhost:8086", "grpc_port": 50051, "index_name": "HybridSearch", "text_key": "content"}',
         "PG_GRAPH_DB": "none",
     },
     "lancedb-vector": {
@@ -217,22 +240,22 @@ PROFILES: dict[str, dict[str, str]] = {
     # ── Search backends ──────────────────────────────────────────────────────
     "elasticsearch-search": {
         "SEARCH_DB": "elasticsearch",
-        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "flexible_graphrag_search"}',
+        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "hybrid_search_fulltext"}',
         "SEARCH_BACKEND": "llamaindex",
     },
     "elasticsearch-search-langchain": {
         "SEARCH_DB": "elasticsearch",
-        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "flexible_graphrag_search"}',
+        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "hybrid_search_fulltext"}',
         "SEARCH_BACKEND": "langchain",
     },
     "opensearch-search": {
         "SEARCH_DB": "opensearch",
-        "OPENSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "flexible_graphrag_search"}',
+        "OPENSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "hybrid_search_fulltext"}',
         "SEARCH_BACKEND": "llamaindex",
     },
     "opensearch-search-langchain": {
         "SEARCH_DB": "opensearch",
-        "OPENSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "flexible_graphrag_search"}',
+        "OPENSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9201", "index_name": "hybrid_search_fulltext"}',
         "SEARCH_BACKEND": "langchain",
     },
     "bm25-llamaindex": {
@@ -421,6 +444,106 @@ PROFILES: dict[str, dict[str, str]] = {
         "SEARCH_BACKEND": "langchain",
         "USE_ONTOLOGY": "false",
     },
+
+    # ── CocoIndex pipeline profiles ──────────────────────────────────────────
+    # Full CocoIndex pipeline: native Qdrant vector + native Neo4j PG +
+    # flexible Elasticsearch search + flexible GraphDB RDF
+    "coco-qdrant-neo4j": {
+        "PIPELINE_BACKEND": "cocoindex",
+        "SOURCE_BACKEND": "cocoindex",
+        "VECTOR_BACKEND": "cocoindex",
+        "GRAPH_BACKEND": "cocoindex",
+        "VECTOR_DB": "qdrant",
+        "QDRANT_VECTOR_DB_CONFIG": '{"host": "localhost", "port": 6333, "collection_name": "hybrid_search_vector", "https": false}',
+        "PG_GRAPH_DB": "neo4j",
+        "NEO4J_GRAPH_DB_CONFIG": '{"url": "bolt://localhost:7687", "username": "neo4j", "password": "password"}',
+        "SEARCH_DB": "elasticsearch",
+        "SEARCH_BACKEND": "llamaindex",
+        "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url": "http://localhost:9200", "index_name": "hybrid_search_fulltext"}',
+        "RDF_GRAPH_DB": "graphdb",
+        "GRAPHDB_URL": "http://localhost:7200",
+        "GRAPHDB_REPOSITORY": "flexible-graphrag",
+        "GRAPHDB_USERNAME": "admin",
+        "GRAPHDB_PASSWORD": "root",
+        "INGESTION_STORAGE_MODE": "graph_and_vector",
+        "USE_ONTOLOGY": "true",
+    },
+    # CocoIndex + SurrealDB (native connector) + flexible BM25 search
+    "coco-qdrant-surrealdb": {
+        "PIPELINE_BACKEND": "cocoindex",
+        "SOURCE_BACKEND": "cocoindex",
+        "VECTOR_BACKEND": "cocoindex",
+        "GRAPH_BACKEND": "cocoindex",
+        "VECTOR_DB": "qdrant",
+        "QDRANT_VECTOR_DB_CONFIG": '{"host": "localhost", "port": 6333, "collection_name": "coco_surrealdb_test", "https": false}',
+        "PG_GRAPH_DB": "surrealdb",
+        "SURREALDB_GRAPH_DB_CONFIG": '{"url": "ws://localhost:8010/rpc", "namespace": "test", "database": "flexible_graphrag", "username": "root", "password": "root"}',
+        "SEARCH_DB": "bm25",
+        "SEARCH_BACKEND": "llamaindex",
+        "INGESTION_STORAGE_MODE": "graph_and_vector",
+        "USE_ONTOLOGY": "true",
+    },
+    # CocoIndex minimal smoke: native Qdrant only — no PG, no RDF, BM25 search
+    "coco-minimal": {
+        "PIPELINE_BACKEND": "cocoindex",
+        "SOURCE_BACKEND": "cocoindex",
+        "VECTOR_BACKEND": "cocoindex",
+        "VECTOR_DB": "qdrant",
+        "QDRANT_VECTOR_DB_CONFIG": '{"host": "localhost", "port": 6333, "collection_name": "coco_minimal_test", "https": false}',
+        "PG_GRAPH_DB": "none",
+        "RDF_GRAPH_DB": "none",
+        "SEARCH_DB": "bm25",
+        "SEARCH_BACKEND": "llamaindex",
+        "USE_ONTOLOGY": "false",
+        "ENABLE_KNOWLEDGE_GRAPH": "false",
+    },
+    # CocoIndex pipeline but LI storage adapters (tests pipeline infra mixed with LI targets)
+    "coco-flexible-neo4j-qdrant": {
+        "PIPELINE_BACKEND": "cocoindex",
+        "SOURCE_BACKEND": "flexible",
+        "VECTOR_BACKEND": "llamaindex",
+        "GRAPH_BACKEND": "llamaindex",
+        "VECTOR_DB": "qdrant",
+        "QDRANT_VECTOR_DB_CONFIG": '{"host": "localhost", "port": 6333, "collection_name": "coco_flex_test", "https": false}',
+        "PG_GRAPH_DB": "neo4j",
+        "NEO4J_GRAPH_DB_CONFIG": '{"url": "bolt://localhost:7687", "username": "neo4j", "password": "password"}',
+        "SEARCH_DB": "bm25",
+        "SEARCH_BACKEND": "llamaindex",
+        "INGESTION_STORAGE_MODE": "graph_and_vector",
+        "USE_ONTOLOGY": "true",
+    },
+
+    # ── Langflow-enabled profiles ────────────────────────────────────────────
+    # Langflow flows enabled alongside LlamaIndex Neo4j backend
+    "langflow-neo4j-llamaindex": {
+        "ENABLE_LANGFLOW_FLOWS": "true",
+        "PG_GRAPH_DB": "neo4j",
+        "GRAPH_BACKEND": "llamaindex",
+        "USE_ONTOLOGY": "true",
+        "INGESTION_STORAGE_MODE": "graph_and_vector",
+        "NEO4J_GRAPH_DB_CONFIG": '{"url": "bolt://localhost:7687", "username": "neo4j", "password": "password"}',
+        "SEARCH_DB": "bm25",
+        "SEARCH_BACKEND": "llamaindex",
+    },
+    # Langflow flows enabled alongside LangChain Neo4j backend
+    "langflow-neo4j-langchain": {
+        "ENABLE_LANGFLOW_FLOWS": "true",
+        "PG_GRAPH_DB": "neo4j",
+        "GRAPH_BACKEND": "langchain",
+        "USE_LANGCHAIN_PG": "true",
+        "USE_ONTOLOGY": "true",
+        "INGESTION_STORAGE_MODE": "graph_and_vector",
+        "NEO4J_GRAPH_DB_CONFIG": '{"url": "bolt://localhost:7687", "username": "neo4j", "password": "password"}',
+        "SEARCH_DB": "bm25",
+        "SEARCH_BACKEND": "llamaindex",
+    },
+    # NOTE: A "langflow-coco-neo4j" combined profile is intentionally absent.
+    # Langflow (ENABLE_LANGFLOW_FLOWS=true) and the CocoIndex pipeline
+    # (PIPELINE_BACKEND=cocoindex) are mutually exclusive — when both are set
+    # the CocoIndex bridge does not activate and regular ingest runs instead.
+    # Future: CocoIndex components as Langflow custom components is under
+    # investigation. For now, use "langflow-neo4j-llamaindex" or "coco-qdrant-neo4j"
+    # but not both simultaneously.
 }
 
 # Applied before profile-specific overrides (profile values win).

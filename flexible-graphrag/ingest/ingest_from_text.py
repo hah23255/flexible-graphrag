@@ -34,6 +34,7 @@ async def ingest_text(
         skip_graph: Skip knowledge graph extraction (faster, vector+search only)
     """
     from retriever_setup import setup_hybrid_retriever
+    from ingest._helpers import warmup_hybrid_retriever
 
     logger.info(f"Ingesting text content from: {source_name}")
 
@@ -79,6 +80,7 @@ async def ingest_text(
         raise RuntimeError("Processing cancelled by user")
 
     setup_hybrid_retriever(system)
+    await warmup_hybrid_retriever(system)
     logger.info(
         f"Text ingestion completed -- "
         f"Chunk: {chunk_duration:.2f}s, Vector: {vector_duration:.2f}s, "

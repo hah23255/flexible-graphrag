@@ -176,8 +176,8 @@ curl -X DELETE "http://localhost:19530/v1/collection" \
 
 ### Weaviate (Schema Management)
 
-**Via Weaviate Console (http://localhost:8081/console):**
-1. Open **Weaviate Console** at `http://localhost:8081/console`
+**Via Weaviate Console (http://localhost:8086/console):**
+1. Open **Weaviate Console** at `http://localhost:8086/console`
 2. Navigate to **Schema** section
 3. Find your class (typically `HybridSearch` or `Documents`)
 4. Click **"Delete Class"** button

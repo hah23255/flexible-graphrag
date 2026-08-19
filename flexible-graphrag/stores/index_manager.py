@@ -30,6 +30,12 @@ def setup_databases(config) -> Tuple:
     from adapters.graph.pg_store_adapter import LC_ONLY_PG_STORES, LI_ONLY_PG_STORES
 
     # Vector database
+    # When VECTOR_BACKEND=cocoindex, CocoIndex owns ingestion into the vector
+    # store; LlamaIndex must not create its own index wrapper (which would
+    # double-write on ingest).  We still need a read-only connection for
+    # hybrid search, so we do NOT skip store creation here — but we do skip
+    # creating the VectorStoreIndex in initialize_indexes below.
+    _vector_backend_str = (getattr(config, "vector_backend", "llamaindex") or "llamaindex").lower()
     vector_store = DatabaseFactory.create_vector_store(
         config.vector_db,
         config.vector_db_config or {},
@@ -39,6 +45,11 @@ def setup_databases(config) -> Tuple:
     )
     if vector_store is None:
         logger.info("Vector search disabled - system will use only graph and/or fulltext search")
+    elif _vector_backend_str == "cocoindex":
+        logger.info(
+            "Vector store created for query (read); CocoIndex owns ingestion "
+            "(VECTOR_BACKEND=cocoindex — LlamaIndex VectorStoreIndex skipped)"
+        )
 
     # Warn when vector and graph backends are the same technology (e.g. both Neo4j).
     # In that configuration LlamaIndex writes text-chunk nodes TWICE per document:
@@ -63,6 +74,14 @@ def setup_databases(config) -> Tuple:
     if db_type_str == "none":
         graph_store = None
         logger.info("Graph search disabled - system will use only vector and/or fulltext search")
+    elif graph_backend_str == "cocoindex":
+        # CocoIndex owns graph ingestion; LlamaIndex PropertyGraphStore not needed.
+        # Returning None here lets initialize_indexes skip PropertyGraphIndex creation.
+        graph_store = None
+        logger.info(
+            "CocoIndex property graph backend: %s (CocoIndex native connector used for ingestion)",
+            db_type_str,
+        )
     elif (graph_backend_str == "langchain" or db_type_str in LC_ONLY_PG_STORES) and db_type_str not in LI_ONLY_PG_STORES:
         # LangChain adapter is built in _init_adapters; no LI PropertyGraphStore needed.
         # Returning None here lets initialize_indexes skip PropertyGraphIndex creation.
@@ -185,7 +204,14 @@ def initialize_indexes(config, vector_store, graph_store, search_store, llm, emb
     )
 
     # Vector index
-    if li_vector_store is not None:
+    _vb = (getattr(config, "vector_backend", "llamaindex") or "llamaindex").lower()
+    if _vb == "cocoindex":
+        # CocoIndex owns ingestion; skip the LlamaIndex VectorStoreIndex so it
+        # never double-writes or triggers lazy collection creation via add().
+        # Hybrid search queries the vector store directly via the adapter.
+        logger.info("LlamaIndex vector index: skipped (VECTOR_BACKEND=cocoindex)")
+        vector_index = None
+    elif li_vector_store is not None:
         logger.info("Reconnecting to vector store...")
         storage_context = StorageContext.from_defaults(vector_store=li_vector_store)
         vector_index = VectorStoreIndex(

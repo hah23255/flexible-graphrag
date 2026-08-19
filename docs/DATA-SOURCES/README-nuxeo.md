@@ -16,11 +16,22 @@ changes in Nuxeo flow into the graph in real time.
 - A running Nuxeo server (LTS 2023+ recommended). A local option is
   [aborroy/nuxeo-deployment](https://github.com/aborroy/nuxeo-deployment) (PostgreSQL-backed Nuxeo
   built from public source).
-- The Nuxeo Python client — already declared in `pyproject.toml`
-  (`nuxeo[oauth2]`), so a normal install pulls it in. To add it to an existing venv:
+- The Nuxeo Python client — already declared in `pyproject.toml`, so a normal
+  install pulls it in. To add it to an existing venv:
   ```bash
-  uv pip install "nuxeo[oauth2]"
+  uv pip install nuxeo authlib "pyjwt[crypto]"
   ```
+  > **Do not install `nuxeo[oauth2]`.** That extra is `authlib` + `jwt`, and its
+  > `jwt` is GehirnInc python-jwt, which claims the same top-level `jwt` module
+  > as PyJWT and overwrites it — breaking `python-arango` (and so
+  > `langchain-arangodb` and the ArangoDB graph store), `authlib` itself, and
+  > Langflow. The two cannot coexist and no version pin resolves it.
+  >
+  > Flexible GraphRAG installs the extra's two halves directly instead —
+  > `authlib` and `pyjwt[crypto]` — and `sources/nuxeo.py` implements the three
+  > symbols `nuxeo.auth.oauth2` needs (`JWT`, `jwk_from_dict`, `JWTDecodeError`)
+  > on top of PyJWT. **All three auth methods, including client-side
+  > access-token validation, work normally.**
 
 ## Configuration
 
@@ -33,7 +44,7 @@ NUXEO_URL=http://localhost:8081/nuxeo
 # Auth method: basic | oauth2 | token   (default: basic)
 NUXEO_AUTH_METHOD=basic
 # Path to ingest (folder or single document)
-NUXEO_PATH=/default-domain/workspaces
+NUXEO_PATH=/default-domain/workspaces/GraphRAG
 ```
 
 In the UI, choose **Nuxeo Repository** as the data source, pick the **Authentication** method, and
@@ -46,7 +57,7 @@ lowercased/normalized (and truncated ~24 chars) from the title at creation. **Al
 from the Nuxeo browse URL** — everything after `#!/browse` is the exact path:
 
 ```
-#!/browse/default-domain/workspaces/test   ->   /default-domain/workspaces/test
+#!/browse/default-domain/workspaces/GraphRAG   ->   /default-domain/workspaces/GraphRAG
 ```
 
 - A **folder** path ingests all supported documents under it (recursive optional).
@@ -92,8 +103,14 @@ auto-refreshes when a refresh token is present.
 
 **Step 1 — register an OAuth2 client in Nuxeo.** In the Admin Center → **Cloud Services →
 Consumers**, add a client with a Client ID, an optional secret, and a redirect URI
-(e.g. `http://localhost:8888/callback`). If the Web UI screen doesn't persist it, you can register
-it via the directory API:
+(e.g. `http://localhost:8888/callback`).
+
+> This is a **manual, per-deployment step that does not survive recreating the
+> Nuxeo containers** — the client lives in Nuxeo's `oauth2Clients` directory, not
+> in this repo. After a fresh deployment only `nuxeo-drive` and `nuxeo-mobile`
+> exist, and `/oauth2/authorize` returns **HTTP 400** until you re-register.
+
+If the Web UI screen doesn't persist it, you can register it via the directory API:
 
 ```bash
 curl -u Administrator:Administrator -H "Content-Type: application/json" \
@@ -206,8 +223,12 @@ delete, resolves the live document, and ingests it. Version snapshots (`versionC
 
 ## Python Library Information
 
-- **Nuxeo client**: [`nuxeo`](https://pypi.org/project/nuxeo/) (installed as `nuxeo[oauth2]`) —
-  basic / token / JWT / OAuth2 auth, NXQL query, blob download.
+- **Nuxeo client**: [`nuxeo`](https://pypi.org/project/nuxeo/) (plain, *not* the
+  `[oauth2]` extra — see the install note above) — basic / token / JWT / OAuth2
+  auth, NXQL query, blob download.
+- **OAuth2 support**: [`authlib`](https://pypi.org/project/Authlib/) plus
+  [`pyjwt[crypto]`](https://pypi.org/project/PyJWT/), which together replace the
+  `[oauth2]` extra without the `jwt` module collision.
 - **Kafka client** (for real-time sync): [`kafka-python-ng`](https://pypi.org/project/kafka-python-ng/).
 - Both are declared in `flexible-graphrag/pyproject.toml`, so a standard install includes them.
 

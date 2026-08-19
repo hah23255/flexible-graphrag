@@ -95,7 +95,7 @@ VECTOR_DB=milvus
 
 Vector search engine with semantic capabilities.
 
-- Dashboard: Weaviate Console (http://localhost:8081/console)
+- Dashboard: Weaviate Console (http://localhost:8086/console)
 
 ```env
 VECTOR_DB=weaviate

@@ -11,4 +11,5 @@ Environment-based configuration for all system components.
 - [Schema Examples (non RDF)](../CONFIGURATION/SCHEMA-EXAMPLES.md) — schema templates for KG extraction
 - [RDF Ontology Examples](../DATABASES/RDF/ontology_examples_and_config.md) — OWL/RDFS ontology examples
 - [LangChain Configuration](../CONFIGURATION/LANGCHAIN-CONFIGURATION.md) — RDF QA fusion, graph retrievers
+- [CocoIndex Configuration](../CONFIGURATION/CONFIG-COCOINDEX.md) — every `.env` setting for the CocoIndex pipeline
 - [Incremental Auto-Sync Setup](../DATA-SOURCES/INCREMENTAL-UPDATE-AUTO-SYNC/QUICKSTART.md) — auto-sync quickstart

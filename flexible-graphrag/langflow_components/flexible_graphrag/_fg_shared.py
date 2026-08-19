@@ -47,24 +47,12 @@ def _patch_ssl_for_proxy() -> None:
     never runs main.py, so without this the LLM/embedding calls fail with
     APIConnectionError and the chunk/embed pipeline hangs on retries. Idempotent.
     """
+    # Shared implementation — see flexible-graphrag/ssl_compat.py.  It is
+    # idempotent, so calling it from several entry points is safe.
     try:
-        import ssl as _ssl
-        if getattr(_ssl, "_fg_proxy_patched", False):
-            return
-        _orig = _ssl.create_default_context
+        from ssl_compat import patch_ssl_context as _patch  # noqa: PLC0415
 
-        def _patched(*args, **kwargs):
-            ctx = _orig(*args, **kwargs)
-            if hasattr(_ssl, "VERIFY_X509_STRICT"):
-                ctx.verify_flags &= ~_ssl.VERIFY_X509_STRICT
-            try:
-                ctx.load_default_certs(_ssl.Purpose.SERVER_AUTH)
-            except Exception:
-                pass
-            return ctx
-
-        _ssl.create_default_context = _patched
-        _ssl._fg_proxy_patched = True
+        _patch()
     except Exception:
         pass
 

@@ -8,10 +8,38 @@ import time
 
 from llama_index.core import StorageContext
 from llama_index.core.indices.property_graph import PropertyGraphIndex
+from llama_index.core.schema import TransformComponent
 
 from ingest._helpers import make_kg_extractor
 
 logger = logging.getLogger(__name__)
+
+
+class _NoOpExtractor(TransformComponent):
+    """A KG extractor that extracts nothing.
+
+    Exists solely to be truthy.  ``PropertyGraphIndex`` does
+    ``self._kg_extractors = kg_extractors or [SimpleLLMPathExtractor(), ...]``
+    (llama_index/core/indices/property_graph/base.py:124), so passing ``[]`` to
+    say "do not extract" is read as "not specified" and replaced by LlamaIndex's
+    defaults — which ``__init__`` then runs over the nodes.
+
+    In this pipeline KG extraction is a separate preprocessing step (that is
+    what produces the entity/relation counts and stage timings), so a second
+    pass inside the index is pure duplication: an unschema'd
+    ``SimpleLLMPathExtractor`` run whose output is written alongside the real
+    one, with names sentence-cased by its ``.capitalize()`` normalisation
+    ("Priya raman" beside "Priya Raman"), no type labels (``EntityNode.label``
+    stays ``"entity"``), and free-form relations ("Attended by", "Ran by")
+    beside the schema's ATTENDED / ASSIGNED_TO.  Measured on one ontology-guided
+    ingest: 23 shadow entities against 20 real ones.
+    """
+
+    def __call__(self, nodes, **kwargs):
+        return nodes
+
+    async def acall(self, nodes, **kwargs):
+        return nodes
 
 try:
     from observability import get_tracer
@@ -258,9 +286,39 @@ async def update_pg_graph(
                 graph_kwargs["embed_kg_nodes"] = False
                 logger.info("Neptune Analytics detected: embed_kg_nodes=False")
             logger.info("Creating PropertyGraphIndex with pre-extracted nodes")
+            # kg_extractors=[] does NOT disable extraction.  base.py:124 is
+            #     self._kg_extractors = kg_extractors or [SimpleLLMPathExtractor…]
+            # so an empty list is falsy and LlamaIndex substitutes its defaults,
+            # which __init__ then runs over the nodes (base.py:204/209).  The
+            # index also cannot be built without nodes, so there is no window in
+            # which to blank them first.  A one-element no-op list is truthy, so
+            # ours is kept and nothing extracts.
+            graph_kwargs["kg_extractors"] = [_NoOpExtractor()]
             system.graph_index = await loop.run_in_executor(
                 None, functools.partial(PropertyGraphIndex, **graph_kwargs)
             )
+
+            # Why this matters: extraction already ran as a preprocessing step
+            # (that is what produced `nodes` above, and what gives us the
+            # entity/relation counts and stage timings).  Left in place, the
+            # defaults run a SECOND, unschema'd LLM extraction whose output is
+            # written alongside the real one:
+            #   * names normalised by default_parse_triplets_fn's .capitalize()
+            #     -> "Priya raman" beside the schema pass's "Priya Raman"
+            #   * no type, so EntityNode.label stays "entity"
+            #   * free-form relations ("Attended by", "Ran by", "Wrote up")
+            #     beside the schema's ATTENDED / ASSIGNED_TO
+            # Measured on one ontology-guided ingest: 23 shadow entities against
+            # 20 real ones, and 29 shadow relations against 25 — i.e. over half
+            # the graph, plus a second LLM pass per document.
+            #
+            # The insert_nodes path below already blanks these by hand for the
+            # same reason; do it once here so the index simply never extracts.
+            try:
+                system.graph_index._kg_extractors = []
+            except Exception:  # noqa: BLE001 - never fail an ingest over this
+                logger.debug("Could not clear _kg_extractors on the new index", exc_info=True)
+
             graph_update_duration = time.time() - graph_update_start
             logger.info(
                 f"PropertyGraphIndex created in {graph_update_duration:.2f}s — "

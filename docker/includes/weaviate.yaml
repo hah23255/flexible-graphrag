@@ -3,7 +3,9 @@ services:
     container_name: flexible-graphrag-weaviate
     image: semitechnologies/weaviate:latest
     ports:
-      - "8081:8080"  # Changed from 8080 to avoid conflict with Alfresco
+      # 8080 is Alfresco's Traefik proxy; 8081 is Nuxeo (matches the upstream
+      # nuxeo-deployment default and the Nuxeo docs), so Weaviate uses 8086.
+      - "8086:8080"
       - "50051:50051"  # gRPC port disabled - using REST-only mode
     volumes:
       - weaviate_data:/var/lib/weaviate

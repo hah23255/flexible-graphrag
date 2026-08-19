@@ -1,4 +1,6 @@
 
+**New 8/18/26 — v0.8.0 release:** Optional **CocoIndex integration** — Rust-backed [CocoIndex](https://github.com/cocoindex-io/cocoindex) pipeline mixed with Flexible GraphRAG sources (incl. detectors), functions, and targets (more PG/vector/RDF/search); same UI/REST/MCP. Standalone `app.py` also supported. Now with **custom KG extractors** (bring your own, or fall back to the built-in one per document) and **entity resolution**. New **meeting-notes example** ([`examples/cocoindex/meeting_notes_graph_any/`](examples/cocoindex/meeting_notes_graph_any/README.md)) — a CocoIndex example ported to run against any configured graph store and source. See [CocoIndex Integration](#cocoindex-integration).
+
 **New 8/8/26 — v0.7.2 release:** **Nuxeo** added as a data source — all 3 UIs (React/Vue/Angular) plus REST/MCP, with basic / token / OAuth2 auth and real-time incremental sync via the Nuxeo audit event stream (Kafka). **Alfresco OAuth2 and ticket** authentication added across the source, all 3 UIs, initial ingest, and real-time sync. **Alfresco Community 26.1** Docker upgrade. The **MCP server** gained optional OAuth2 on its transport (bearer token via your IdP) and moved to **FastMCP 3**. Requires `python-alfresco-api >= 1.2.1`.
 
 **New 7/20/26 — v0.7.1 release:** Document processing now supports **LiteParse** in addition to the previous **Docling** and **LlamaParse** support. Langflow integration ships with fixes and an optional **Langflow Docker** image bundling the 12 "Flexible" components. **MS Graph delta query** support was added for more efficient incremental updating with SharePoint and OneDrive data sources.
@@ -25,7 +27,7 @@
 [![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, and Alfresco. Services and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom components).
+**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, Alfresco, and Nuxeo. Databases and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom Langflow components). As a further option, ingest can run on a **CocoIndex** (Rust engine) pipeline (`PIPELINE_BACKEND=cocoindex`) that reuses the same sources, targets, parsers and KG extractors, adding step-level memoization and automatic delete reconciliation.  
 
 <p align="center">
   <a href="./screen-shots/auto-sync/auto-sync.png">
@@ -58,6 +60,7 @@ Version **0.6.0** broadens framework and database choice: **LangChain** is a ful
 - **UI Clients**: Angular, React, and Vue UI clients support choosing the data source (filesystem, Alfresco, CMIS, etc.), ingesting documents, performing hybrid searches, AI queries, and AI chat. The UI clients use the REST APIs of the FastAPI backend.
 - **Docker Deployment Flexibility**: Supports both standalone and Docker deployment modes. Docker infrastructure provides modular database selection via docker-compose includes - vector, graph, search engines, and Alfresco can be included or excluded with a single comment. Choose between hybrid deployment (databases in Docker, backend and UIs standalone) or full containerization.
 - **Langflow Visual Flows (optional)**: Run the ingest pipeline, hybrid search, and AI query through customizable [Langflow](https://www.langflow.org/) flows built from 12 custom Flexible GraphRAG components — the same backend machinery (all database, LLM, and framework `.env` config applies), orchestrated visually. See [Langflow Integration](docs/GETTING-STARTED/LANGFLOW-INTEGRATION.md).
+- **CocoIndex Integration (optional)**: Optional Rust-backed [CocoIndex](https://github.com/cocoindex-io/cocoindex) ingest (`PIPELINE_BACKEND=cocoindex`) mixing CocoIndex connectors with Flexible GraphRAG sources (incl. event detectors), parsers, chunkers, embeddings, LI/LC KG extractors, and broader targets (all 15 PG + 10 vector + RDF + search) — same UI / REST / MCP. Mutually exclusive with `ENABLE_INCREMENTAL_UPDATES=true` and `ENABLE_LANGFLOW_FLOWS=true`. Standalone `app.py` also supported. See [CocoIndex Integration](#cocoindex-integration).
 
 ## Frontend Screenshots
 
@@ -381,11 +384,11 @@ When switching embedding models, delete existing vector indexes — dimensions d
     ```
 
 - **Weaviate**: Vector search engine with semantic capabilities and data enrichment
-  - Dashboard: Weaviate Console (http://localhost:8081/console)
+  - Dashboard: Weaviate Console (http://localhost:8086/console)
   - Configuration:
     ```bash
     VECTOR_DB=weaviate
-    WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8081", "index_name": "HybridSearch"}
+    WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8086", "index_name": "HybridSearch"}
     ```
 
 - **Pinecone**: Managed vector database service optimized for real-time applications
@@ -1059,7 +1062,7 @@ The backend will be available at `http://localhost:8000`.
 **Standalone backend and frontend URLs:**
 - **Backend API**: http://localhost:8000 (FastAPI server)
 - **Angular**: http://localhost:4200 (npm start)
-- **React**: http://localhost:5173 (npm run dev)  
+- **React**: http://localhost:5174 (npm run dev)  
 - **Vue**: http://localhost:3000 (npm run dev)
 
 Choose one of the following frontend options to work with:
@@ -1218,14 +1221,15 @@ Flexible GraphRAG ships **12 custom Langflow components** (implemented in **Pyth
 
 The main requirement is a **separate venv for Langflow** — Langflow runs the flows' Python component code in its own process, and the backend app calls the **Langflow REST API** to run the two flows.
 
-**1. Langflow venv** — create it on Python **3.14.5 or newer** (or 3.13). Use an explicit patch version: `uv venv --python 3.14.5` (or greater) — plain `uv venv --python 3.14` resolves to **3.14.0**, which has an OpenSSL bug that makes Langflow abort on startup. Then install Langflow and the backend (LlamaIndex + fuller LangChain), and run Langflow **from the `flexible-graphrag` backend dir**:
+**1. Langflow venv** — create it on **any Python 3.14 except 3.14.0** (3.14.4 and 3.14.5 both work), or 3.13. Use an explicit patch version: `uv venv --python 3.14.4` (or greater) — plain `uv venv --python 3.14` resolves to **3.14.0**, which has an OpenSSL bug that makes Langflow abort on startup. Then install Langflow and the backend (LlamaIndex + fuller LangChain), and run Langflow **from the `flexible-graphrag` backend dir**:
 
 ```powershell
+# --system-certs handles an SSL-inspecting corporate proxy.
+# On uv < 0.11 the flag is --native-tls (newer uv deprecates that name).
 uv pip install --system-certs langflow==1.11.2
 uv pip install --system-certs --override extras-overrides.txt -e ".[langchain,langchain-extras]"
-# nuxeo[oauth2] pulls a `jwt` package that shadows the PyJWT Langflow needs — restore it:
-uv pip uninstall jwt
-uv pip install --system-certs --reinstall "PyJWT>=2.12.1"
+# (No PyJWT restore step needed: flexible-graphrag installs plain `nuxeo` +
+#  `authlib` + `pyjwt[crypto]`, never `nuxeo[oauth2]`, so nothing evicts PyJWT.)
 # Run from the flexible-graphrag backend dir. PYTHONPATH must point at it so this repo's bundled
 # `langchain` package wins over the real one (search / AI query need it):
 $env:PYTHONPATH = (Get-Location).Path
@@ -1287,6 +1291,59 @@ The MCP server provides 9 specialized tools for document intelligence workflows:
 - **Claude Desktop and other MCP clients**: Native MCP integration with stdio transport
 - **MCP Inspector**: HTTP transport for debugging and development
 - **Multiple Installation**: pipx (system-wide) or uvx (no-install) options
+
+## CocoIndex Integration
+
+Flexible GraphRAG optionally uses a [CocoIndex](https://github.com/cocoindex-io/cocoindex)
+pipeline (Rust engine) that **mixes CocoIndex and Flexible GraphRAG (LlamaIndex /
+LangChain) sources, processing functions, and database targets** — while keeping the
+same FastAPI REST/MCP/UI surface. Langflow "Flexible" components are separate from this.
+
+### Two incremental modes
+
+Do not enable more than one of these orchestrators at once (startup skips / force-disables conflicts).
+
+| | Default pipeline + auto-incremental | CocoIndex pipeline |
+|---|---|---|
+| **`ENABLE_INCREMENTAL_UPDATES`** | `true` | `false` (ignored / skipped if set — FG incremental uses `hybrid_system`, not CocoIndex) |
+| **`PIPELINE_BACKEND`** | default (not `cocoindex`) | `cocoindex` |
+| **`ENABLE_LANGFLOW_FLOWS`** | optional (`true` for Langflow flow mode on the default pipeline) | `false` (ignored / force-disabled — CocoIndex not supported in Langflow flows) |
+| **Multi-source configs** | `datasource_config` rows (UI / MCP / REST) | Same — `datasource_config` rows (UI / MCP / REST) |
+| **Change events** | Event detectors emit ADD / MODIFY / DELETE | Same detectors for flexible data sources |
+| **File / doc tracking** | Postgres `document_state` rows | No `document_state` — CocoIndex LMDB + reconciler |
+| **Who drives the pipeline** | FG incremental engine re-ingests via `hybrid_system` (default LI/LC pipeline) | CocoIndex bridge owns ingest + change processing (LMDB step memoization) |
+
+**What you can mix in a CocoIndex pipeline:**
+
+| Category | CocoIndex | Flexible GraphRAG |
+|---|---|---|
+| **Sources** | Native: `localfs`, S3, Azure Blob, Google Drive | 13 sources (9 with event detectors / auto-sync): filesystem, Alfresco, S3, Azure Blob, GCS, OneDrive, SharePoint, Google Drive, Box, CMIS, web, Wikipedia, YouTube |
+| **Document-processor function** | — | One `parse_document` function: Docling, LlamaParse, or LiteParse |
+| **Chunker / splitter functions** | `split_with_cocoindex` (`CHUNKER_BACKEND=cocoindex`) | `split_with_llamaindex` / `split_with_langchain` (`CHUNKER_BACKEND=llamaindex` / `langchain`) |
+| **Embedding providers** | `COCOINDEX_EMBEDDING_KIND=sentence_transformer` or `litellm` (in-process; no LiteLLM proxy) | All FG kinds via `EMBEDDING_KIND` (or other `COCOINDEX_EMBEDDING_KIND` values): OpenAI, Ollama, Azure, Google, Vertex, Bedrock, Fireworks, OpenAI-like, LiteLLM |
+| **LLM providers** | — | Same `LLM_PROVIDER` list for **KG extraction** and **AI query / chat**. Hybrid search is retrieval (vector / BM25 / graph); an LLM is used only when a text-to-query graph retriever is in the fusion mix. Framework for KG: `KG_EXTRACTOR_BACKEND=llamaindex` → LI LLM + extractors; `langchain` → LC LLM + `LLMGraphTransformer` |
+| **KG extraction functions** | Not used — CocoIndex’s own extractors do not produce multi-label Neo4j-style entity graphs | LlamaIndex Schema / Dynamic / Simple path extractors; LangChain `LLMGraphTransformer` — ontology-guided multi-label graphs for both CocoIndex native and Flexible (LI/LC) property-graph backends |
+| **Vector targets** | Native: Qdrant, LanceDB, Postgres (pgvector) | All 10 vector stores via adapters |
+| **Property graph targets** | Native: Neo4j, FalkorDB, SurrealDB | All 15 property graph databases via adapters |
+| **RDF targets** | — | 4 RDF triple stores (Fuseki, GraphDB, Oxigraph, Neptune RDF) |
+| **Search targets** | — | 3 search stores (Elasticsearch, OpenSearch, BM25) |
+
+**Why use it (mixed pipeline):**
+
+- **Broader Flexible GraphRAG stack in a CocoIndex flow** — more sources (incl. event detectors), more property-graph and vector databases, plus RDF, search, and the existing UI / REST / MCP — not only CocoIndex’s native connectors.
+- **Rust engine** — CocoIndex’s core is Rust; orchestration and reconciler are built for high-throughput incremental transforms.
+- **Incremental cost control (both modes)** — with the **default** pipeline + `ENABLE_INCREMENTAL_UPDATES` / event detectors, unchanged files never re-enter ingest. With **CocoIndex**, detectors still gate file-level work, and LMDB also memoizes parse / embed / KG by step input so unchanged chunks skip those calls if content is re-seen.
+- **Field-specific sources and targets (custom code)** — CocoIndex can map individual source fields and write field-level target rows with custom transforms; the default FG mixed pipeline stays document-oriented.
+- **Granularity** — FG detectors are **file / document** level (ADD / MODIFY / DELETE). CocoIndex step memoization is **chunk / content** level inside the pipeline. Page / section / field units need custom CocoIndex coding — not the default FG shape.
+- **Standalone** — same `cocoindex_integration/pipeline/app.py` can run outside the FastAPI server for custom mixed apps.
+
+**To enable:** add `PIPELINE_BACKEND=cocoindex` to `.env` and install with
+`uv pip install -e ".[cocoindex]"`. All REST/MCP/UI endpoints remain unchanged.
+
+See [CocoIndex Integration](docs/GETTING-STARTED/COCOINDEX-INTEGRATION.md) and
+[CocoIndex Configuration](docs/CONFIGURATION/CONFIG-COCOINDEX.md) for details.
+
+---
 
 ## Backend REST API
 
@@ -1425,6 +1482,14 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
     - `adapters/process/`: Chunker and KG extractor ABCs and `build_*` factories
     - `adapters/search/`: Search store adapter ABC
     - `adapters/vector/`: Vector store adapter ABC
+  - `cocoindex_integration/`: Optional CocoIndex pipeline backend — mixes CocoIndex source/target connectors, functions, and splitters with Flexible GraphRAG sources, targets, and functions (document processor + LlamaIndex/LangChain chunker-splitters); can also be run standalone outside of the FastAPI server
+    - `bridge.py`: FastAPI ↔ CocoIndex bridge; `ingest_source()` for all 13 UI datasources
+    - `retriever_bridge.py`: read-only vector/graph retrievers when `*_BACKEND=cocoindex`
+    - `surreal_chain.py`: CocoIndex SurrealDB QA chain (flat CocoIndex schema)
+    - `functions/`: `@coco.fn` building blocks — doc parsing, chunking, embedding, KG extraction (all memoized)
+    - `connectors/flexible/`: lazy `FlexibleMapView(LiveMapView)` for 9 detector-backed sources; `FlexibleDataSource` for non-file sources
+    - `connectors/cocoindex/`: native CocoIndex connectors (Qdrant, Neo4j, LanceDB, Postgres, S3, GCS, Google Drive)
+    - `pipeline/`: `app.py` entry point, `flexible_app.py`, `run.py`, `bootstrap.py`, `state.py`, `providers.py`, `selectors.py`
   - `incremental_updates/`: Auto-sync engine — detectors, orchestrator, state manager for real-time/near-real-time source sync
   - `ingest/`: Modular ingestion steps — `ingest_from_files`, `ingest_from_text`, `ingest_from_source`, `run_chunk_pipeline`, `update_pg_graph`, `update_rdf_graph`, `update_vector`, `update_search`
   - `langflow_components/`: 12 custom Langflow components (Python) in `flexible_graphrag/` + shared run-cache helper `_fg_shared.py`; `flow_service.py` (backend) drives them over the Langflow REST API
@@ -1490,14 +1555,14 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
 - `/docs`: Documentation ([Zensical](https://zensical.org/) site; nav in `zensical.toml`) — organized into these sections:
   - `index.md`: Documentation home / overview
   - `HOME/`: Section landing pages (overview, getting started, docker, configuration, UI, data sources, databases, MCP, developer)
-  - `GETTING-STARTED/`: Quickstart, prerequisites, setup overview, Python backend, frontend setup, Docker deployment, environment configuration, **Langflow Integration**
-  - `CONFIGURATION/`: Search / vector / property-graph / RDF database config, schema examples, Framework (LangChain/LlamaIndex) configuration
+  - `GETTING-STARTED/`: Quickstart, prerequisites, setup overview, Python backend, frontend setup, Docker deployment, environment configuration, **Langflow Integration**, **CocoIndex Integration**
+  - `CONFIGURATION/`: Search / vector / property-graph / RDF database config, schema examples, Framework (LangChain/LlamaIndex) configuration, **CocoIndex Configuration**
   - `UI-GUIDE/`: UI screenshots and per-tab guides (Sources, Processing, Hybrid Search, AI Chat)
   - `DATA-SOURCES/`: Data source setup (S3, Azure Blob, GCS, CMIS, path examples); `DOC-PROCESSING/` (file formats, Docling GPU/OCR, parser output); `INCREMENTAL-UPDATE-AUTO-SYNC/`
   - `LLM/`: LLM & embedding configuration, testing results, Ollama
   - `DATABASES/`: Database configuration, PostgreSQL; `GRAPH-DATABASES/`, `RDF/`, `VECTOR-DATABASES/`
   - `MCP/`: MCP server quickstart, MCP tools, usage guide
-  - `DEVELOPER/`: REST API, MCP developer setup, **Langflow Components**, testing & cleanup, full-stack debugging, documentation system; `OBSERVABILITY/`
+  - `DEVELOPER/`: REST API, MCP developer setup, **Langflow Components**, **CocoIndex Developer Guide**, testing & cleanup, full-stack debugging, documentation system; `OBSERVABILITY/`
   - `ADVANCED/`: Architecture, deployment configurations, Docker resource config, port mappings, timeouts, default usernames/passwords; `LANGCHAIN/` (framework integration)
 
 - `/scripts`: Utility scripts

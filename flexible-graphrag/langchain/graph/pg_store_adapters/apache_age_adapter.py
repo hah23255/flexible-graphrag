@@ -38,6 +38,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from ._graph_docs import normalize_graph_documents
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -461,16 +463,22 @@ class ApacheAGEAdapter:
             except Exception as exc:
                 logger.debug("AGE write (non-fatal): %s | cypher: %s", exc, cypher[:200])
 
+        # Fold relationship endpoints into doc.nodes and stamp name/ref_doc_id/doc_id.
+        # Endpoints are frequently absent from doc.nodes; without this they were
+        # written by a bare MERGE with no rid and survived incremental delete as
+        # orphan stubs that graph QA kept answering from.
+        normalize_graph_documents(graph_documents, stamp_doc_id=True)
+
         for doc in graph_documents:
-            # Collect all vertex label names from this document so we can detect
-            # relationship type collisions before attempting the edge MERGE.
-            node_types: set = {node.type for node in (doc.nodes or [])}
+            # Vertex labels in this document — used to detect relationship type
+            # collisions (AGE shares one namespace for vertex and edge labels).
+            # Endpoints are already in doc.nodes, so this set is complete.
+            node_types: set = {node.type for node in doc.nodes if node.type}
 
             # Write vertex nodes
-            for node in (doc.nodes or []):
-                props = dict(node.properties or {})
+            for node in doc.nodes:
+                props = dict(node.properties)
                 props["id"] = node.id
-                props.setdefault("name", node.id)
                 _run(
                     f"MERGE (n:`{node.type}` {{id: {_esc_str(node.id)}}}) "
                     f"SET n += {_props_to_cypher(props)}"
@@ -485,19 +493,7 @@ class ApacheAGEAdapter:
                         "AGE: renamed relationship type %r -> %r to avoid vertex label collision",
                         rel.type, rel_type,
                     )
-                src_props = dict(rel.source.properties or {})
-                src_props["id"] = rel.source.id
-                tgt_props = dict(rel.target.properties or {})
-                tgt_props["id"] = rel.target.id
                 edge_props = _props_to_cypher(rel.properties or {})
-
-                # Ensure source / target nodes exist (idempotent MERGE)
-                _run(
-                    f"MERGE (a:`{rel.source.type}` {{id: {_esc_str(rel.source.id)}}})"
-                )
-                _run(
-                    f"MERGE (b:`{rel.target.type}` {{id: {_esc_str(rel.target.id)}}})"
-                )
                 _run(
                     f"MATCH (a:`{rel.source.type}` {{id: {_esc_str(rel.source.id)}}}), "
                     f"(b:`{rel.target.type}` {{id: {_esc_str(rel.target.id)}}}) "
@@ -508,13 +504,15 @@ class ApacheAGEAdapter:
             if include_source and doc.source is not None:
                 src_meta = doc.source.metadata or {}
                 src_id = src_meta.get("source") or src_meta.get("doc_id") or "unknown"
-                content = doc.source.page_content.replace("'", "\\'")[:500]
                 _rid = src_meta.get("ref_doc_id") or src_meta.get("doc_id") or ""
                 _run(
                     f"MERGE (s:Document {{source: {_esc_str(src_id)}}}) "
-                    f"SET s.content = {_esc_str(content)}, s.ref_doc_id = {_esc_str(_rid)}"
+                    f"SET s.content = {_esc_str(doc.source.page_content[:500])}, "
+                    f"s.ref_doc_id = {_esc_str(_rid)}, s.doc_id = {_esc_str(_rid)}"
                 )
-                for node in (doc.nodes or []):
+                for node in doc.nodes:
+                    if not node.type:
+                        continue
                     _run(
                         f"MATCH (s:Document {{source: {_esc_str(src_id)}}}), "
                         f"(n:`{node.type}` {{id: {_esc_str(node.id)}}}) "
@@ -536,16 +534,55 @@ class ApacheAGEAdapter:
         The ref_doc_id value is embedded directly after JSON-escaping so that
         special characters (backslashes, double-quotes) don't break the Cypher
         string literal inside the dollar-quoted block.
+
+        Steps run in order: sweep entities this document mentions that **no other
+        document** mentions, then the Document node, then anything still stamped
+        with this rid.  The sweep must precede the Document delete (it needs the
+        MENTIONS edges) and is scoped to this document's mentions so shared
+        entities referenced by other documents are left intact.
         """
         import json as _json
         # JSON-encode the string (adds surrounding quotes and escapes special chars).
         _rid_json = _json.dumps(ref_doc_id)  # e.g. "\"some\\value\""
-        cypher = f"MATCH (n) WHERE n.ref_doc_id = {_rid_json} DETACH DELETE n"
-        try:
-            self.lc_graph._run_write(cypher)
-            logger.info("Apache AGE: deleted nodes for ref_doc_id=%s", ref_doc_id)
-        except Exception as exc:
-            logger.warning("Apache AGE delete failed for ref_doc_id=%s: %s", ref_doc_id, exc)
+        _match_doc = (
+            f"MATCH (d:Document) "
+            f"WHERE d.ref_doc_id = {_rid_json} OR d.doc_id = {_rid_json} "
+        )
+        cyphers = [
+            # 1) Scoped orphan sweep — entities mentioned only by this document.
+            (
+                f"MATCH (d:Document)-[:MENTIONS]->(e) "
+                f"WHERE d.ref_doc_id = {_rid_json} OR d.doc_id = {_rid_json} "
+                f"OPTIONAL MATCH (o:Document)-[:MENTIONS]->(e) "
+                # coalesce: a legacy Document with a NULL doc_id would otherwise
+                # make the comparison null, drop out of the OPTIONAL MATCH, and
+                # let a still-referenced entity be swept.
+                f"WHERE coalesce(o.ref_doc_id, o.doc_id, '') <> {_rid_json} "
+                # 'cnt' — 'count' is reserved in AGE Cypher and cannot be an alias.
+                f"WITH e, count(o) AS cnt "
+                f"WHERE cnt = 0 "
+                f"DETACH DELETE e"
+            ),
+            # 2) The Document node itself.
+            _match_doc + "DETACH DELETE d",
+            # 3) Anything still stamped with this rid.  The normalizer stamps
+            #    relationship endpoints too, so this covers entities written
+            #    without a Document (include_source=False).
+            (
+                f"MATCH (n) "
+                f"WHERE n.ref_doc_id = {_rid_json} OR n.doc_id = {_rid_json} "
+                f"DETACH DELETE n"
+            ),
+        ]
+        for cypher in cyphers:
+            try:
+                self.lc_graph._run_write(cypher)
+            except Exception as exc:
+                logger.warning(
+                    "Apache AGE delete step failed for ref_doc_id=%s: %s | cypher: %s",
+                    ref_doc_id, exc, cypher[:200],
+                )
+        logger.info("Apache AGE: deleted nodes for ref_doc_id=%s", ref_doc_id)
 
     def normalize_entity_names(self) -> None:
         """Copy id -> name on entity nodes (Cypher / AGE)."""

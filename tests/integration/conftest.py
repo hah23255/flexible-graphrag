@@ -141,11 +141,15 @@ def pytest_report_header(config: pytest.Config) -> list[str] | None:
         lines += [bar, f"  Matrix combo:  {label}", bar]
 
     if not normalized_integration_watch_dir():
-        lines.append(
-            "INTEGRATION_WATCH_DIR: (not set) — TestFilesystemIncremental tests are skipped; "
-            "set a dedicated dir (not sample-docs/). When set, test_incremental.py POSTs /api/ingest "
-            "enable_sync=true once per session (tests/integration/README.md)."
-        )
+        # Only show if test_incremental.py tests are in scope (not just CocoIndex/datasource runs).
+        _label = label or ""
+        _is_incremental_run = "incremental" in _label or not _label
+        if _is_incremental_run:
+            lines.append(
+                "INTEGRATION_WATCH_DIR: (not set) — test_incremental.py skipped. "
+                "Note: this is for flexible pipeline incremental sync tests only; "
+                "CocoIndex filesystem monitoring uses WATCH_DIR (separate setting)."
+            )
 
     return lines or None
 
@@ -162,6 +166,10 @@ _STORE_MARKER_GUARD: dict[str, str] = {
     "search_db": "SEARCH_DB",
     "graph":     "PG_GRAPH_DB",
     "rdf":       "RDF_GRAPH_DB",
+    # CocoIndex tests deselected when PIPELINE_BACKEND is not cocoindex
+    # (uses a different check: the value must be "cocoindex", not just "active")
+    # Handled inside the test via _skip_unless_cocoindex() — not deselected globally.
+    # Langflow tests similarly handled inside tests via _skip_unless_langflow().
 }
 
 
@@ -208,4 +216,12 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "lc_pipe: marks tests that exercise CHUNKER_BACKEND=langchain (full LC post-reader pipeline)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "cocoindex: marks tests that require PIPELINE_BACKEND=cocoindex (CocoIndex pipeline bridge)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "langflow: marks tests that require ENABLE_LANGFLOW_FLOWS=true and a running Langflow server",
     )

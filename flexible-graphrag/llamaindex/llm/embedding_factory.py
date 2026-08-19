@@ -1,7 +1,7 @@
 """LlamaIndex embedding factory — extracted from factories.py."""
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 import os
 
@@ -20,12 +20,47 @@ from config import LLMProvider
 logger = logging.getLogger(__name__)
 
 
+def _make_openai_http_client() -> Optional[Any]:
+    """Return an httpx.Client configured for the current environment.
+
+    Set ``OPENAI_VERIFY_SSL=false`` to skip TLS certificate verification.
+    This is needed in corporate-proxy environments where the proxy re-signs
+    HTTPS traffic with a private CA that Python's certifi bundle does not
+    trust (but the traffic itself reaches the target host correctly).
+    """
+    verify_env = os.getenv("OPENAI_VERIFY_SSL", "true").strip().lower()
+    if verify_env in ("false", "0", "no"):
+        try:
+            import httpx
+            logger.info(
+                "embedding_factory: OPENAI_VERIFY_SSL=false — creating httpx.Client(verify=False)"
+            )
+            return httpx.Client(verify=False)
+        except ImportError:
+            logger.debug("httpx not available — OPENAI_VERIFY_SSL ignored")
+    return None
+
+
 def get_embedding_dimension(
-    embedding_kind: str = None,
-    embedding_model: str = None,
-    embedding_dimension: int = None,
+    embedding_kind: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    embedding_dimension: Optional[int] = None,
 ) -> int:
-    """Return the embedding vector dimension for the given kind+model combination."""
+    """Return the embedding vector dimension for the given kind+model combination.
+
+    Resolution order (highest to lowest priority):
+    1. ``{KIND}_EMBEDDING_DIMENSION`` env var (e.g. ``OPENAI_EMBEDDING_DIMENSION``)
+    2. ``embedding_dimension`` argument (set from generic ``EMBEDDING_DIMENSION`` env var)
+    3. Model-name-based inference per kind
+    """
+    # 1. Per-kind dimension env var takes priority over the generic fallback.
+    if embedding_kind:
+        _kind_dim = int(os.getenv(f"{embedding_kind.upper()}_EMBEDDING_DIMENSION", "0") or "0")
+        if _kind_dim:
+            logger.info(f"Using {embedding_kind.upper()}_EMBEDDING_DIMENSION: {_kind_dim}")
+            return _kind_dim
+
+    # 2. Generic explicit dimension.
     if embedding_dimension:
         logger.info(f"Using explicit embedding dimension: {embedding_dimension}")
         return embedding_dimension
@@ -89,8 +124,20 @@ def get_embedding_dimension(
         logger.warning(f"Unknown model for {embedding_kind} embeddings, defaulting to 1536")
         return 1536
 
+    elif embedding_kind in ("huggingface", "sentence_transformer"):
+        # EMBEDDING_KIND=huggingface uses HuggingFaceEmbedding (any HuggingFace Hub model).
+        # sentence_transformer is the legacy name; kept for COCOINDEX_EMBEDDING_KIND compatibility.
+        # Default model all-MiniLM-L6-v2 is 384-dim; common alternatives:
+        #   all-mpnet-base-v2 → 768, BAAI/bge-large-en → 1024
+        m = (embedding_model or "").lower()
+        if "mpnet" in m or "bge-large" in m:
+            return 768
+        if "bge-base" in m:
+            return 768
+        return 384  # all-MiniLM-L6-v2 and most small HuggingFace models
+
     else:
-        logger.warning(f"Unknown embedding_kind {embedding_kind}, defaulting to 768")
+        logger.warning(f"Unknown embedding_kind '{embedding_kind}', defaulting to 768")
         return 768
 
 
@@ -114,7 +161,10 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             ) or os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OpenAI embeddings require OPENAI_API_KEY")
-            emb = OpenAIEmbedding(model_name=model_name, api_key=api_key)
+            _http = _make_openai_http_client()
+            emb = OpenAIEmbedding(
+                    model_name=model_name, api_key=api_key,
+                    **({"http_client": _http} if _http is not None else {}))
             logger.debug(f"[EmbFactory] Created OpenAIEmbedding")
             return emb
 
@@ -134,11 +184,8 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             )
             if not api_key:
                 raise ValueError("Google embeddings require GOOGLE_API_KEY or GEMINI_API_KEY env var")
-            # gemini-embedding-2-preview native dim is 3072. Always pass output_dimensionality
-            # to truncate to 768 (our dimension table value) so Qdrant/other stores that
-            # create a 768-dim collection receive matching vectors.
-            # Explicit EMBEDDING_DIMENSION in env overrides this default.
-            target_dim = embedding_dimension or 768
+            # Resolve dim via get_embedding_dimension so {KIND}_EMBEDDING_DIMENSION is respected.
+            target_dim = get_embedding_dimension("google", model_name, embedding_dimension)
             params: Dict[str, Any] = {
                 "model_name": model_name,
                 "api_key": api_key,
@@ -163,12 +210,14 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
             if not azure_endpoint or not api_key:
                 raise ValueError("Azure embeddings require AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY")
             deployment_name = os.getenv("AZURE_EMBEDDING_DEPLOYMENT") or model_name
+            _http = _make_openai_http_client()
             return AzureOpenAIEmbedding(
                 model=model_name,
                 deployment_name=deployment_name,
                 azure_endpoint=azure_endpoint,
                 api_key=api_key,
                 api_version=api_version,
+                **({"http_client": _http} if _http is not None else {}),
             )
 
         elif embedding_kind == "vertex":
@@ -187,11 +236,8 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
                 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
                 os.environ["GOOGLE_CLOUD_PROJECT"] = project
                 os.environ["GOOGLE_CLOUD_LOCATION"] = location
-            # gemini-embedding-2-preview native dim is 3072. Always pass output_dimensionality
-            # to truncate to 768 (our dimension table value) so Qdrant/other stores that
-            # create a 768-dim collection receive matching vectors.
-            # Explicit EMBEDDING_DIMENSION in env overrides this default.
-            target_dim = embedding_dimension or 768
+            # Resolve dim via get_embedding_dimension so {KIND}_EMBEDDING_DIMENSION is respected.
+            target_dim = get_embedding_dimension("vertex", model_name, embedding_dimension)
             params: Dict[str, Any] = {
                 "model_name": model_name,
                 # gemini-embedding-2-preview only supports 1 content per embed_content call.
@@ -254,9 +300,31 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
 
         elif embedding_kind == "litellm":
             model_name = embedding_model or os.getenv("LITELLM_EMBEDDING_MODEL", "text-embedding-3-small")
-            api_base = os.getenv("LITELLM_EMBEDDING_API_BASE") or os.getenv("LITELLM_API_BASE", "http://localhost:4000")
-            api_key = os.getenv("LITELLM_API_KEY", "local")
-            return LiteLLMEmbedding(model_name=model_name, api_base=api_base, api_key=api_key)
+            # Only use api_base when explicitly configured.
+            # Without it, LiteLLMEmbedding calls litellm directly (no proxy required — Windows-safe).
+            # Set LITELLM_EMBEDDING_API_BASE or LITELLM_API_BASE only when routing through a proxy server.
+            api_base = os.getenv("LITELLM_EMBEDDING_API_BASE") or os.getenv("LITELLM_API_BASE") or None
+            api_key = os.getenv("LITELLM_API_KEY") or None
+            kwargs: dict = {"model_name": model_name}
+            if api_base:
+                kwargs["api_base"] = api_base
+            if api_key:
+                kwargs["api_key"] = api_key
+            return LiteLLMEmbedding(**kwargs)
+
+        elif embedding_kind in ("huggingface", "sentence_transformer"):
+            try:
+                from llama_index.embeddings.huggingface import HuggingFaceEmbedding  # noqa: PLC0415
+            except ImportError:
+                raise ImportError(
+                    "EMBEDDING_KIND=huggingface requires llama-index-embeddings-huggingface "
+                    "and sentence-transformers. Install with: "
+                    'uv pip install -e ".[huggingface]"  '
+                    "# or: uv pip install llama-index-embeddings-huggingface sentence-transformers"
+                ) from None
+            model_name = embedding_model or "all-MiniLM-L6-v2"
+            logger.info("huggingface LI embedding: model=%s", model_name)
+            return HuggingFaceEmbedding(model_name=model_name)
 
         else:
             logger.warning(f"Unknown embedding_kind '{embedding_kind}', using provider default")
@@ -286,7 +354,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
 
     elif provider == LLMProvider.GEMINI:
         model_name = embedding_model or "gemini-embedding-001"
-        target_dim = embedding_dimension or 768
+        target_dim = get_embedding_dimension("google", model_name, embedding_dimension)
         params: Dict[str, Any] = {
             "model_name": model_name,
             "api_key": config.get("api_key"),
@@ -315,7 +383,7 @@ def create_embedding_model(provider: LLMProvider, config: Dict[str, Any], settin
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
         os.environ["GOOGLE_CLOUD_PROJECT"] = project
         os.environ["GOOGLE_CLOUD_LOCATION"] = location
-        target_dim = embedding_dimension or 768
+        target_dim = get_embedding_dimension("vertex", model_name, embedding_dimension)
         params = {
             "model_name": model_name,
             # gemini-embedding-2-preview only supports 1 content per embed_content call;

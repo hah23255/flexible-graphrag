@@ -9,6 +9,13 @@ Both scripts print the token and then smoke-test `sources.nuxeo.NuxeoSource`.
 
 ## Prerequisite — register an OAuth2 client in Nuxeo
 
+> **This is a manual, per-deployment step, and it does not survive recreating the
+> Nuxeo containers.** The client lives in Nuxeo's `oauth2Clients` directory, not
+> in this repo, so a fresh `docker compose up` on a new volume starts with only
+> `nuxeo-drive` and `nuxeo-mobile`. Symptom when it is missing: the authorize
+> call returns **HTTP 400** and `nuxeo_oauth2_headless.py` prints
+> *"Could not obtain an authorization code headlessly."*
+
 Admin Center → **Cloud Services → Consumers (OAuth2 clients)** → *Add*:
 
 | Field | Value |
@@ -17,9 +24,31 @@ Admin Center → **Cloud Services → Consumers (OAuth2 clients)** → *Add*:
 | Client Secret | *(optional; blank = public PKCE client)* |
 | Redirect URIs | `http://localhost:8888/callback` |
 | Enabled | yes |
+| Auto-grant | yes *(required by `nuxeo_oauth2_headless.py`)* |
 
-For `nuxeo_oauth2_headless.py`, also set **Auto-grant = true** so the authorize call
-redirects straight to the callback with no browser/consent step.
+Auto-grant makes the authorize call redirect straight to the callback with no
+browser or consent step, which is what lets the headless script work.
+
+### Or register it from the command line
+
+Same thing without the UI — useful after recreating the deployment:
+
+```bash
+curl -u Administrator:Administrator -X POST \
+  -H "Content-Type: application/json" \
+  http://localhost:8081/nuxeo/api/v1/directory/oauth2Clients \
+  -d '{"entity-type":"directoryEntry","directoryName":"oauth2Clients",
+       "properties":{"clientId":"flexible-graphrag","name":"flexible-graphrag",
+       "redirectURIs":"http://localhost:8888/callback",
+       "autoGrant":true,"enabled":true}}'
+```
+
+Check what is currently registered:
+
+```bash
+curl -u Administrator:Administrator \
+  http://localhost:8081/nuxeo/api/v1/directory/oauth2Clients
+```
 
 ## Scripts
 

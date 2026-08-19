@@ -138,6 +138,19 @@ class MilvusVectorAdapter(LangChainVectorAdapter):
         connection_args = _build_milvus_connection_args(config)
         collection_name = config.get("collection_name", "hybrid_search")
 
+        # A collection written by the LlamaIndex backend has an incompatible
+        # schema (``_node_content`` instead of a plain text column).  Switching
+        # VECTOR_BACKEND therefore requires dropping it first — that is
+        # ``scripts/cleanup.py``'s job (its milvus branch calls
+        # ``utility.drop_collection``), not this constructor's.  Dropping here
+        # would silently destroy user data on an unrelated backend switch.
+
+        # Explicit search_params: langchain_milvus asserts
+        # ``len(_as_list(self.search_params)) == 1`` when search_params is still
+        # None (collection empty at init → _create_search_params left it unset).
+        # enable_dynamic_field=True → search uses output_fields=["*"] so a stale
+        # ``self.fields`` cache cannot omit the text column (KeyError 'text').
+        _metric = str(config.get("metric_type", "L2")).upper()
         store = _MilvusPatch(
             embedding_function=embedding,
             collection_name=collection_name,
@@ -146,6 +159,11 @@ class MilvusVectorAdapter(LangChainVectorAdapter):
             text_field=config.get("text_field", "text"),
             auto_id=True,
             drop_old=False,
+            enable_dynamic_field=True,
+            search_params=config.get(
+                "search_params",
+                {"metric_type": _metric, "params": {}},
+            ),
         )
         super().__init__(store=store, delete_key=delete_key)
         self._patch_l2_scores(store)

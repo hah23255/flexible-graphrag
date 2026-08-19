@@ -1,0 +1,100 @@
+# Meeting-notes ontology — the declarative counterpart to the custom extractor.
+#
+# Purpose: express the SAME graph mini_app.py builds in code, so the two can be
+# compared directly on the same notes.
+#
+#     (Person)-[:ATTENDED {is_organizer}]->(Meeting)
+#     (Meeting)-[:DECIDED]->(Task)
+#     (Task)-[:ASSIGNED_TO]->(Person)
+#
+# How this reaches the extractor (rdf/ontology_manager.py):
+#   owl:Class                       -> an entity type            (possible_entities)
+#   owl:ObjectProperty              -> a relation type           (possible_relations)
+#   owl:DatatypeProperty
+#       rdfs:domain <a Class>       -> an ENTITY property        (possible_entity_props)
+#       rdfs:domain <an ObjectProp> -> a RELATION property       (possible_relation_props)
+#
+# That last line is the interesting one: it is how a *relationship* carries data
+# (is_organizer on ATTENDED), which the custom extractor sets explicitly.
+#
+# Use with:
+#   USE_ONTOLOGY=true
+#   ONTOLOGY_PATH=examples/cocoindex/meeting_notes_graph_any/meeting_notes_ontology.ttl
+#   python full_stack.py ingest --skip-meeting-graph
+
+@prefix mn:   <http://example.org/meeting-notes/> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ── ENTITIES ────────────────────────────────────────────────────────────────
+
+mn:Meeting a owl:Class ;
+    rdfs:label "Meeting" ;
+    rdfs:comment "A single meeting recorded in a notes file" .
+
+mn:Person a owl:Class ;
+    rdfs:label "Person" ;
+    rdfs:comment "Someone who organised, attended, or was assigned work" .
+
+mn:Task a owl:Class ;
+    rdfs:label "Task" ;
+    rdfs:comment "An action item decided in a meeting" .
+
+# ── RELATIONS ───────────────────────────────────────────────────────────────
+
+mn:ATTENDED a owl:ObjectProperty ;
+    rdfs:domain mn:Person ;
+    rdfs:range mn:Meeting ;
+    rdfs:label "attended" ;
+    rdfs:comment "The person was present at the meeting" .
+
+mn:DECIDED a owl:ObjectProperty ;
+    rdfs:domain mn:Meeting ;
+    rdfs:range mn:Task ;
+    rdfs:label "decided" ;
+    rdfs:comment "The meeting produced this action item" .
+
+mn:ASSIGNED_TO a owl:ObjectProperty ;
+    rdfs:domain mn:Task ;
+    rdfs:range mn:Person ;
+    rdfs:label "assigned to" ;
+    rdfs:comment "The task is owned by this person" .
+
+# ── ENTITY PROPERTIES ───────────────────────────────────────────────────────
+# rdfs:domain is a Class, so these become possible_entity_props.
+
+mn:time a owl:DatatypeProperty ;
+    rdfs:domain mn:Meeting ;
+    rdfs:range xsd:date ;
+    rdfs:label "time" ;
+    rdfs:comment "Date of the meeting, ISO YYYY-MM-DD" .
+
+mn:note a owl:DatatypeProperty ;
+    rdfs:domain mn:Meeting ;
+    rdfs:range xsd:string ;
+    rdfs:label "note" ;
+    rdfs:comment "Short summary of what the meeting was about" .
+
+mn:note_file a owl:DatatypeProperty ;
+    rdfs:domain mn:Meeting ;
+    rdfs:range xsd:string ;
+    rdfs:label "note file" ;
+    rdfs:comment "Name of the notes file the meeting came from" .
+
+mn:description a owl:DatatypeProperty ;
+    rdfs:domain mn:Task ;
+    rdfs:range xsd:string ;
+    rdfs:label "description" ;
+    rdfs:comment "What the task actually is" .
+
+# ── RELATION PROPERTIES ─────────────────────────────────────────────────────
+# rdfs:domain is an ObjectProperty, so this becomes a possible_relation_prop —
+# data carried on the edge itself rather than on either endpoint.
+
+mn:is_organizer a owl:DatatypeProperty ;
+    rdfs:domain mn:ATTENDED ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "is organizer" ;
+    rdfs:comment "True when this attendee ran the meeting rather than just attending" .

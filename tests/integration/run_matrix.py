@@ -64,7 +64,52 @@ uv run tests/integration/run_matrix.py --vector qdrant --chunker langchain
 # Compare LI vs LC chunker on the same stack (two separate passes)
 uv run tests/integration/run_matrix.py --vector qdrant --chunker both
 
-# List available DB names per dimension
+# CocoIndex pipeline with native Qdrant + Neo4j connectors
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline cocoindex --source-backend cocoindex --graph-backend cocoindex --vector-backend cocoindex
+
+# CocoIndex pipeline — all compatible native PG stores (neo4j, falkordb, surrealdb)
+uv run tests/integration/run_matrix.py --pg neo4j,falkordb,surrealdb --vector qdrant --pipeline cocoindex --graph-backend cocoindex --vector-backend cocoindex
+
+# CocoIndex pipeline with flexible (LlamaIndex) storage backends
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline cocoindex --source-backend cocoindex
+
+# CocoIndex chunker (uses CocoIndex RecursiveSplitter inside the pipeline)
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline cocoindex --chunker cocoindex
+
+# Test both pipeline backends (default and cocoindex) on the same DB stack
+# NOTE: "both" expands to [default, cocoindex]; --pipeline default means use .env value
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline both --graph-backend cocoindex --vector-backend cocoindex
+
+# Langflow flows enabled (tests Langflow component injection)
+# NOTE: Langflow and CocoIndex pipeline are mutually exclusive — do not set both.
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --langflow true
+
+# Test all 4 CocoIndex native data sources (filesystem, s3, azure_blob, google_drive)
+# Each source gets its own backend start + test run (4 jobs total).
+# Credentials / configs for S3/Azure/GDrive must be set in .env.
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline cocoindex --source-backend cocoindex --graph-backend cocoindex --vector-backend cocoindex --data-source all
+
+# Test a single CocoIndex native source (filesystem only)
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --pipeline cocoindex --source-backend cocoindex --graph-backend cocoindex --vector-backend cocoindex --data-source filesystem
+
+# Test all 12 flexible data sources (one backend start per source → 12 jobs)
+# Sources skip themselves at runtime if their env config (S3_CONFIG, BOX_CONFIG, etc.) is absent.
+# Targets test_datasources.py automatically; per-source pytest -k filter applied per job.
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --data-source all
+
+# Test specific flexible data sources (2 jobs: s3, azure_blob)
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --data-source s3,azure_blob
+
+# Test filesystem with incremental updates (only filesystem is supported for incremental)
+uv run tests/integration/run_matrix.py --vector qdrant --incremental --data-source filesystem
+
+# Override graph backend independently from --backends (e.g. cocoindex graph with LI vector)
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --graph-backend cocoindex
+
+# Override vector backend independently (e.g. cocoindex vector with LC graph)
+uv run tests/integration/run_matrix.py --pg neo4j --vector qdrant --backends langchain --vector-backend cocoindex
+
+# List available DB names and all dimension options
 uv run tests/integration/run_matrix.py --list-dbs
 
 # Clean stale data before each run (recommended when switching between --backends)
@@ -103,18 +148,21 @@ BASE_ENV = REPO_ROOT / "flexible-graphrag" / ".env"
 ALL_PG: dict[str, list[str]] = {
     "llamaindex": [
         "neo4j", "arcadedb", "falkordb", "memgraph", "nebula", "ladybug",
-        "neptune",             # AWS Neptune Database  (cloud)
-        "neptune_analytics",   # AWS Neptune Analytics (cloud)
-        "spanner",             # Google Cloud Spanner (cloud)
+        # Cloud — uncomment when instances are available:
+        # "neptune",             # AWS Neptune Database
+        # "neptune_analytics",   # AWS Neptune Analytics
+        # "spanner",             # Google Cloud Spanner Graph — free trial expired
+                                   # (CreateSession 400). Emulator is SQL-only, not Graph.
     ],
     "langchain": [
         "neo4j", "arcadedb", "falkordb", "memgraph", "nebula", "tigergraph",
         "arangodb", "apache_age", "hugegraph", "surrealdb",
         "cosmos_gremlin",      # testable with local gremlin server
         "ladybug",             # Embedded — LI adapter reused via LangChain backend
-        # "spanner",           # langchain-google-spanner requires langchain-core<1.0 — uncomment when a compatible release is available
-        "neptune",             # AWS Neptune PG (OpenCypher) - cloud
-        "neptune_analytics",   # AWS Neptune Analytics (cloud)
+        # Cloud — uncomment when instances / compatible packages are available:
+        # "spanner",           # langchain-google-spanner requires langchain-core<1.0
+        # "neptune",           # AWS Neptune PG (OpenCypher)
+        # "neptune_analytics", # AWS Neptune Analytics
     ],
 }
 ALL_VECTOR: dict[str, list[str]] = {
@@ -129,11 +177,87 @@ ALL_SEARCH: dict[str, list[str]] = {
 }
 ALL_RDF: list[str] = [
     "fuseki", "graphdb", "oxigraph",
-    "neptune_rdf",   # AWS Neptune RDF/SPARQL (cloud) — uncomment when cluster is available
+    # "neptune_rdf",   # AWS Neptune RDF/SPARQL (cloud) — uncomment when cluster is available
 ]
 
 # DBs that must use the langchain vector backend regardless of --backends
 _LANGCHAIN_ONLY_VECTOR = {"milvus", "weaviate", "lancedb", "pinecone"}
+
+# -----------------------------------------------------------------------------
+# Pipeline / source / framework backend dimension constants
+# -----------------------------------------------------------------------------
+
+# Valid values for --pipeline (maps to PIPELINE_BACKEND env var).
+# "default" = use the built-in per-stage pipeline (CHUNKER_BACKEND / GRAPH_BACKEND /
+# VECTOR_BACKEND etc.) — matches config.py Field("default", ...) sentinel.
+# Any value other than "cocoindex" in config.py is treated as the default pipeline.
+ALL_PIPELINE: list[str] = ["default", "cocoindex"]
+
+# Valid values for --source-backend (maps to SOURCE_BACKEND env var)
+ALL_SOURCE_BACKEND: list[str] = ["flexible", "cocoindex"]
+
+# Valid values for --graph-backend / --vector-backend (independent of --backends)
+ALL_FRAMEWORK_BACKEND: list[str] = ["llamaindex", "langchain", "cocoindex"]
+
+# Valid values for --chunker (extends existing llamaindex | langchain with cocoindex)
+ALL_CHUNKER: list[str] = ["llamaindex", "langchain", "cocoindex"]
+
+# Valid values for --langflow (maps to ENABLE_LANGFLOW_FLOWS env var)
+ALL_LANGFLOW: list[str] = ["false", "true"]
+
+# PG stores that have native CocoIndex connectors (informational — not enforced)
+_COCO_NATIVE_PG = {"neo4j", "falkordb", "surrealdb"}
+# Vector stores that have native CocoIndex connectors (informational — not enforced)
+_COCO_NATIVE_VECTOR = {"qdrant", "lancedb", "postgres"}
+
+# -----------------------------------------------------------------------------
+# Data source dimension constants  (--data-source)
+# -----------------------------------------------------------------------------
+
+# CocoIndex native data sources — controlled by DATA_SOURCE env var
+_COCO_NATIVE_SOURCES: list[str] = ["filesystem", "s3", "azure_blob", "google_drive"]
+# All 13 flexible data sources (match DATA_SOURCE env var values).
+# "filesystem" uses the standard test_ingest_search.py suite (no dedicated test_datasources.py test).
+# "alfresco" prefix-matches both test_alfresco_ingest and test_alfresco_ingest_with_sync.
+_FLEXIBLE_SOURCES: list[str] = [
+    "filesystem", "web", "wikipedia", "youtube", "alfresco", "nuxeo", "cmis",
+    "s3", "box", "azure_blob", "onedrive", "sharepoint", "google_drive", "gcs",
+]
+# Optional per-source test file (default: test_datasources.py when --data-source is set).
+_FLEXIBLE_DS_TEST_PATH: dict[str, str] = {
+    "filesystem": "tests/integration/test_ingest_search.py",
+}
+# Maps a flexible source name → pytest -k fragment (test function name).
+_FLEXIBLE_DS_TEST: dict[str, str] = {
+    "filesystem":   "test_ingest_company_ontology_txt_completes",
+    "web":          "test_web_ingest",
+    "wikipedia":    "test_wikipedia_ingest",
+    "youtube":      "test_youtube_ingest",
+    "alfresco":     "test_alfresco_ingest and not test_alfresco_ingest_with_sync",
+    "nuxeo":        "test_nuxeo_ingest and not test_nuxeo_ingest_with_sync",
+    "cmis":         "test_cmis_ingest",
+    "s3":           "test_s3_ingest",
+    "box":          "test_box_ingest",
+    "azure_blob":   "test_azure_blob_ingest",
+    "onedrive":     "test_onedrive_ingest",
+    "sharepoint":   "test_sharepoint_ingest",
+    "google_drive": "test_google_drive_ingest",
+    "gcs":          "test_gcs_ingest",
+}
+# Maps a CocoIndex native source → pytest -k fragment for test_cocoindex.py.
+# File-upload tests (fast/full doc ingest, reingest) only make sense for the
+# "filesystem" (upload) source.  Cloud sources (s3/azure_blob/google_drive) run
+# the smoke + source-reporting tests only — the ingest tests skip automatically
+# inside _skip_if_cloud_source(), so we just run a lightweight subset explicitly.
+_COCO_DS_TEST: dict[str, str] = {
+    # "" = run all test_cocoindex.py tests; the tests themselves skip gracefully when
+    # credentials or required config are absent.
+    "filesystem":   "",  # upload path fully tested; bridge copies files to WATCH_DIR
+    "google_drive": "",  # full suite — test_cocoindex.py skips if GOOGLE_DRIVE_CONFIG absent
+    "s3":           "test_cocoindex_backend_info or test_cocoindex_health_ok or test_cocoindex_source_backend_reported or test_cocoindex_ingest_text",
+    "azure_blob":   "test_cocoindex_backend_info or test_cocoindex_health_ok or test_cocoindex_source_backend_reported or test_cocoindex_ingest_text",
+}
+ALL_DATA_SOURCE: list[str] = sorted(set(_COCO_NATIVE_SOURCES + _FLEXIBLE_SOURCES))
 
 # -----------------------------------------------------------------------------
 # LLM provider overrides  (--llm)
@@ -167,8 +291,8 @@ _LLM_OVERRIDES: dict[str, dict] = {
 _EMBEDDING_OVERRIDES: dict[str, dict] = {
     "openai":       {"EMBEDDING_KIND": "openai",       "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"},
     "ollama":       {"EMBEDDING_KIND": "ollama",       "OLLAMA_EMBEDDING_MODEL": "nomic-embed-text"},
-    "google":       {"EMBEDDING_KIND": "google",       "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-2-preview"},
-    "vertex":       {"EMBEDDING_KIND": "vertex",       "VERTEX_EMBEDDING_MODEL": "gemini-embedding-2-preview"},
+    "google":       {"EMBEDDING_KIND": "google",       "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-001"},
+    "vertex":       {"EMBEDDING_KIND": "vertex",       "VERTEX_EMBEDDING_MODEL": "gemini-embedding-001"},
     "azure":        {"EMBEDDING_KIND": "azure",        "AZURE_EMBEDDING_MODEL": "text-embedding-3-small"},
     "bedrock":      {"EMBEDDING_KIND": "bedrock",      "BEDROCK_EMBEDDING_MODEL": "amazon.titan-embed-text-v2:0"},
     "fireworks":    {"EMBEDDING_KIND": "fireworks",    "FIREWORKS_EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5"},
@@ -202,7 +326,8 @@ _PG_OVERRIDES: dict[str, dict] = {
                        "LADYBUG_GRAPH_DB_CONFIG": '{"db_dir": "./ladybug_matrix_test", "db_file": "database.lbug"}'},
     "nebula":         {"PG_GRAPH_DB": "nebula"},
     "tigergraph":     {"PG_GRAPH_DB": "tigergraph"},
-    # Uses cloud Spanner from .env (SPANNER_GRAPH_DB_CONFIG). 
+    # Cloud Spanner Graph from .env (SPANNER_GRAPH_DB_CONFIG). Emulator is SQL-only
+    # (not Spanner Graph) — keep using cloud config when re-enabling in ALL_PG.
     "spanner":        {"PG_GRAPH_DB": "spanner"},
     # cloud:
     "neptune":            {"PG_GRAPH_DB": "neptune"},
@@ -229,17 +354,20 @@ _VECTOR_OVERRIDES: dict[str, dict] = {
     "qdrant":        {"VECTOR_DB": "qdrant",
                       "QDRANT_VECTOR_DB_CONFIG": '{"host":"localhost","port":6333,"collection_name":"hybrid_search_vector","https":false}'},
     "elasticsearch": {"VECTOR_DB": "elasticsearch",
-                      "ELASTICSEARCH_VECTOR_DB_CONFIG": '{"url":"http://localhost:9200","index_name":"flexible_graphrag_vectors"}'},
+                      "ELASTICSEARCH_VECTOR_DB_CONFIG": '{"url":"http://localhost:9200","index_name":"hybrid_search_vector"}'},
     "opensearch":    {"VECTOR_DB": "opensearch",
-                      "OPENSEARCH_VECTOR_DB_CONFIG": '{"url":"http://localhost:9201","index_name":"flexible_graphrag_vectors"}'},
+                      "OPENSEARCH_VECTOR_DB_CONFIG": '{"url":"http://localhost:9201","index_name":"hybrid_search_vector"}'},
     "postgres":      {"VECTOR_DB": "postgres",
-                      "POSTGRES_VECTOR_DB_CONFIG": '{"host":"localhost","port":5433,"username":"postgres","password":"password","database":"flexible_graphrag"}'},
+                      "POSTGRES_VECTOR_DB_CONFIG": '{"host":"localhost","port":5433,"username":"postgres","password":"password","database":"flexible_graphrag","table_name":"hybrid_search_vectors"}'},
     "chroma":        {"VECTOR_DB": "chroma",
                       "CHROMA_VECTOR_DB_CONFIG": '{"host":"localhost","port":8001,"collection_name":"hybrid_search_vector"}'},
     "milvus":        {"VECTOR_DB": "milvus",
                       "MILVUS_VECTOR_DB_CONFIG": '{"host":"localhost","port":19530,"collection_name":"hybrid_search_vector"}'},
+    # 8086, not 8081 — 8081 is Nuxeo (docker/includes/weaviate.yaml).  A stale
+    # 8081 here reaches Nuxeo instead and fails as
+    # "Meta endpoint! Unexpected status code: 404".
     "weaviate":      {"VECTOR_DB": "weaviate",
-                      "WEAVIATE_VECTOR_DB_CONFIG": '{"url":"http://localhost:8081","grpc_port":50051,"index_name":"HybridSearch","text_key":"content"}'},
+                      "WEAVIATE_VECTOR_DB_CONFIG": '{"url":"http://localhost:8086","grpc_port":50051,"index_name":"HybridSearch","text_key":"content"}'},
     "lancedb":       {"VECTOR_DB": "lancedb",
                       "LANCEDB_VECTOR_DB_CONFIG": '{"uri":"./lancedb_matrix_test","table_name":"hybrid_search_vector"}'},
     "pinecone":      {"VECTOR_DB": "pinecone"},
@@ -250,9 +378,9 @@ _VECTOR_OVERRIDES: dict[str, dict] = {
 _SEARCH_OVERRIDES: dict[str, dict] = {
     "bm25":          {"SEARCH_DB": "bm25", "BM25_PERSIST_DIR": "./test_bm25_matrix"},
     "elasticsearch": {"SEARCH_DB": "elasticsearch",
-                      "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url":"http://localhost:9200","index_name":"flexible_graphrag_search"}'},
+                      "ELASTICSEARCH_SEARCH_DB_CONFIG": '{"url":"http://localhost:9200","index_name":"hybrid_search_fulltext"}'},
     "opensearch":    {"SEARCH_DB": "opensearch",
-                      "OPENSEARCH_SEARCH_DB_CONFIG": '{"url":"http://localhost:9201","index_name":"flexible_graphrag_search"}'},
+                      "OPENSEARCH_SEARCH_DB_CONFIG": '{"url":"http://localhost:9201","index_name":"hybrid_search_fulltext"}'},
 }
 
 
@@ -299,6 +427,13 @@ def _build_overrides(
     chunker: str | None = None,
     ontology: str | None = None,
     doc_parser: str | None = None,
+    pipeline: str | None = None,
+    source_backend: str | None = None,
+    langflow: str | None = None,
+    graph_backend: str | None = None,
+    vector_backend: str | None = None,
+    data_source: str | None = None,
+    search_backend: str | None = None,
 ) -> dict[str, str]:
     """Assemble the env-var overrides for one combination."""
     overrides: dict[str, str] = {}
@@ -306,16 +441,58 @@ def _build_overrides(
     has_pg  = bool(pg)
     has_rdf = bool(rdf)
 
+    # -- Pipeline backend (CocoIndex vs default per-stage pipeline) -----------
+    # config.py Field("default", ...) — any value other than "cocoindex" means
+    # the normal per-stage pipeline.  Matrix jobs must not inherit
+    # PIPELINE_BACKEND=cocoindex from a developer .env unless --pipeline
+    # cocoindex (or chunker=cocoindex) is explicitly requested.
+    if pipeline and pipeline not in ("default", ""):
+        overrides["PIPELINE_BACKEND"] = pipeline
+    elif chunker != "cocoindex":
+        overrides["PIPELINE_BACKEND"] = "default"
+
+    # -- Source backend (cocoindex native vs flexible detector-backed) ---------
+    if source_backend:
+        overrides["SOURCE_BACKEND"] = source_backend
+
+    # -- Data source (DATA_SOURCE env var) ------------------------------------
+    if data_source:
+        overrides["DATA_SOURCE"] = data_source
+        # Filesystem source needs WATCH_DIR so the CocoIndex bridge and flexible
+        # filesystem source know where to copy / scan files.  Use ../cocoindex-docs
+        # (relative to the backend's working dir = flexible-graphrag/) which is the
+        # CLI convention; the bridge auto-creates the directory on startup.
+        if data_source == "filesystem":
+            overrides.setdefault("WATCH_DIR", "../cocoindex-docs")
+        elif data_source == "cmis":
+            # Scope the CocoIndex startup sync to the same folder the test uses.
+            # Without this the bridge defaults to folder_path="/" and crawls the
+            # entire Alfresco repo at startup instead of just /Shared/GraphRAG.
+            overrides.setdefault("CMIS_FOLDER_PATH", "/Shared/GraphRAG")
+        elif data_source == "alfresco":
+            # Same reasoning as CMIS above — default path "/" crawls everything.
+            # AlfrescoSource reads config.get("path", "/") and backend.py reads
+            # ALFRESCO_PATH for the env-var fallback config.
+            overrides.setdefault("ALFRESCO_PATH", "/Shared/GraphRAG")
+
+    # -- Langflow flows --------------------------------------------------------
+    if langflow is not None:
+        overrides["ENABLE_LANGFLOW_FLOWS"] = langflow
+
     # -- PG graph --------------------------------------------------------------
     if has_pg:
         overrides.update(_PG_OVERRIDES[pg])
-        overrides["GRAPH_BACKEND"] = backend
-        if backend == "langchain":
+        # graph_backend overrides --backends for graph only
+        effective_graph_be = graph_backend if graph_backend else backend
+        overrides["GRAPH_BACKEND"] = effective_graph_be
+        if effective_graph_be == "langchain":
             overrides["USE_LANGCHAIN_PG"] = "true"
         # ontology: explicit value overrides the default "true"
         overrides["USE_ONTOLOGY"] = ontology if ontology else "true"
     else:
         overrides["PG_GRAPH_DB"] = "none"
+        if graph_backend:
+            overrides["GRAPH_BACKEND"] = graph_backend
 
     # -- RDF graph -------------------------------------------------------------
     if has_rdf:
@@ -326,14 +503,18 @@ def _build_overrides(
     # -- Vector store ----------------------------------------------------------
     if vector:
         overrides.update(_VECTOR_OVERRIDES[vector])
-        overrides["VECTOR_BACKEND"] = backend
+        # vector_backend overrides --backends for vector only
+        overrides["VECTOR_BACKEND"] = vector_backend if vector_backend else backend
     else:
         overrides["VECTOR_DB"] = "none"
+        if vector_backend:
+            overrides["VECTOR_BACKEND"] = vector_backend
 
     # -- Search store ----------------------------------------------------------
     if search:
         overrides.update(_SEARCH_OVERRIDES[search])
-        overrides["SEARCH_BACKEND"] = backend
+        # search_backend overrides --backends for search only (mirrors graph_backend / vector_backend)
+        overrides["SEARCH_BACKEND"] = search_backend if search_backend else backend
     else:
         overrides["SEARCH_DB"] = "none"
 
@@ -350,9 +531,12 @@ def _build_overrides(
     # -- Retrieval fusion ------------------------------------------------------
     overrides["RETRIEVAL_FUSION"] = fusion
 
-    # -- Chunker backend -------------------------------------------------------
+    # -- Chunker backend (llamaindex | langchain | cocoindex) ------------------
     if chunker:
         overrides["CHUNKER_BACKEND"] = chunker
+        # CocoIndex chunker only works inside the CocoIndex pipeline
+        if chunker == "cocoindex" and "PIPELINE_BACKEND" not in overrides:
+            overrides["PIPELINE_BACKEND"] = "cocoindex"
 
     # -- LLM provider ----------------------------------------------------------
     if llm and llm in _LLM_OVERRIDES:
@@ -370,19 +554,31 @@ def _build_overrides(
 
 
 def _label(pg, rdf, vector, search, backend, fusion, llm=None, embedding=None, chunker=None,
-           ontology=None, doc_parser=None) -> str:
+           ontology=None, doc_parser=None, pipeline=None, source_backend=None,
+           langflow=None, graph_backend=None, vector_backend=None, data_source=None,
+           search_backend=None) -> str:
     dbs = []
     if pg:     dbs.append(f"pg:{pg}")
     if rdf:    dbs.append(f"rdf:{rdf}")
     if vector: dbs.append(f"vec:{vector}")
     if search: dbs.append(f"search:{search}")
     db_str = "  ".join(dbs) if dbs else "no-graph"
-    suffix = f"  |  {backend}  |  fusion:{fusion}"
-    if chunker:    suffix += f"  |  chunker:{chunker}"
-    if llm:        suffix += f"  |  llm:{llm}"
-    if embedding:  suffix += f"  |  emb:{embedding}"
-    if ontology:   suffix += f"  |  ontology:{ontology}"
-    if doc_parser: suffix += f"  |  parser:{doc_parser}"
+    # Note: backend / fusion are test-internal conveniences (--backends shorthand); only
+    # show fusion since it IS a real config knob (RETRIEVAL_FUSION). The backend shorthand
+    # itself is already visible through the individual graph-be / vec-be / search-be labels.
+    suffix = f"  |  fusion:{fusion}"
+    if pipeline:        suffix += f"  |  pipeline:{pipeline}"
+    if source_backend:  suffix += f"  |  src:{source_backend}"
+    if data_source:     suffix += f"  |  ds:{data_source}"
+    if graph_backend:   suffix += f"  |  graph-be:{graph_backend}"
+    if vector_backend:  suffix += f"  |  vec-be:{vector_backend}"
+    if search_backend:  suffix += f"  |  search-be:{search_backend}"
+    if chunker:         suffix += f"  |  chunker:{chunker}"
+    if langflow:        suffix += f"  |  langflow:{langflow}"
+    if llm:             suffix += f"  |  llm:{llm}"
+    if embedding:       suffix += f"  |  emb:{embedding}"
+    if ontology:        suffix += f"  |  ontology:{ontology}"
+    if doc_parser:      suffix += f"  |  parser:{doc_parser}"
     return f"{db_str}{suffix}"
 
 
@@ -418,8 +614,8 @@ def _run_cleanup(overrides: dict, base_env: Path) -> None:
 
     env = {**os.environ}
     env.update(overrides)
-    # base_env is not needed — we pass everything as env vars which take
-    # precedence over load_dotenv() (which never overrides existing env vars)
+    # base_env is not needed — env vars take precedence over load_dotenv()
+    # (which never overrides existing env vars).
 
     print("[matrix] Running cleanup.py ...")
     try:
@@ -435,7 +631,7 @@ def _run_cleanup(overrides: dict, base_env: Path) -> None:
             print(f"[matrix] cleanup.py exited {result.returncode}")
         # Print a condensed summary (only ERROR/WARNING lines)
         for line in result.stdout.splitlines():
-            if any(kw in line for kw in ("ERROR", "WARN", "Cleaned", "Deleted", "Dropped", "Wipe")):
+            if any(kw in line for kw in ("ERROR", "WARN", "Cleaned", "Deleted", "Dropped", "Wipe", "TIMING")):
                 print(f"  {line}")
     except subprocess.TimeoutExpired:
         print("[matrix] cleanup.py timed out (60s)")
@@ -452,6 +648,8 @@ def _run_one(label: str, overrides: dict, base_env: Path, *,
              test_path: str, timeout: int, dry_run: bool,
              clean: bool = False,
              pytest_k: str = "",
+             per_job_pytest_k: str = "",
+             per_job_test_path: str | None = None,
              pytest_env: dict[str, str] | None = None,
              exitfirst: bool = False) -> dict:
     width = 64
@@ -465,27 +663,48 @@ def _run_one(label: str, overrides: dict, base_env: Path, *,
         print("[matrix] DRY RUN — skipped")
         return {"label": label, "rc": -1, "skipped": True}
 
+    effective_test_path = per_job_test_path or test_path
+    # Merge global -k filter with per-job filter (e.g. specific datasource test)
+    effective_k = pytest_k
+    if per_job_pytest_k:
+        effective_k = (
+            f"({effective_k}) and ({per_job_pytest_k})" if effective_k else per_job_pytest_k
+        )
+
     env_file = _write_env(overrides, base_env)
     proc = None
     try:
-        if clean:
-            _run_cleanup(overrides, base_env)
         log_path = _backend_log_path(label)
-        print(f"[matrix] Backend log -> {log_path.name}")
-        proc = start_backend(env_file, log_path=log_path)
         client = APIClient(base_url=API_URL)
-        if not client.wait_until_healthy(max_wait=timeout):
-            print(f"[matrix] ERROR: backend not healthy in {timeout}s — see {log_path}",
-                  file=sys.stderr)
-            return {"label": label, "rc": 2, "error": "startup_timeout"}
+        # When Langflow tests are requested the user typically runs their own backend
+        # (with ENABLE_LANGFLOW_FLOWS=true and flows already bound).  Starting a second
+        # backend process here would:
+        #   a) fail to bind port 8000 (conflict), AND
+        #   b) run initialize_flows() first — deleting the running backend's LangFlow
+        #      flow IDs before dying — which invalidates every subsequent flow call.
+        # Guard: if the backend is already healthy, skip the start AND skip --clean so
+        # that the running backend's live indexes are not wiped out from under it.
+        _pre_existing = client.wait_until_healthy(max_wait=3)
+        if _pre_existing:
+            print(f"[matrix] Pre-existing backend detected at {API_URL} — skipping start"
+                  f"{' and --clean' if clean else ''} (use the running instance; stop it manually when done)")
+        else:
+            if clean:
+                _run_cleanup(overrides, base_env)
+            print(f"[matrix] Backend log -> {log_path.name}")
+            proc = start_backend(env_file, log_path=log_path)
+            if not client.wait_until_healthy(max_wait=timeout):
+                print(f"[matrix] ERROR: backend not healthy in {timeout}s — see {log_path}",
+                      file=sys.stderr)
+                return {"label": label, "rc": 2, "error": "startup_timeout"}
         # incremental tests need explicit marker — DEFAULT_MARKER excludes them
         inc_marker = "integration and incremental" if pytest_env and "INTEGRATION_WATCH_DIR" in pytest_env else None
         rc = run_pytest(
-            test_path,
+            effective_test_path,
             label=label,
             extra_env=pytest_env,
             marker=inc_marker,
-            pytest_k=pytest_k,
+            pytest_k=effective_k,
             exitfirst=exitfirst,
         )
         tag = "PASS" if rc == 0 else "FAIL"
@@ -565,10 +784,54 @@ def parse_args() -> argparse.Namespace:
                         f"Known: {', '.join(_EMBEDDING_OVERRIDES)}. "
                         "Only EMBEDDING_KIND + model var are overridden — dims/keys/URLs from .env.")
     p.add_argument("--chunker", default=None,
-                   help="Chunker backend(s): llamaindex | langchain | both  "
+                   help="Chunker backend(s): llamaindex | langchain | cocoindex | both  "
                         "(default: None — uses .env value, no override). "
                         "When 'langchain' and --test-path is default, auto-targets test_lc_pipeline.py. "
+                        "cocoindex uses CocoIndex RecursiveSplitter; implies PIPELINE_BACKEND=cocoindex. "
                         "Use 'both' to run the same stack with each chunker in separate passes.")
+    p.add_argument("--pipeline", default=None,
+                   help="Pipeline backend(s): default | cocoindex | both  "
+                        "(sets PIPELINE_BACKEND). 'default' = built-in per-stage pipeline "
+                        "(CHUNKER_BACKEND / GRAPH_BACKEND / VECTOR_BACKEND etc., matches "
+                        "config.py sentinel). 'cocoindex' enables the CocoIndex bridge "
+                        "inside the FastAPI server — tests still run against the HTTP API. "
+                        "NOTE: CocoIndex and Langflow (--langflow true) are mutually exclusive; "
+                        "do not combine them.")
+    p.add_argument("--source-backend", default=None,
+                   help="Source backend(s): flexible | cocoindex | both  "
+                        "(sets SOURCE_BACKEND). 'cocoindex' uses CocoIndex native connectors "
+                        "for data ingestion; 'flexible' uses detector-backed adapters.")
+    p.add_argument("--data-source", default=None,
+                   help="Data source(s) to test per job (sets DATA_SOURCE). "
+                        "One backend start per source. 'all' expands based on --source-backend: "
+                        "cocoindex → filesystem,s3,azure_blob,google_drive; "
+                        f"flexible → {','.join(_FLEXIBLE_SOURCES)}. "
+                        "With --source-backend cocoindex (or --pipeline cocoindex): targets "
+                        "test_cocoindex.py — each job runs the full suite with that DATA_SOURCE. "
+                        "With --source-backend flexible (default): targets test_datasources.py "
+                        "and filters to the matching test function per source. "
+                        "With --incremental: only 'filesystem' is supported. "
+                        f"CocoIndex native: {', '.join(_COCO_NATIVE_SOURCES)}. "
+                        f"Flexible: {', '.join(_FLEXIBLE_SOURCES)}.")
+    p.add_argument("--langflow", default=None,
+                   help="Enable Langflow flows: false (default) | true | both  "
+                        "(sets ENABLE_LANGFLOW_FLOWS). Targets test_langflow.py when 'true'.")
+    p.add_argument("--graph-backend", default=None,
+                   help="GRAPH_BACKEND override (independent of --backends): "
+                        "llamaindex | langchain | cocoindex | both  "
+                        "Overrides only GRAPH_BACKEND; VECTOR_BACKEND and SEARCH_BACKEND "
+                        "still derive from --backends unless --vector-backend is also set. "
+                        "Native CocoIndex PG connectors: neo4j, falkordb, surrealdb.")
+    p.add_argument("--vector-backend", default=None,
+                   help="VECTOR_BACKEND override (independent of --backends): "
+                        "llamaindex | langchain | cocoindex | both  "
+                        "Overrides only VECTOR_BACKEND. "
+                        "Native CocoIndex vector connectors: qdrant, lancedb, postgres.")
+    p.add_argument("--search-backend", default=None,
+                   help="SEARCH_BACKEND override (independent of --backends): "
+                        "llamaindex | langchain | both  "
+                        "Overrides only SEARCH_BACKEND; GRAPH_BACKEND and VECTOR_BACKEND "
+                        "still derive from --backends unless also explicitly set.")
     p.add_argument("--test-dir", default=None,
                    help="Path to a folder of multi-format documents to ingest and test. "
                         "Sets INTEGRATION_TEST_DIR env var so conftest.py exposes "
@@ -592,16 +855,27 @@ def main() -> int:
         print("PG backends:")
         print(f"  llamaindex: {', '.join(ALL_PG['llamaindex'])}")
         print(f"  langchain:  {', '.join(ALL_PG['langchain'])}")
+        print("  cocoindex (native):  neo4j, falkordb, surrealdb")
         print("RDF backends:", ", ".join(ALL_RDF))
         print("Vector stores:")
         print(f"  llamaindex: {', '.join(ALL_VECTOR['llamaindex'])}")
         print(f"  langchain:  {', '.join(ALL_VECTOR['langchain'])}")
+        print("  cocoindex (native):  qdrant, lancedb, postgres")
         print("Search stores:")
         print(f"  llamaindex: {', '.join(ALL_SEARCH['llamaindex'])}")
         print(f"  langchain:  {', '.join(ALL_SEARCH['langchain'])}")
         print("LLM providers:", ", ".join(_LLM_OVERRIDES))
         print("Embedding providers:", ", ".join(_EMBEDDING_OVERRIDES))
-        print("Chunker backends: llamaindex, langchain")
+        print(f"Chunker backends (--chunker):        {', '.join(ALL_CHUNKER)}")
+        print(f"Pipeline backends (--pipeline):      {', '.join(ALL_PIPELINE)}")
+        print(f"Source backends (--source-backend):  {', '.join(ALL_SOURCE_BACKEND)}")
+        print(f"Graph backends (--graph-backend):    {', '.join(ALL_FRAMEWORK_BACKEND)}")
+        print(f"Vector backends (--vector-backend):  {', '.join(ALL_FRAMEWORK_BACKEND)}")
+        print(f"Search backends (--search-backend):  llamaindex, langchain")
+        print(f"Langflow (--langflow):               {', '.join(ALL_LANGFLOW)}")
+        print(f"Data sources (--data-source):")
+        print(f"  cocoindex native: {', '.join(_COCO_NATIVE_SOURCES)}")
+        print(f"  flexible:         {', '.join(_FLEXIBLE_SOURCES)}")
         return 0
 
     backends = _resolve_backends(args.backends)
@@ -760,21 +1034,23 @@ def main() -> int:
     else:
         doc_parser_list = [None]  # use .env value
 
-    # Chunker backend:
+    # Chunker backend (llamaindex | langchain | cocoindex | both):
     #   --backends llamaindex → CHUNKER_BACKEND=llamaindex always; lc_pipe tests excluded
     #   --backends langchain  → CHUNKER_BACKEND=langchain always; lc_pipe tests included
     #   --backends both       → each backend gets its natural chunker (li→li, lc→lc)
     #   --chunker <val>       → explicit override for mixed testing (takes precedence)
+    #   --chunker cocoindex   → CHUNKER_BACKEND=cocoindex; implies PIPELINE_BACKEND=cocoindex
     chunker_list: list[str | None]
     _explicit_chunker = bool(args.chunker)
     if _explicit_chunker:
         _chunker_val = args.chunker.lower()
         if _chunker_val == "both":
             chunker_list = ["llamaindex", "langchain"]
-        elif _chunker_val in ("llamaindex", "langchain"):
+        elif _chunker_val in ALL_CHUNKER:
             chunker_list = [_chunker_val]
         else:
-            print(f"[matrix] ERROR: --chunker must be llamaindex | langchain | both, got {args.chunker!r}")
+            print(f"[matrix] ERROR: --chunker must be {' | '.join(ALL_CHUNKER)} | both, "
+                  f"got {args.chunker!r}")
             return 1
     else:
         # Derive from --backends: each backend carries its natural chunker.
@@ -782,24 +1058,151 @@ def main() -> int:
         # cartesian product still works — we override per-job in the loop.
         chunker_list = [None]
 
+    # Pipeline backend dimension — None means "force default (not cocoindex)"
+    _pipeline_arg = getattr(args, "pipeline", None)
+    if _pipeline_arg and _pipeline_arg.lower() == "both":
+        pipeline_list: list[str | None] = ["default", "cocoindex"]
+    elif _pipeline_arg and _pipeline_arg.lower() in ALL_PIPELINE:
+        pipeline_list = [_pipeline_arg.lower()]
+    else:
+        pipeline_list = [None]  # no override — use .env value
+
+    # Source backend dimension
+    _src_arg = getattr(args, "source_backend", None)
+    if _src_arg and _src_arg.lower() == "both":
+        source_backend_list: list[str | None] = ["flexible", "cocoindex"]
+    elif _src_arg and _src_arg.lower() in ALL_SOURCE_BACKEND:
+        source_backend_list = [_src_arg.lower()]
+    else:
+        source_backend_list = [None]  # no override
+
+    # Langflow dimension
+    _langflow_arg = getattr(args, "langflow", None)
+    if _langflow_arg and _langflow_arg.lower() == "both":
+        langflow_list: list[str | None] = ["false", "true"]
+    elif _langflow_arg and _langflow_arg.lower() in ALL_LANGFLOW:
+        langflow_list = [_langflow_arg.lower()]
+    else:
+        langflow_list = [None]  # no override
+
+    # Graph backend override dimension
+    _gb_arg = getattr(args, "graph_backend", None)
+    if _gb_arg and _gb_arg.lower() == "both":
+        graph_backend_list: list[str | None] = ["llamaindex", "langchain"]
+    elif _gb_arg and _gb_arg.lower() in ALL_FRAMEWORK_BACKEND:
+        graph_backend_list = [_gb_arg.lower()]
+    else:
+        graph_backend_list = [None]  # derive from --backends
+
+    # Vector backend override dimension
+    _vb_arg = getattr(args, "vector_backend", None)
+    if _vb_arg and _vb_arg.lower() == "both":
+        vector_backend_list: list[str | None] = ["llamaindex", "langchain"]
+    elif _vb_arg and _vb_arg.lower() in ALL_FRAMEWORK_BACKEND:
+        vector_backend_list = [_vb_arg.lower()]
+    else:
+        vector_backend_list = [None]  # derive from --backends
+
+    # Search backend override dimension
+    _sb_arg = getattr(args, "search_backend", None)
+    if _sb_arg and _sb_arg.lower() == "both":
+        search_backend_list: list[str | None] = ["llamaindex", "langchain"]
+    elif _sb_arg and _sb_arg.lower() in ("llamaindex", "langchain"):
+        search_backend_list = [_sb_arg.lower()]
+    else:
+        search_backend_list = [None]  # derive from --backends
+
+    # Data source dimension — one job per source, each starting its own backend
+    # 'all' expands to the set appropriate for the active --source-backend:
+    #   cocoindex → _COCO_NATIVE_SOURCES; flexible/default → _FLEXIBLE_SOURCES
+    _ds_arg = getattr(args, "data_source", None)
+    _ds_is_coco_sb = bool(
+        source_backend_list and all(sb in (None, "cocoindex") for sb in source_backend_list)
+        and any(sb == "cocoindex" for sb in source_backend_list)
+    )
+    data_source_list: list[str | None]
+    if _ds_arg:
+        _ds_val = _ds_arg.lower()
+        if _ds_val == "all":
+            data_source_list = list(_COCO_NATIVE_SOURCES) if _ds_is_coco_sb else list(_FLEXIBLE_SOURCES)
+        elif "," in _ds_val:
+            data_source_list = [s.strip() for s in _ds_val.split(",") if s.strip()]
+        elif _ds_val in ALL_DATA_SOURCE:
+            data_source_list = [_ds_val]
+        else:
+            print(f"[matrix] ERROR: --data-source {_ds_arg!r} not recognised. "
+                  f"Valid: {', '.join(ALL_DATA_SOURCE)} | all")
+            return 1
+        # Warn when --incremental is set with non-filesystem sources
+        if args.incremental:
+            non_fs = [ds for ds in data_source_list if ds != "filesystem"]
+            if non_fs:
+                print(f"[matrix] WARNING: --incremental only supports 'filesystem'; "
+                      f"skipping non-filesystem sources: {', '.join(non_fs)}")
+                data_source_list = [ds for ds in data_source_list if ds == "filesystem"]
+                if not data_source_list:
+                    print("[matrix] ERROR: no valid data sources remain after filtering for --incremental.")
+                    return 1
+    else:
+        data_source_list = [None]  # no DATA_SOURCE override
+
     # Test-path auto-selection (only when not overridden by user or --incremental):
-    # --backends langchain (or --chunker langchain) → target test_lc_pipeline.py
-    # --backends llamaindex                         → exclude lc_pipe marker via -k
+    # --backends langchain (or --chunker langchain)  → target test_lc_pipeline.py
+    # --langflow true                                → target test_langflow.py
+    # --pipeline cocoindex + native coco backends    → target test_cocoindex.py
+    # --pipeline cocoindex + flexible LI/LC backends → keep flex tests (ingest/search,
+    #   datasources, lc_pipe) — same suites as default pipeline, different orchestrator
+    # --data-source + flexible source-backend        → target test_datasources.py
+    # --backends llamaindex                          → exclude lc_pipe marker via -k
     _DEFAULT_TEST_PATH = "tests/integration/"
     _using_lc_chunker = (
         _explicit_chunker and "langchain" in chunker_list
     ) or (
         not _explicit_chunker and "langchain" in backends
     )
+    _using_langflow = bool(_langflow_arg and "true" in langflow_list)
+    _using_cocoindex_pipeline = bool(pipeline_list and "cocoindex" in pipeline_list)
+    # Native CocoIndex targets/sources (coco full-suite steps 1-3). Flexible stores
+    # under PIPELINE_BACKEND=cocoindex must NOT force test_cocoindex.py.
+    _using_native_coco = bool(
+        _using_cocoindex_pipeline
+        and (
+            _ds_is_coco_sb
+            or any(sb == "cocoindex" for sb in source_backend_list if sb)
+            or any(gb == "cocoindex" for gb in graph_backend_list if gb)
+            or any(vb == "cocoindex" for vb in vector_backend_list if vb)
+        )
+    )
+    _using_data_source = bool(_ds_arg)
+    # Flexible datasource run: --data-source set, not native-coco source backend,
+    # AND at least one source has a dedicated test in test_datasources.py.
+    # PIPELINE_BACKEND=cocoindex is allowed — flexible sources still use these tests.
+    _using_flexible_ds = (
+        _using_data_source
+        and not _using_native_coco
+        and not _ds_is_coco_sb
+        and any(_FLEXIBLE_DS_TEST.get(ds, "") for ds in data_source_list if ds)
+    )
+
     if not args.incremental and args.test_path == _DEFAULT_TEST_PATH:
-        if _using_lc_chunker and not any(b == "llamaindex" for b in backends):
+        if _using_langflow and not _using_lc_chunker and not _using_native_coco:
+            args.test_path = "tests/integration/test_langflow.py"
+            print(f"[matrix] --langflow true: auto-targeting {args.test_path}")
+        elif _using_native_coco and not _using_lc_chunker and not _using_langflow:
+            args.test_path = "tests/integration/test_cocoindex.py"
+            print(f"[matrix] --pipeline cocoindex (native backends): auto-targeting {args.test_path}")
+        elif _using_flexible_ds and not _using_lc_chunker and not _using_langflow:
+            args.test_path = "tests/integration/test_datasources.py"
+            print(f"[matrix] --data-source (flexible): auto-targeting {args.test_path}")
+        elif _using_lc_chunker and not any(b == "llamaindex" for b in backends):
             # Pure LC backend run → only run lc_pipe tests (incremental still excluded)
             args.test_path = "tests/integration/test_lc_pipeline.py"
             print(f"[matrix] --backends langchain: auto-targeting {args.test_path}")
         else:
             # LI run (or mixed): exclude lc_pipe tests + incremental tests
             # lc_pipe needs CHUNKER_BACKEND=langchain; incremental needs --incremental flag
-            _excludes = ["not incremental", "not datasource", "not folder_ingest"]
+            _excludes = ["not incremental", "not datasource", "not folder_ingest",
+                         "not langflow", "not cocoindex"]
             if not _using_lc_chunker:
                 _excludes.append("not lc_pipe")
             _exclude_expr = " and ".join(_excludes)
@@ -810,7 +1213,7 @@ def main() -> int:
             print(f"[matrix] auto-excluding tests not applicable to this run (-k {args.pytest_k!r})")
 
     # Build all combinations
-    jobs: list[tuple[str, dict]] = []
+    jobs: list[tuple[str, dict, str, str | None]] = []  # (label, overrides, per_job_pytest_k, per_job_test_path)
     seen_labels: set[str] = set()
 
     for backend, fusion in _backend_fusion_pairs():
@@ -819,29 +1222,65 @@ def main() -> int:
         vectors = vector_list(backend) or [None]
         searches = search_list(backend) or [None]
 
-        for pg, rdf, vector, search, llm, embedding, chunker, ontology, doc_parser in itertools.product(
-                pgs, rdfs, vectors, searches, llm_list, embedding_list, chunker_list,
-                ontology_list, doc_parser_list):
+        for (pg, rdf, vector, search, llm, embedding, chunker,
+             ontology, doc_parser, pipeline, source_backend, langflow,
+             graph_backend, vector_backend, search_backend, data_source) in itertools.product(
+                pgs, rdfs, vectors, searches,
+                llm_list, embedding_list, chunker_list,
+                ontology_list, doc_parser_list,
+                pipeline_list, source_backend_list, langflow_list,
+                graph_backend_list, vector_backend_list, search_backend_list, data_source_list):
             # Skip: nothing active at all
             if not pg and not rdf and not vector and not search:
                 continue
 
-            # When no explicit --chunker, derive from backend (li→li, lc→lc)
-            effective_chunker = chunker if _explicit_chunker else backend
+            # When no explicit --chunker, derive from pipeline/backend:
+            #   - CocoIndex pipeline  → chunker=cocoindex (uses CocoIndex's own splitter)
+            #   - all other pipelines → chunker=llamaindex (LI SentenceSplitter, always safe)
+            # An explicit --chunker flag always wins.
+            if _explicit_chunker:
+                effective_chunker = chunker
+            elif pipeline == "cocoindex":
+                effective_chunker = "cocoindex"
+            else:
+                effective_chunker = "llamaindex"
 
             label = _label(pg, rdf, vector, search, backend, fusion, llm, embedding,
                            effective_chunker if _explicit_chunker else None,
-                           ontology, doc_parser)
+                           ontology, doc_parser,
+                           pipeline, source_backend, langflow,
+                           graph_backend, vector_backend, data_source,
+                           search_backend)
             if label in seen_labels:
                 continue
             seen_labels.add(label)
 
-            overrides = _build_overrides(pg, rdf, vector, search, backend, fusion, llm, embedding,
-                                         effective_chunker, ontology, doc_parser)
+            overrides = _build_overrides(
+                pg, rdf, vector, search, backend, fusion, llm, embedding,
+                effective_chunker, ontology, doc_parser,
+                pipeline, source_backend, langflow, graph_backend, vector_backend,
+                data_source, search_backend,
+            )
             if incremental_watch_dir:
                 overrides["ENABLE_INCREMENTAL_UPDATES"] = "true"
                 overrides["INTEGRATION_WATCH_DIR"] = incremental_watch_dir
-            jobs.append((label, overrides))
+
+            # Per-job pytest filter: restrict to the matching test function so each
+            # job tests exactly one data source (avoids running all N tests per job).
+            per_job_pytest_k = ""
+            per_job_test_path: str | None = None
+            if data_source:
+                if _ds_is_coco_sb:
+                    # CocoIndex native source — target test_cocoindex.py with a
+                    # source-specific -k filter (cloud sources run smoke tests only).
+                    per_job_pytest_k = _COCO_DS_TEST.get(data_source, "")
+                else:
+                    # Flexible (LlamaIndex/LangChain) source — target the matching
+                    # test function in test_datasources.py (or test_ingest_search.py).
+                    per_job_pytest_k = _FLEXIBLE_DS_TEST.get(data_source, "")
+                    per_job_test_path = _FLEXIBLE_DS_TEST_PATH.get(data_source)
+
+            jobs.append((label, overrides, per_job_pytest_k, per_job_test_path))
 
     if not jobs:
         print("[matrix] No jobs (all dimensions are 'none'). "
@@ -849,7 +1288,7 @@ def main() -> int:
         return 1
 
     print(f"[matrix] {len(jobs)} job(s):")
-    for lbl, _ in jobs:
+    for lbl, _, _, _ in jobs:
         print(f"  {lbl}")
 
     if args.dry_run:
@@ -857,12 +1296,19 @@ def main() -> int:
 
     results: list[dict] = []
     t0 = time.time()
-    for idx, (label, overrides) in enumerate(jobs, 1):
+    for idx, (label, overrides, per_job_pytest_k, per_job_test_path) in enumerate(jobs, 1):
         # Always propagate DB/LLM/embedding keys that tests read directly via
         # os.getenv() (e.g. _ingest_timeout(), _skip_graph_for_lc_pipe()).
         # These are written to the backend .env but NOT inherited by pytest.
-        _PYTEST_PROPAGATE = {"LLM_PROVIDER", "EMBEDDING_KIND", "PG_GRAPH_DB",
-                             "VECTOR_DB", "SEARCH_DB", "RDF_GRAPH_DB", "CHUNKER_BACKEND"}
+        _PYTEST_PROPAGATE = {
+            "LLM_PROVIDER", "EMBEDDING_KIND",
+            "PG_GRAPH_DB", "VECTOR_DB", "SEARCH_DB", "RDF_GRAPH_DB",
+            "CHUNKER_BACKEND", "GRAPH_BACKEND", "VECTOR_BACKEND", "SEARCH_BACKEND",
+            # CocoIndex + Langflow flags read by test modules via os.getenv()
+            "PIPELINE_BACKEND", "SOURCE_BACKEND", "ENABLE_LANGFLOW_FLOWS",
+            # Data source — read by datasource tests to adjust skip/assert logic
+            "DATA_SOURCE",
+        }
         pytest_env: dict[str, str] = {
             k: v for k, v in overrides.items() if k in _PYTEST_PROPAGATE
         }
@@ -893,6 +1339,8 @@ def main() -> int:
                        dry_run=False,
                        clean=args.clean,
                        pytest_k=args.pytest_k,
+                       per_job_pytest_k=per_job_pytest_k,
+                       per_job_test_path=per_job_test_path,
                        pytest_env=pytest_env,
                        exitfirst=args.fail_fast)
         results.append(res)

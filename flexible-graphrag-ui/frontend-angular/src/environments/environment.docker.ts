@@ -4,5 +4,6 @@ export const environment = {
   defaultFolderPath: '/Shared/GraphRAG',
   cmisBaseUrl: 'http://host.docker.internal:8080', // Docker networking
   alfrescoBaseUrl: 'http://host.docker.internal:8080', // Docker networking
-  nuxeoBaseUrl: 'http://host.docker.internal:8081/nuxeo' // Docker networking
+  nuxeoBaseUrl: 'http://host.docker.internal:8081/nuxeo', // Docker networking
+  nuxeoPath: '/default-domain/workspaces/GraphRAG' // Default Nuxeo folder shown in the source dialog
 };

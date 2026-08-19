@@ -9,6 +9,7 @@ interface Environment {
   CMIS_BASE_URL?: string;
   ALFRESCO_BASE_URL?: string;
   NUXEO_BASE_URL?: string;
+  NUXEO_PATH?: string;
 }
 
 // Declare the __env property on the window object
@@ -24,7 +25,8 @@ window.__env = window.__env || {
   DEFAULT_FOLDER_PATH: '/Shared/GraphRAG',
   CMIS_BASE_URL: 'http://localhost:8080',
   ALFRESCO_BASE_URL: 'http://localhost:8080',
-  NUXEO_BASE_URL: 'http://localhost:8081/nuxeo'
+  NUXEO_BASE_URL: 'http://localhost:8081/nuxeo',
+  NUXEO_PATH: '/default-domain/workspaces/GraphRAG'
 };
 
 // The server will inject actual values from .env here

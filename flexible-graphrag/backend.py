@@ -515,17 +515,26 @@ class FlexibleGraphRAGBackend:
             if error:
                 file_info["error"] = error
             
-            # Update the main status with the new file progress
+            # Keep overall progress in sync with per-file bars (average).
             completed_count = sum(1 for f in file_progress if f["status"] == "completed")
-            logger.info(f"File progress update: {file_info['filename']} -> {status} ({progress}%) - {completed_count}/{len(file_progress)} completed")
+            overall_progress = round(
+                sum(f.get("progress", 0) for f in file_progress) / len(file_progress)
+            )
+            overall_message = message or current_status.get("message", "Processing files...")
+            overall_phase = phase or current_status.get("current_phase")
+            logger.info(
+                f"File progress update: {file_info['filename']} -> {file_info.get('status')} "
+                f"({file_info.get('progress')}%) - {completed_count}/{len(file_progress)} completed, "
+                f"overall={overall_progress}%"
+            )
             
             self._update_processing_status(
                 processing_id,
                 current_status.get("status", "processing"),
-                current_status.get("message", "Processing files..."),
-                current_status.get("progress", 0),
+                overall_message,
+                overall_progress,
                 current_file=file_info["filename"],
-                current_phase=phase,
+                current_phase=overall_phase,
                 files_completed=completed_count,
                 total_files=len(file_progress),
                 file_progress=file_progress
@@ -935,33 +944,23 @@ class FlexibleGraphRAGBackend:
                     processing_id,
                     "processing",
                     "Initializing filesystem document ingestion...",
-                    20,
+                    10,
                     total_files=len(cleaned_paths),
                     files_completed=0,
                     file_progress=file_progress
                 )
                 if self._is_processing_cancelled(processing_id):
                     return
-                self._update_processing_status(
-                    processing_id,
-                    "processing",
-                    "Scanning filesystem paths...",
-                    40,
-                    total_files=len(cleaned_paths),
-                    files_completed=0,
-                    file_progress=file_progress
-                )
-                if self._is_processing_cancelled(processing_id):
-                    return
-                self._update_processing_status(
-                    processing_id,
-                    "processing",
-                    "Processing filesystem documents...",
-                    60,
-                    total_files=len(cleaned_paths),
-                    files_completed=0,
-                    file_progress=file_progress
-                )
+                # Mark all files as starting load
+                for i in range(len(file_progress)):
+                    self._update_file_progress(
+                        processing_id,
+                        i,
+                        status="processing",
+                        progress=10,
+                        phase="loading",
+                        message="Scanning filesystem paths...",
+                    )
                 
                 config = {"paths": cleaned_paths}
                 
@@ -976,6 +975,7 @@ class FlexibleGraphRAGBackend:
                     
                     # Handle completion status - mark all individual files as completed
                     if status == "completed" and progress == 100:
+                        completion_msg = cb_kwargs.get("message") or "Processing completed"
                         for i in range(len(file_progress)):
                             self._update_file_progress(
                                 processing_id, 
@@ -983,8 +983,21 @@ class FlexibleGraphRAGBackend:
                                 status="completed", 
                                 progress=100,
                                 phase="completed",
-                                message="Processing completed"
+                                message=completion_msg
                             )
+                        # _update_file_progress inherits the existing "processing" status when it
+                        # calls _update_processing_status internally, so we must explicitly mark
+                        # the overall job as completed here.
+                        self._update_processing_status(
+                            processing_id,
+                            "completed",
+                            completion_msg,
+                            100,
+                            total_files=len(file_progress),
+                            files_completed=len(file_progress),
+                            file_progress=file_progress,
+                        )
+                        return
                     # Handle loading progress - update individual file progress
                     elif files_completed > 0 and files_completed <= len(file_progress):
                         file_index = files_completed - 1  # Convert to 0-based index
@@ -992,14 +1005,26 @@ class FlexibleGraphRAGBackend:
                             processing_id, 
                             file_index, 
                             status="processing", 
-                            progress=min(progress, 90),  # Don't complete during loading
+                            progress=min(progress, 40),  # loading phase caps at 40%
                             phase="loading",
                             message=f"Loading {current_file}" if current_file else "Loading..."
                         )
+                        return
                     
-                    # Add the individual_files data to the callback
-                    cb_kwargs["file_progress"] = file_progress
-                    self._update_processing_status(**cb_kwargs)
+                    # Pipeline stage updates (chunk / vector / KG / RDF) — fan out to all active files
+                    current_phase = cb_kwargs.get("current_phase", "processing")
+                    pipeline_message = cb_kwargs.get("message", "Processing...")
+                    if progress > 0:
+                        for i, fp in enumerate(file_progress):
+                            if fp.get("status") not in ("completed", "failed"):
+                                self._update_file_progress(
+                                    processing_id,
+                                    i,
+                                    status="processing",
+                                    progress=progress,
+                                    phase=current_phase,
+                                    message=pipeline_message,
+                                )
                 
                 documents = await self.ingestion_manager.ingest_from_source(
                     source_type="filesystem",
@@ -1014,7 +1039,7 @@ class FlexibleGraphRAGBackend:
                         processing_id, 
                         i, 
                         status="processing", 
-                        progress=90,  # Loaded but not processed
+                        progress=40,
                         phase="loaded",
                         message="Documents loaded, starting pipeline processing..."
                     )
@@ -1485,6 +1510,20 @@ class FlexibleGraphRAGBackend:
                 
             elif data_source == "gcs":
                 gcs_config = kwargs.get('gcs_config', {})
+                # Resolve service_account_key_path → credentials string if needed
+                if not gcs_config.get('credentials') and gcs_config.get('service_account_key_path'):
+                    _sa_path = gcs_config['service_account_key_path']
+                    try:
+                        import json as _json_mod, os as _os
+                        if not _os.path.isabs(_sa_path):
+                            _sa_path = _os.path.join(_os.path.dirname(__file__), _sa_path)
+                        with open(_sa_path, encoding="utf-8") as _fh:
+                            gcs_config = dict(gcs_config)
+                            gcs_config['credentials'] = _fh.read()
+                            kwargs = dict(kwargs, gcs_config=gcs_config)
+                        logger.info("GCS: loaded credentials from service_account_key_path=%s", _sa_path)
+                    except Exception as _e:
+                        logger.warning("GCS: could not read service_account_key_path %s: %s", _sa_path, _e)
                 bucket_name = gcs_config.get('bucket_name', 'GCS Bucket')
                 await self._process_modular_data_source(
                     processing_id=processing_id,

@@ -322,13 +322,34 @@ class IncrementalUpdateEngine:
         # ── Search store delete ───────────────────────────────────────────────
         # LC mode: custom delete using ES/OpenSearch delete_by_query.
         # LI mode: use search_index.delete_ref_doc (LI async-safe path).
+        # OpenSearch hybrid mode: search index (hybrid_search_fulltext) is never
+        # written to (update_search.py skips it), so skip the delete too.
         _search_adapter = getattr(hs, "search_store", None) if hs else None
         _search_is_lc = (
             _search_adapter is not None
             and callable(getattr(_search_adapter, "is_langchain", None))
             and _search_adapter.is_langchain()
         )
-        if _search_adapter is not None and _search_is_lc:
+
+        # Detect OpenSearch hybrid mode (both vector and search are OpenSearch).
+        # LI inner type: OpensearchVectorStore; LC inner type: OpenSearchVectorSearch.
+        _OPENSEARCH_STORE_TYPES = frozenset({"OpensearchVectorStore", "OpenSearchVectorSearch"})
+        _vec_inner = type(
+            getattr(getattr(hs, "vector_store", None), "_store", None)
+        ).__name__ if hs else ""
+        _srch_inner = type(
+            getattr(_search_adapter, "_store", None)
+        ).__name__ if _search_adapter else ""
+        _os_hybrid_delete = (
+            _vec_inner in _OPENSEARCH_STORE_TYPES and _srch_inner in _OPENSEARCH_STORE_TYPES
+        )
+
+        if _os_hybrid_delete:
+            logger.debug(
+                "  OpenSearch hybrid mode: skipping search delete "
+                "(search index not written to during ingestion)"
+            )
+        elif _search_adapter is not None and _search_is_lc:
             try:
                 _search_adapter.delete(doc_id)
                 logger.info(f"  Deleted from LC search store (ref_doc_id={doc_id})")

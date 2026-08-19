@@ -162,7 +162,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `watchdog` (MIT)
 - **Mode**: Real-time OS events
-- **Status**: ✅ Production ready
 
 **Configuration**:
 ```python
@@ -183,7 +182,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `boto3` (Apache 2.0)
 - **Mode**: Event-based (SQS) + Periodic fallback
-- **Status**: ✅ Production ready
 
 **Configuration (Event Mode)**:
 ```python
@@ -222,7 +220,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `python-alfresco-api`, `cmislib` (optional)
 - **Mode**: Dual mode - Event-based (real-time) + Polling (fallback)
-- **Status**: ✅ Production ready
 
 **Configuration (Basic)**:
 ```python
@@ -294,7 +291,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `azure-storage-blob`, `azure-storage-blob-changefeed` (MIT)
 - **Mode**: Change feed + Periodic fallback
-- **Status**: ✅ Ready for testing
 
 **Configuration**:
 ```python
@@ -321,7 +317,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `google-cloud-storage`, `google-cloud-pubsub` (Apache 2.0)
 - **Mode**: Pub/Sub notifications + Periodic fallback
-- **Status**: ✅ Ready for testing
 
 **Configuration**:
 ```python
@@ -347,7 +342,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `google-api-python-client` (Apache 2.0)
 - **Mode**: Changes API (polling)
-- **Status**: ✅ Ready for testing
 
 **Configuration**:
 ```python
@@ -376,7 +370,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `boxsdk` (Apache 2.0)
 - **Mode**: Events API (polling)
-- **Status**: ✅ Ready for testing
 
 **Configuration (Developer Token)**:
 ```python
@@ -423,7 +416,6 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 
 - **Library**: `msgraph-sdk`, `azure-identity` (MIT)
 - **Mode**: Delta Query (polling)
-- **Status**: ✅ Ready for testing (simplified implementation)
 
 **Configuration**:
 ```python
@@ -442,40 +434,13 @@ def create_detector(source_type: str, config: Dict) -> Optional[ChangeDetector]:
 ```
 
 **Features**:
-- Delta query for incremental changes
-- Supports OneDrive, OneDrive for Business, and SharePoint
-- Client secret authentication
-- Delta link tracking for efficient polling
-
-**Note**: This is a simplified implementation. Full production use would benefit from:
-- Webhook subscriptions for true real-time updates
-- Better file download implementation
-- OAuth token refresh handling
+- Microsoft Graph Delta Query for efficient incremental change detection
+- Supports OneDrive for Business, and SharePoint document libraries
+- Client secret (app) authentication via `azure-identity`
+- Delta link tracking — only changed items are returned on each poll
+- Detects CREATE, UPDATE, DELETE events across drives and sites
 
 ---
-
-## Planned Detectors
-
-All major cloud storage and collaboration platforms are now implemented!
-
-### Future Enhancements
-
-While all major detectors are implemented, future improvements could include:
-
-1. **Microsoft Graph Webhooks**: Currently using polling with Delta Query. Could add webhook subscriptions for true real-time updates (requires public HTTPS endpoint and domain verification).
-
-2. **Google Drive Push Notifications**: Currently using Changes API polling. Could add Watch API with push notifications (requires public HTTPS endpoint and domain verification).
-
-3. **Box Webhooks v2**: Currently using Events API polling. Could add webhook subscriptions for true real-time updates (requires public HTTPS endpoint).
-
-## Testing
-
-Unit tests are located in `../test_s3_detector.py` (to be split per detector).
-
-Run tests:
-```bash
-pytest test_s3_detector.py -v
-```
 
 ## Architecture
 
@@ -501,32 +466,3 @@ Data Source → Detector.get_changes() → ChangeEvent → Engine → Processing
 - `UPDATE` - Existing file modified
 - `DELETE` - File removed
 
-## Benefits of Modular Structure
-
-✅ **Maintainability**: Each detector in its own file  
-✅ **Testability**: Easy to test individual detectors  
-✅ **Extensibility**: Simple to add new detectors  
-✅ **Clarity**: Clear separation of concerns  
-✅ **Independence**: Changes to one detector don't affect others  
-✅ **Documentation**: Each detector has its own docs
-
-## Migration from Old Structure
-
-The old monolithic `detectors.py` has been split into:
-
-- `base.py` - Base classes and interfaces
-- `filesystem_detector.py` - Filesystem monitoring
-- `s3_detector.py` - S3 change detection
-- `factory.py` - Detector creation
-
-Old code will continue to work via compatibility imports in `detectors_old.py`, but should be updated to use the new package:
-
-```python
-# Old (still works)
-from incremental_updates.detectors import FilesystemDetector
-
-# New (preferred)
-from incremental_updates.detectors import FilesystemDetector
-```
-
-The import path is the same, but now uses the package instead of a single file.

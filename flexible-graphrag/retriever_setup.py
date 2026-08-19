@@ -12,6 +12,38 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _patch_opensearch_hybrid_pipeline(vector_store, search_pipeline: str) -> bool:
+    """Inject ``search_pipeline`` into an already-constructed ``OpensearchVectorClient``.
+
+    ``OpensearchVectorClient`` stores the pipeline name as ``self._search_pipeline`` and
+    checks it at every HYBRID query.  It is set only at construction time, but at that
+    point the adapter doesn't know whether SEARCH_DB is also OpenSearch (hybrid mode).
+    We patch it here, once, when we know we're in hybrid mode.
+
+    Returns True if the patch was applied, False if the store hierarchy wasn't found.
+    """
+    # LlamaIndexVectorAdapter._store → OpensearchVectorStore._client → OpensearchVectorClient
+    raw_store = getattr(vector_store, "_store", None)
+    client = getattr(raw_store, "_client", None)
+    if client is None:
+        # Also try direct attribute (some versions name it differently)
+        client = getattr(raw_store, "client", None)
+    if client is not None and hasattr(client, "_search_pipeline"):
+        client._search_pipeline = search_pipeline
+        logger.info(
+            "OpenSearch hybrid mode: patched _search_pipeline='%s' on OpensearchVectorClient",
+            search_pipeline,
+        )
+        return True
+    logger.warning(
+        "OpenSearch hybrid mode: could not locate OpensearchVectorClient to patch "
+        "_search_pipeline — HYBRID queries may fail. Add 'search_pipeline': '%s' to "
+        "OPENSEARCH_VECTOR_DB_CONFIG in .env as a permanent fix.",
+        search_pipeline,
+    )
+    return False
+
+
 def _to_lc_retriever(retriever):
     """Convert a retriever to an LC BaseRetriever, or return None.
 
@@ -271,11 +303,32 @@ def setup_hybrid_retriever(system) -> None:
     if _source_files:
         logger.debug("Graph retriever source_files: %s", _source_files)
 
+    # When VECTOR_BACKEND=cocoindex, CocoIndex owns ingestion and the LlamaIndex
+    # VectorStoreIndex is intentionally skipped at init — but a read-only vector
+    # store adapter still exists, so we build a read-only retriever from it below
+    # (see cocoindex_integration.retriever_bridge) so hybrid search actually
+    # queries the vector DB (Qdrant/LanceDB/Postgres) instead of skipping it.
+    from cocoindex_integration.retriever_bridge import (
+        build_cocoindex_read_graph_retriever,
+        build_cocoindex_read_vector_retriever,
+        build_cocoindex_surreal_qa_retriever,
+        has_cocoindex_read_graph,
+        has_cocoindex_read_vector,
+        has_cocoindex_surreal_graph,
+    )
+    _has_cocoindex_read_vector = has_cocoindex_read_vector(system, config)
+    _has_cocoindex_read_graph = has_cocoindex_read_graph(system, config)
+    _has_cocoindex_surreal_graph = has_cocoindex_surreal_graph(system, config)
     has_vector = (
         system.vector_index is not None
         or (hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain())
+        or _has_cocoindex_read_vector
     )
-    has_graph = config.enable_knowledge_graph and system.graph_index is not None
+    has_graph = (
+        (config.enable_knowledge_graph and system.graph_index is not None)
+        or _has_cocoindex_read_graph
+        or _has_cocoindex_surreal_graph
+    )
     has_search = config.search_db != SearchDBType.NONE
     has_langchain_rdf = (str(getattr(config, "rdf_graph_db", "none")) != "none")
     # Reflect the *actual* adapter state rather than the config flag alone.
@@ -294,6 +347,20 @@ def setup_hybrid_retriever(system) -> None:
         logger.warning("Cannot setup hybrid retriever: no search modalities available")
         return
 
+    # ---- OpenSearch hybrid mode flag ----
+    # When both VECTOR_DB=opensearch and SEARCH_DB=opensearch:
+    #   LI backend: uses VectorStoreQueryMode.HYBRID on the vector_index —
+    #               one query covers KNN + BM25 via a search pipeline.
+    #   LC backend: OpenSearchVectorSearch always does KNN (no BM25 mode);
+    #               the search adapter is also KNN-only, so it is redundant.
+    # In both cases the search retriever is skipped; only the vector retriever runs.
+    # ingestion side: update_search.py also skips writing to the search index.
+    _os_hybrid = (
+        config.vector_db == VectorDBType.OPENSEARCH
+        and has_search
+        and config.search_db == SearchDBType.OPENSEARCH
+    )
+
     # ---- Vector retriever ----
     vector_retriever = None
     if has_vector:
@@ -311,18 +378,46 @@ def setup_hybrid_retriever(system) -> None:
             elif system.vector_index is not None:
                 if config.vector_db == VectorDBType.OPENSEARCH:
                     from llama_index.core.vector_stores.types import VectorStoreQueryMode
-                    vector_retriever = system.vector_index.as_retriever(
-                        similarity_top_k=10,
-                        embed_model=system.embed_model,
-                        vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
-                    )
-                    logger.info("OpenSearch vector retriever created with DEFAULT mode")
+                    if _os_hybrid:
+                        # Native OpenSearch hybrid: single query covers both KNN + BM25.
+                        # OpensearchVectorClient checks self._search_pipeline at query time;
+                        # it is set at construction but the adapter doesn't know SEARCH_DB
+                        # at that point, so we patch it now that we know we're in hybrid mode.
+                        # query_str is passed via VectorStoreQuery.query_str (set from the
+                        # QueryBundle), so the standard as_retriever() works fine.
+                        _os_search_pipeline = getattr(
+                            config, "opensearch_search_pipeline", "hybrid-search-pipeline"
+                        )
+                        _patch_opensearch_hybrid_pipeline(system.vector_store, _os_search_pipeline)
+                        vector_retriever = system.vector_index.as_retriever(
+                            similarity_top_k=10,
+                            embed_model=system.embed_model,
+                            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+                        )
+                        logger.info(
+                            "OpenSearch hybrid mode [LI]: HYBRID retriever created "
+                            "(search_pipeline=%s patched onto client) — "
+                            "separate TEXT_SEARCH retriever skipped",
+                            _os_search_pipeline,
+                        )
+                    else:
+                        vector_retriever = system.vector_index.as_retriever(
+                            similarity_top_k=10,
+                            embed_model=system.embed_model,
+                            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
+                        )
+                        logger.info("OpenSearch vector retriever created with DEFAULT mode")
                 else:
                     vector_retriever = system.vector_index.as_retriever(
                         similarity_top_k=10,
                         embed_model=system.embed_model,
                     )
-                    logger.info(f"{config.vector_db} vector retriever created")
+            elif _has_cocoindex_read_vector:
+                # CocoIndex owns ingestion; build a read-only retriever over the
+                # CocoIndex-written vector store (LanceDB/Postgres custom readers or
+                # a plain read-only VectorStoreIndex for Qdrant/etc.).  All the
+                # CocoIndex-schema knowledge lives in cocoindex_integration.
+                vector_retriever = build_cocoindex_read_vector_retriever(system, top_k=10)
         except Exception as check_error:
             logger.warning(f"Could not create vector retriever: {check_error}")
     else:
@@ -461,38 +556,61 @@ def setup_hybrid_retriever(system) -> None:
             include_metadata=True,
         )
         logger.debug("LlamaIndex graph retriever: PropertyGraphIndex.as_retriever similarity_top_k=5")
+    elif _has_cocoindex_read_graph:
+        # GRAPH_BACKEND=cocoindex: CocoIndex owns ingestion and the LI
+        # PropertyGraphIndex is skipped at init.  For LI-readable stores
+        # (neo4j/falkordb) build a read-only PropertyGraphIndex.from_existing so
+        # the graph modality still participates in hybrid search.
+        graph_retriever = build_cocoindex_read_graph_retriever(system, config, top_k=5)
+    elif _has_cocoindex_surreal_graph:
+        # GRAPH_BACKEND=cocoindex + PG_GRAPH_DB=surrealdb: CocoIndex native schema
+        # uses graph_entity / relation_{pred} tables — build a SurrealQL QA chain
+        # wrapped in an LI-compatible retriever so it participates in fusion.
+        graph_retriever = build_cocoindex_surreal_qa_retriever(system, config, top_k=10)
 
     # ---- Elasticsearch / OpenSearch search retriever ----
     search_retriever = None
     if system.search_store is not None:
-        try:
-            if hasattr(system.search_store, "is_langchain") and system.search_store.is_langchain():
-                # LangChain search backend — wrap raw LC store directly
-                from langchain.vector.li_vector_retriever import LangChainVectorStoreRetriever
-                lc_raw_store = system.search_store.get_store()
-                search_retriever = LangChainVectorStoreRetriever(
-                    lc_store=lc_raw_store,
-                    top_k=10,
-                    store_name=str(config.search_db),
-                )
-                logger.info(f"LangChain {config.search_db} search retriever created")
-            else:
-                search_index = getattr(system, 'search_index', None)
-                if search_index is None:
-                    logger.info("Search index not yet initialised - skipping retriever (will be available after first ingestion)")
+        if _os_hybrid:
+            # OpenSearch hybrid mode: skip the separate search retriever.
+            #   LI: vector_index HYBRID retriever already covers KNN + BM25 in one query.
+            #   LC: LC OpenSearch adapter does KNN-only (no BM25); search index is not
+            #       written to (update_search.py skips it), so skip retrieval too.
+            _vec_is_lc = hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain()
+            logger.info(
+                "OpenSearch hybrid mode [%s]: skipping separate search retriever "
+                "(search index not written to; vector index handles all retrieval)",
+                "LC/KNN" if _vec_is_lc else "LI/KNN+BM25",
+            )
+        else:
+            try:
+                if hasattr(system.search_store, "is_langchain") and system.search_store.is_langchain():
+                    # LangChain search backend — wrap raw LC store directly
+                    from langchain.vector.li_vector_retriever import LangChainVectorStoreRetriever
+                    lc_raw_store = system.search_store.get_store()
+                    search_retriever = LangChainVectorStoreRetriever(
+                        lc_store=lc_raw_store,
+                        top_k=10,
+                        store_name=str(config.search_db),
+                    )
+                    logger.info(f"LangChain {config.search_db} search retriever created")
                 else:
-                    if config.search_db == SearchDBType.OPENSEARCH:
-                        from llama_index.core.vector_stores.types import VectorStoreQueryMode
-                        search_retriever = search_index.as_retriever(
-                            similarity_top_k=10,
-                            vector_store_query_mode=VectorStoreQueryMode.TEXT_SEARCH,
-                        )
-                        logger.info("Created OpenSearch retriever with TEXT_SEARCH mode")
+                    search_index = getattr(system, 'search_index', None)
+                    if search_index is None:
+                        logger.info("Search index not yet initialised - skipping retriever (will be available after first ingestion)")
                     else:
-                        search_retriever = search_index.as_retriever(similarity_top_k=10)
-                        logger.info(f"Created {config.search_db} retriever")
-        except Exception as e:
-            logger.warning(f"Failed to create {config.search_db} retriever: {e} - continuing without it")
+                        if config.search_db == SearchDBType.OPENSEARCH:
+                            from llama_index.core.vector_stores.types import VectorStoreQueryMode
+                            search_retriever = search_index.as_retriever(
+                                similarity_top_k=10,
+                                vector_store_query_mode=VectorStoreQueryMode.TEXT_SEARCH,
+                            )
+                            logger.info("Created OpenSearch retriever with TEXT_SEARCH mode")
+                        else:
+                            search_retriever = search_index.as_retriever(similarity_top_k=10)
+                            logger.info(f"Created {config.search_db} retriever")
+            except Exception as e:
+                logger.warning(f"Failed to create {config.search_db} retriever: {e} - continuing without it")
 
     # ---- Per-retriever logging + synonym expansion ----
     def _wrap(retriever, label, prescore_graph: bool = False):
@@ -603,12 +721,21 @@ def setup_hybrid_retriever(system) -> None:
     # vector: requires LANGCHAIN_PG_VECTOR_SEARCH=true AND LangChain backend — opt-in only.
     _enable_lc_vector = _is_lc and _pg_vector_enabled
     if _pg_vector_enabled and not _is_lc:
-        logger.warning(
-            "LANGCHAIN_PG_VECTOR_SEARCH=true is ignored: LangChain PG backend is not active "
-            "(graph_backend=%s). Entity embeddings are only written by the LangChain ingest path. "
-            "Set LANGCHAIN_PG_VECTOR_SEARCH=false to suppress this warning.",
-            getattr(config, "graph_backend", "llamaindex"),
-        )
+        _graph_backend = (getattr(config, "graph_backend", "llamaindex") or "llamaindex").lower()
+        if _graph_backend == "cocoindex":
+            logger.info(
+                "LANGCHAIN_PG_VECTOR_SEARCH=true ignored: GRAPH_BACKEND=cocoindex uses the "
+                "LlamaIndex PropertyGraphIndex read retriever (VectorContextRetriever), which "
+                "already queries :__Entity__(embedding) via coco_vec_Entity_embedding. "
+                "GraphEntityVectorRetriever is not used. Set LANGCHAIN_PG_VECTOR_SEARCH=false."
+            )
+        else:
+            logger.warning(
+                "LANGCHAIN_PG_VECTOR_SEARCH=true is ignored: LangChain PG backend is not active "
+                "(graph_backend=%s). Entity embeddings are only written by the LangChain ingest path. "
+                "Set LANGCHAIN_PG_VECTOR_SEARCH=false to suppress this warning.",
+                _graph_backend,
+            )
 
     logger.debug(
         "LC graph retriever routing: store=%s is_lc=%s store_has_vector=%s "

@@ -90,6 +90,12 @@ class QdrantVectorAdapter(LangChainVectorAdapter):
             config.get("port", 6333),
         )
 
+    # NOTE: the CocoIndex pre-computed row upsert (raw QdrantClient.upsert with
+    # deterministic point IDs) now lives in the connector layer
+    # (cocoindex_integration.connectors.flexible._vector_writer.write_rows_langchain),
+    # which reaches the raw client via the ``_qdrant_client`` / ``_collection_name``
+    # attributes exposed here.  This keeps the adapter framework-neutral.
+
     def delete(self, ref_doc_id: str) -> None:
         """Delete all points whose payload matches the document ID.
 

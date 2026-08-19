@@ -39,6 +39,27 @@ def _get_loop() -> asyncio.AbstractEventLoop:
         return loop
 
 
+async def warmup_hybrid_retriever(system) -> None:
+    """Prime retrievers after ingest so the first client search is not empty.
+
+    Some backends (Qdrant gRPC, FalkorDB, SurrealDB LC graph) pay a cold-start
+    cost on the first ``aretrieve`` call.  A lightweight warmup query here
+    avoids flaky first-search failures in integration tests and after ingest.
+    """
+    from llama_index.core.schema import QueryBundle
+    from retriever_setup import setup_hybrid_retriever
+
+    if not system.hybrid_retriever:
+        setup_hybrid_retriever(system)
+    if not system.hybrid_retriever:
+        return
+    try:
+        await system.hybrid_retriever.aretrieve(QueryBundle(query_str="warmup"))
+        logger.debug("Hybrid retriever warmup query completed")
+    except Exception as exc:
+        logger.debug("Hybrid retriever warmup failed (non-fatal): %s", exc)
+
+
 def generate_completion_message(config, doc_count: int, skip_graph: bool = False) -> str:
     """Generate dynamic completion message based on enabled features.
 
@@ -49,7 +70,14 @@ def generate_completion_message(config, doc_count: int, skip_graph: bool = False
     """
     has_vector = str(config.vector_db) != "none"
     has_graph = str(config.pg_graph_db) != "none" and config.enable_knowledge_graph and not skip_graph
-    has_search = str(config.search_db) != "none"
+    # OpenSearch hybrid mode: both VECTOR_DB and SEARCH_DB are opensearch.
+    # The search index is never written to; one vector index serves both KNN + BM25.
+    # Show a combined "hybrid search+vector" label instead of two separate entries.
+    _os_hybrid = (
+        str(config.vector_db).lower() == "opensearch"
+        and str(config.search_db).lower() == "opensearch"
+    )
+    has_search = str(config.search_db) != "none" and not _os_hybrid
     has_rdf_graph = (
         str(getattr(config, "rdf_graph_db", "none")).lower() not in ("none", "")
         and config.enable_knowledge_graph
@@ -89,7 +117,9 @@ def generate_completion_message(config, doc_count: int, skip_graph: bool = False
         return db_name_map.get(str(key).lower(), str(key).title())
 
     features = []
-    if has_vector:
+    if _os_hybrid:
+        features.append("OpenSearch hybrid search+vector")
+    elif has_vector:
         features.append(f"{_db_label(config.vector_db)} vector")
     if has_search:
         features.append(f"{_db_label(config.search_db)} search")

@@ -87,9 +87,9 @@ def build_lc_embedding(config: "AppSettings"):
             or os.getenv("GEMINI_API_KEY")
             or (llm_cfg.get("api_key") if provider == LLMProvider.GEMINI else None)
         )
-        # gemini-embedding-2-preview native dim is 3072; truncate to 768 to match our
-        # dimension tables and existing vector collections.
-        _dim = getattr(config, "embedding_dimension", None) or 768
+        # gemini-embedding-2-preview native dim is 3072; truncate to configured dim
+        # (default 768) to match our dimension tables and existing vector collections.
+        _dim = get_lc_embedding_dimension(config)
         return GoogleGenerativeAIEmbeddings(
             model=embedding_model or "models/gemini-embedding-001",
             google_api_key=_google_key,
@@ -120,9 +120,9 @@ def build_lc_embedding(config: "AppSettings"):
             os.environ.setdefault("GOOGLE_CLOUD_PROJECT", _project)
             os.environ.setdefault("GOOGLE_CLOUD_LOCATION", _location)
             os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
-        # gemini-embedding-2-preview native dim is 3072; truncate to 768 to match our
-        # dimension tables and existing vector collections.
-        _dim = getattr(config, "embedding_dimension", None) or 768
+        # gemini-embedding-2-preview native dim is 3072; truncate to configured dim
+        # (default 768) to match our dimension tables and existing vector collections.
+        _dim = get_lc_embedding_dimension(config)
         return GoogleGenerativeAIEmbeddings(
             model=embedding_model or "models/gemini-embedding-001",
             output_dimensionality=int(_dim),
@@ -202,6 +202,27 @@ def build_lc_embedding(config: "AppSettings"):
                 base_url="https://api.fireworks.ai/inference/v1",
             )
 
+    if kind in ("huggingface", "sentence_transformer"):
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings  # noqa: PLC0415
+        except ImportError:
+            try:
+                from langchain_community.embeddings import HuggingFaceEmbeddings  # noqa: PLC0415
+                logger.info(
+                    "build_lc_embedding: langchain_community HuggingFaceEmbeddings used "
+                    "(install langchain-huggingface for the dedicated package)"
+                )
+            except ImportError:
+                raise ImportError(
+                    "EMBEDDING_KIND=huggingface requires langchain-huggingface "
+                    "(or langchain-community) and sentence-transformers. Install with: "
+                    'uv pip install -e ".[huggingface]"  '
+                    "# or: uv pip install langchain-huggingface sentence-transformers"
+                ) from None
+        model_name = embedding_model or "all-MiniLM-L6-v2"
+        logger.info("huggingface LC embedding: model=%s", model_name)
+        return HuggingFaceEmbeddings(model_name=model_name)
+
     if kind in ("openai_like", "litellm"):
         from langchain_openai import OpenAIEmbeddings
         is_litellm = kind == "litellm"
@@ -212,15 +233,19 @@ def build_lc_embedding(config: "AppSettings"):
             # For openai_like, do NOT fall back to litellm_embedding_api_base — that's a different
             # service (LiteLLM proxy). Only use the openai_like-specific config attribute.
             _cfg_api_base = getattr(config, "openai_like_embedding_api_base", None)
+        # Only route through an api_base (proxy) when one is explicitly configured.
+        # For litellm: without api_base, OpenAIEmbeddings/LiteLLM calls the provider
+        # directly via the litellm library — no proxy process needed (Windows-safe).
+        # Set LITELLM_EMBEDDING_API_BASE only when using a LiteLLM proxy server.
         api_base = (
             _cfg_api_base
             or os.getenv("LITELLM_EMBEDDING_API_BASE" if is_litellm else "OPENAI_LIKE_EMBEDDING_API_BASE")
             or os.getenv("LITELLM_API_BASE" if is_litellm else "OPENAI_LIKE_API_BASE")
-            or ("http://localhost:4000/v1" if is_litellm else "http://localhost:8002/v1")
+            or (None if is_litellm else "http://localhost:8002/v1")
         )
         _api_key = (
             os.getenv("LITELLM_API_KEY" if is_litellm else "OPENAI_LIKE_API_KEY")
-            or "local"
+            or ("local" if api_base else None)
         )
         logger.info(
             "[LangChain] embedding [%s]: api_base=%r model=%r",
@@ -245,14 +270,17 @@ def build_lc_embedding(config: "AppSettings"):
         # check_embedding_ctx_length=False: prevents langchain_openai from tokenising the
         # input into integer token IDs before sending — Ollama and most openai-like servers
         # only accept plain string inputs, not integer arrays.
-        return OpenAIEmbeddings(
+        emb_kwargs: dict = dict(
             model=embedding_model or "text-embedding-3-small",
-            api_key=_api_key,
-            base_url=api_base,
             check_embedding_ctx_length=False,
             default_headers=_extra_headers or None,
             model_kwargs=_model_kwargs,
         )
+        if api_base:
+            emb_kwargs["base_url"] = api_base
+        if _api_key:
+            emb_kwargs["api_key"] = _api_key
+        return OpenAIEmbeddings(**emb_kwargs)
 
     logger.warning(
         "build_lc_embedding: no match for kind=%r provider=%r — falling back to OpenAI text-embedding-3-small. "
@@ -276,27 +304,51 @@ _KNOWN_DIMS: dict = {
     "nomic-embed-text": 768,               # Ollama / Fireworks default
     "nomic-ai/nomic-embed-text-v1.5": 768, # Fireworks model ID
     "amazon.titan-embed-text-v2:0": 1024,
+    # sentence-transformers models
+    "all-minilm-l6-v2": 384,              # default for sentence_transformer kind
+    "all-minilm-l12-v2": 384,
+    "all-mpnet-base-v2": 768,
+    "paraphrase-mpnet-base-v2": 768,
+    "bge-small-en-v1.5": 384,
+    "bge-base-en-v1.5": 768,
+    "bge-large-en-v1.5": 1024,
+    "multi-qa-mpnet-base-dot-v1": 768,
 }
 
 
 def get_lc_embedding_dimension(config: "AppSettings") -> int:
     """Return the embedding vector dimension for *config* without an API call.
 
-    Falls back to ``config.embedding_dimension`` if set, then to well-known
-    model dimension table, then to a kind-specific default, then to 1536.
+    Resolution order (mirrors llamaindex/llm/embedding_factory.py):
+    1. ``{KIND}_EMBEDDING_DIMENSION`` env var (e.g. ``GOOGLE_EMBEDDING_DIMENSION``)
+    2. ``config.embedding_dimension`` (generic ``EMBEDDING_DIMENSION`` env var)
+    3. Well-known model name table (``_KNOWN_DIMS``)
+    4. Kind-based default, then 1536
     """
+    kind = (getattr(config, "embedding_kind", None) or "").lower()
+
+    # 1. Per-kind dimension env var (highest priority).
+    if kind:
+        _kind_dim = int(os.getenv(f"{kind.upper()}_EMBEDDING_DIMENSION", "0") or "0")
+        if _kind_dim:
+            return _kind_dim
+
+    # 2. Generic explicit dimension.
     explicit = getattr(config, "embedding_dimension", None)
     if explicit:
         return int(explicit)
+
+    # 3. Well-known model name table.
     model = (getattr(config, "embedding_model", None) or "").lower()
     for name, dim in _KNOWN_DIMS.items():
         if name in model:
             return dim
-    # Kind-based fallbacks for when no model name is configured yet
-    kind = (getattr(config, "embedding_kind", None) or "").lower()
+
+    # 4. Kind-based fallback.
     _KIND_DEFAULTS = {
         "google": 768, "vertex": 768, "fireworks": 768,
         "ollama": 768, "bedrock": 1024,
+        "huggingface": 384, "sentence_transformer": 384,   # all-MiniLM-L6-v2 default
     }
     if kind in _KIND_DEFAULTS:
         return _KIND_DEFAULTS[kind]

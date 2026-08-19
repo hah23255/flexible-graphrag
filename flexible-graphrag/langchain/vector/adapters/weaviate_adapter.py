@@ -158,16 +158,13 @@ class WeaviateVectorAdapter(LangChainVectorAdapter):
         text_key = config.get("text_key", "content")
 
         if _WEAVIATE_PACKAGE == "langchain_weaviate":
-            # Prefer sync client when inside a running event loop (FastAPI) so
-            # that add_documents (called via run_in_executor) works without
-            # nested asyncio issues.  Fall back to async client otherwise.
-            try:
-                asyncio.get_running_loop()
-                client = _build_weaviate_client_sync(config)
-                logger.info("Weaviate: using sync client (event loop detected)")
-            except RuntimeError:
-                client = _build_weaviate_client_async(config)
-                logger.info("Weaviate: using async client (no event loop)")
+            # langchain_weaviate expects a sync WeaviateClient.  An async client
+            # (built when FlexibleVector constructs the adapter in to_thread with
+            # no running loop) breaks collection setup with
+            # "'coroutine' object has no attribute 'multi_tenancy_config'".
+            # Always use the sync client.
+            client = _build_weaviate_client_sync(config)
+            logger.info("Weaviate: using sync client (langchain_weaviate)")
 
             store = WeaviateVectorStore(
                 client=client,

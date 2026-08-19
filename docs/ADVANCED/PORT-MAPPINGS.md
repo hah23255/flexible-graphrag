@@ -10,7 +10,8 @@ The following port conflicts were identified and resolved for new vector databas
 |-------------------|---------------------|--------------|-------------|------------|
 | 8000 | Backend API | **8001** | Chroma | Moved to 800x range for consistency |
 | 3000 | Vue Frontend | **3003** | Milvus Attu | Avoid conflict with Vue UI |
-| 8080 | Alfresco Proxy | **8081** | Weaviate | Avoid conflict with Alfresco Traefik proxy |
+| 8080 | Alfresco Proxy | **8086** | Weaviate | Moved off 8080 (Alfresco Traefik), then off 8081 (Nuxeo) |
+| 8080 | Alfresco Proxy | **8081** | Nuxeo | Nuxeo's own deployment default; kept so its docs match |
 | 5432 | Alfresco PostgreSQL | **5433** | PostgreSQL+pgvector | Avoid conflict with Alfresco database |
 | 7001 | - | **7001** | NebulaGraph Studio | Default studio dashboard port |
 
@@ -24,8 +25,8 @@ The following port conflicts were identified and resolved for new vector databas
 | **vLLM** | **8002** | **OpenAI-compatible inference server** | **http://localhost:8002/v1** |
 | **LiteLLM Proxy** | **4000** | **OpenAI-compatible proxy (100+ providers)** | **http://localhost:4000** |
 | Vue Frontend | 3000 | Vue.js UI | http://localhost:3000 |
-| React Frontend | 4200 | React UI | http://localhost:4200 |
-| Angular Frontend | 5173 | Angular UI | http://localhost:5173 |
+| Angular Frontend | 4200 | Angular UI | http://localhost:4200 |
+| React Frontend | 5174 | React UI | http://localhost:5174 |
 | Nginx Proxy | 8070 | Reverse proxy for all UIs | http://localhost:8070 |
 
 ### Observability Services
@@ -60,7 +61,7 @@ The following port conflicts were identified and resolved for new vector databas
 | Qdrant | 6333, 6334 | Vector database | http://localhost:6333/dashboard |
 | **Chroma** | **8001** | Vector database | http://localhost:8001 |
 | **Milvus** | **19530, 3003, 9000, 9001** | Vector database + Attu + MinIO | http://localhost:3003 |
-| **Weaviate** | **8081** | Vector search engine | http://localhost:8081/console |
+| **Weaviate** | **8086** | Vector search engine | http://localhost:8086/console |
 | **PostgreSQL+pgvector** | **5433, 5050** | Vector database + pgAdmin | http://localhost:5050 |
 
 ### Search Databases
@@ -97,6 +98,28 @@ The following port conflicts were identified and resolved for new vector databas
 - **Control Center**: http://localhost:8080/control-center or http://localhost:8080/admin
 - **Traefik Dashboard**: http://localhost:8888
 
+### Content Management (Nuxeo)
+
+Nuxeo runs from its **own** compose stack (`nuxeo-deployment/`), not from
+`docker/docker-compose.yaml` — but its ports share the host with this project's,
+so they are listed here.
+
+| **Service** | **Port(s)** | **Purpose** | **Dashboard URL** |
+|-------------|-------------|-------------|-------------------|
+| **Nuxeo Repository** | **8081** | REST API + Web UI | http://localhost:8081/nuxeo |
+| **Nuxeo Kafka** | **9092** | Audit stream (drives change detection) | - |
+| **Nuxeo Kafka UI** | **8092** | Topic browser | http://localhost:8092 |
+| **Nuxeo PostgreSQL** | *(internal)* | Repository database | - |
+
+**8081 is Nuxeo's own deployment default**, which is why Weaviate moved to 8086
+rather than Nuxeo moving: keeping 8081 means `nuxeo-deployment`'s `.env`, the
+Nuxeo documentation and `docs/DATA-SOURCES/README-nuxeo.md` all agree without
+per-machine edits.
+
+Set the port in `nuxeo-deployment/.env` (`NUXEO_HTTP_PORT`, `NUXEO_URL`,
+`NUXEO_API_URL`) and match it in `flexible-graphrag/.env` (`NUXEO_URL`) if you
+do change it.
+
 ### Cloud/Managed Services
 | **Service** | **Port(s)** | **Type** | **Dashboard URL** |
 |-------------|-------------|----------|-------------------|
@@ -120,7 +143,7 @@ The following ports are currently available for future services:
 - **5051-5431**: Database services
 - **6000-6332, 6335-6378**: Specialized services
 - **7003-7473, 7475-7686, 7690-7999**: Graph services (7003 = Ladybug Explorer; 7689 = ArcadeDB Bolt)
-- **8003-8069, 8071-8079, 8082, 8084-8089, 8091-8159, 8162-8612, 8614-8615, 8617-8999**: Application services (8008 = Docs dev server)
+- **8003-8069, 8071-8079, 8082, 8084, 8087-8089, 8091-8159, 8162-8612, 8614-8615, 8617-8999**: Application services (8008 = Docs dev server)
 - **9002-9199, 9202-9300, 9302-9999**: Search and storage services
 
 **Note**: Ports 8613 and 8616 are now reserved for Alfresco ActiveMQ on Windows systems.
@@ -140,7 +163,7 @@ MILVUS_PORT=19530
 ATTU_URL=http://localhost:3003
 
 # Weaviate  
-WEAVIATE_URL=http://localhost:8081
+WEAVIATE_URL=http://localhost:8086
 
 # PostgreSQL+pgvector
 POSTGRES_HOST=localhost
@@ -155,7 +178,7 @@ When including vector database services, use the updated configurations:
 include:
   - docker/includes/chroma.yaml      # Port 8001
   - docker/includes/milvus.yaml      # Ports 19530, 3003, 9000, 9001
-  - docker/includes/weaviate.yaml    # Port 8081
+  - docker/includes/weaviate.yaml    # Port 8086
   - docker/includes/postgres-pgvector.yaml  # Ports 5433, 5050
 ```
 

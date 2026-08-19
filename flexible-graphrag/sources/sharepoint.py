@@ -36,6 +36,44 @@ class SharePointSource(BaseDataSource):
             logger.error(f"Failed to import SharePointReader: {e}")
             raise ImportError("Please install llama-index-readers-microsoft-sharepoint: pip install llama-index-readers-microsoft-sharepoint")
     
+    async def _resolve_site_id(self, graph_client) -> Optional[str]:
+        """Resolve ``site_name`` to Graph ``site_id`` when only the name was configured."""
+        if self.site_id:
+            return self.site_id
+        if not self.site_name:
+            return None
+
+        logger.info("Resolving site_name '%s' to site_id...", self.site_name)
+        try:
+            sites = await graph_client.sites.get()
+            if sites and sites.value:
+                for site in sites.value:
+                    if site.name and site.name.lower() == self.site_name.lower():
+                        self.site_id = site.id
+                        logger.info(
+                            "Resolved site_name '%s' to site_id: %s",
+                            self.site_name, self.site_id,
+                        )
+                        return self.site_id
+
+            # Fallback: path-based lookup (same pattern as get_documents_with_progress)
+            site = await graph_client.sites.by_site_id(
+                f"root:/sites/{self.site_name}"
+            ).get()
+            if site and site.id:
+                self.site_id = site.id
+                logger.info(
+                    "Resolved site_name '%s' via path to site_id: %s",
+                    self.site_name, self.site_id,
+                )
+                return self.site_id
+
+            logger.error("Could not find SharePoint site with name: %s", self.site_name)
+            return None
+        except Exception as e:
+            logger.error("Error resolving site_name to site_id: %s", e)
+            return None
+
     async def _download_file_by_id(self, file_id: str) -> tuple[Optional[bytes], Optional[dict]]:
         """
         Download a single file from SharePoint by its file ID using Microsoft Graph API.
@@ -67,8 +105,9 @@ class SharePointSource(BaseDataSource):
             # Download file content
             # For SharePoint: sites/{site-id}/drive/items/{item-id}/content
             if not self.site_id:
-                logger.error("site_id is required to download files by ID from SharePoint")
-                return None, None
+                if not await self._resolve_site_id(graph_client):
+                    logger.error("site_id is required to download files by ID from SharePoint")
+                    return None, None
                 
             # Get the drive first
             drive = await graph_client.sites.by_site_id(self.site_id).drive.get()
@@ -107,6 +146,28 @@ class SharePointSource(BaseDataSource):
             return None, None
     
     
+    def read_file_bytes(self, file_id: str) -> bytes:
+        """
+        Read raw bytes of a single SharePoint file by drive-item id, reusing the
+        existing ``_download_file_by_id`` Graph helper (NO new SDK code).
+        Accepts a raw id or a ``sharepoint://<id>`` URI.
+        """
+        import asyncio
+
+        async def _run() -> bytes:
+            content, _meta = await self._download_file_by_id(file_id)
+            return content or b""
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(lambda: asyncio.run(_run())).result()
+        return asyncio.run(_run())
+
     def validate_config(self) -> bool:
         """Validate the SharePoint source configuration."""
         if not self.client_id:

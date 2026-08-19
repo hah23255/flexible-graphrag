@@ -201,8 +201,17 @@ POST /api/cancel-processing/abc123  →  cancel if needed
 
 ---
 
+## CocoIndex endpoints
+
+When `PIPELINE_BACKEND=cocoindex`, additional endpoints (`/api/cocoindex/status`,
+`/api/cocoindex/sync-now`, `/api/cocoindex/config`) are available. See
+[CocoIndex Developer Guide — REST API](DEVELOPER-COCOINDEX.md#rest-api-fastapi-server-only).
+
+---
+
 ## See Also
 
 - [Architecture](../ADVANCED/ARCHITECTURE.md) — detailed API workflow and data flow diagrams
 - [MCP Server](../MCP/MCP-TOOLS.md) — higher-level tools built on top of these endpoints
 - [RDF Store User Guide](../DATABASES/RDF/RDF-STORE-USER-GUIDE.md) — RDF/SPARQL endpoint details
+- [CocoIndex Developer Guide](DEVELOPER-COCOINDEX.md) — CocoIndex CLI vs FastAPI, custom pipelines

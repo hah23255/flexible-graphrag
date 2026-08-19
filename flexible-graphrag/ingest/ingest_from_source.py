@@ -155,9 +155,20 @@ async def ingest_source_documents(
         config_id: Optional stable config_id for incremental sync (assigns stable doc_ids)
     """
     from retriever_setup import setup_hybrid_retriever
+    from ingest._helpers import warmup_hybrid_retriever
 
     logger.info(f"Processing {len(documents)} documents directly...")
     start_time = time.time()
+
+    def _update_progress(message: str, progress: int, current_phase: str = "processing"):
+        if status_callback:
+            status_callback(
+                processing_id=processing_id,
+                status="processing",
+                message=message,
+                progress=progress,
+                current_phase=current_phase,
+            )
 
     if config_id:
         _assign_stable_doc_ids(documents, config_id)
@@ -173,6 +184,7 @@ async def ingest_source_documents(
         raise RuntimeError("Processing cancelled by user")
 
     # Step 1: Chunk + embed
+    _update_progress("Splitting and embedding chunks…", 45, current_phase="chunking")
     loop = _get_loop()
     nodes, chunk_duration = await run_chunk_pipeline(system, documents, loop)
 
@@ -180,37 +192,47 @@ async def ingest_source_documents(
         raise RuntimeError("Processing cancelled by user")
 
     # Step 2: Vector index
+    _update_progress("Building vector index…", 52, current_phase="indexing")
     vector_duration = await update_vector(system, nodes, loop)
 
     if _check_cancellation(processing_id):
         raise RuntimeError("Processing cancelled by user")
 
     # Step 3: Search index
+    _update_progress("Building search index…", 58, current_phase="search_indexing")
     search_duration = await update_search(system, nodes, loop)
 
     if _check_cancellation(processing_id):
         raise RuntimeError("Processing cancelled by user")
 
     # Step 4: PG graph
+    _update_progress("Extracting knowledge graph…", 70, current_phase="kg_extraction")
     nodes, nodes_kg_extracted, kg_duration, graph_duration, _, _ = await update_pg_graph(
         system, nodes, documents, loop, skip_graph=skip_graph
     )
 
     # Step 4b: RDF graph
-    rdf_kg_duration, rdf_store_duration = await update_rdf_graph(system, nodes, nodes_kg_extracted=nodes_kg_extracted, skip_graph=skip_graph)
+    if not skip_graph and str(getattr(system.config, "rdf_graph_db", "none")) != "none":
+        _update_progress("Writing RDF graph…", 82, current_phase="rdf_indexing")
+    rdf_kg_duration, rdf_store_duration = await update_rdf_graph(
+        system, nodes, nodes_kg_extracted=nodes_kg_extracted, skip_graph=skip_graph
+    )
 
     if _check_cancellation(processing_id):
         raise RuntimeError("Processing cancelled by user")
 
+    _update_progress("Setting up retriever…", 95, current_phase="indexing")
     setup_hybrid_retriever(system)
+    await warmup_hybrid_retriever(system)
 
     total_duration = time.time() - start_time
-    logger.info(
-        f"Direct document processing completed in {total_duration:.2f}s — "
-        f"Chunk: {chunk_duration:.2f}s, Vector: {vector_duration:.2f}s, "
-        f"Search: {search_duration:.2f}s, KG: {kg_duration + rdf_kg_duration:.2f}s, "
+    timing_summary = (
+        f"{total_duration:.2f}s — Chunk: {chunk_duration:.2f}s, "
+        f"Vector: {vector_duration:.2f}s, Search: {search_duration:.2f}s, "
+        f"KG: {kg_duration + rdf_kg_duration:.2f}s, "
         f"Graph: {graph_duration:.2f}s, RDF: {rdf_store_duration:.2f}s"
     )
+    logger.info(f"Direct document processing completed in {timing_summary}")
 
     if OBSERVABILITY_AVAILABLE and get_rag_metrics:
         try:
@@ -231,7 +253,7 @@ async def ingest_source_documents(
 
     if status_callback:
         from backend import PROCESSING_STATUS
-        data_source = PROCESSING_STATUS.get(processing_id, {}).get("data_source", "")
+        data_source = PROCESSING_STATUS.get(processing_id, {}).get("data_source") or "filesystem"
         file_count = PROCESSING_STATUS.get(processing_id, {}).get("file_count")
         chunk_count = PROCESSING_STATUS.get(processing_id, {}).get("chunk_count")
         logger.info(f"Completion (_direct) — data_source={data_source!r}, file_count={file_count}")
@@ -243,9 +265,11 @@ async def ingest_source_documents(
         else:
             doc_count = len(documents)
 
+        ui_message = generate_completion_message(system.config, doc_count, skip_graph=skip_graph)
+        logger.info(f"Ingestion complete: {ui_message} ({timing_summary})")
         status_callback(
             processing_id=processing_id,
             status="completed",
-            message=generate_completion_message(system.config, doc_count, skip_graph=skip_graph),
+            message=ui_message,
             progress=100,
         )

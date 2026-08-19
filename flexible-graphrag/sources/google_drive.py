@@ -10,6 +10,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,24 @@ class GoogleDriveSource(BaseDataSource):
         # Fallback to file-based credentials
         self.credentials_path = config.get("credentials_path", "")
         self.token_path = config.get("token_path", "")
-        
+
+        # If credentials_path points to a service account JSON, load it eagerly.
+        # GoogleDriveReader's `credentials_path` parameter only accepts OAuth2
+        # client_secrets files; passing a service account JSON raises
+        # "Client secrets must be for a web or installed app."
+        # Loading and passing the dict via `service_account_key` is the correct path.
+        if not self.service_account_key and self.credentials_path:
+            try:
+                import json as _json
+                with open(self.credentials_path) as _f:
+                    _raw = _json.load(_f)
+                if _raw.get("type") == "service_account":
+                    self.service_account_key = _raw
+                    self.credentials_path = ""
+                    logger.info("credentials_path is a service account key — using service_account_key auth")
+            except Exception as _e:
+                logger.debug("Could not pre-inspect credentials_path: %s", _e)
+
         logger.info("GoogleDriveSource initialized successfully")
     
     def validate_config(self) -> bool:
@@ -104,6 +122,37 @@ class GoogleDriveSource(BaseDataSource):
         
         return reader, passthrough
     
+    def read_file_bytes(self, file_id: str) -> bytes:
+        """
+        Read raw bytes of a single Google Drive file by file_id, reusing the
+        source's cached credentials and the LlamaIndex ``GoogleDriveReader``
+        restricted to one file.  NO new SDK code.
+
+        ``GoogleDriveReader`` downloads to a temp dir and deletes it after
+        ``load_data``; ``BytesCaptureExtractor`` captures the bytes in-line.
+        """
+        from llama_index.readers.google import GoogleDriveReader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+        reader_kwargs: Dict[str, Any] = {"file_extractor": file_extractor}
+        if self.service_account_key:
+            reader_kwargs["service_account_key"] = self.service_account_key
+        elif self.credentials_path:
+            reader_kwargs["credentials_path"] = self.credentials_path
+        if self.token_path:
+            reader_kwargs["token_path"] = self.token_path
+
+        reader = GoogleDriveReader(**reader_kwargs)
+        docs = reader.load_data(file_ids=[file_id])
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("GoogleDriveSource.read_file_bytes: no bytes captured for %s", file_id)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """Load files via GoogleDriveReader (with passthrough), then process with DocumentProcessor"""
         from process.document_processor import DocumentProcessor, get_parser_type_from_env

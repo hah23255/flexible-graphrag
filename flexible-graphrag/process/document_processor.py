@@ -18,6 +18,18 @@ def get_parser_type_from_env() -> str:
         return 'docling'
     return parser
 
+
+_PARSER_DISPLAY_NAMES = {
+    "docling": "Docling",
+    "llamaparse": "LlamaParse",
+    "liteparse": "LiteParse",
+}
+
+
+def format_parser_display_name(parser_type: str) -> str:
+    """Mixed-case display label for framework config logging."""
+    return _PARSER_DISPLAY_NAMES.get(str(parser_type).lower(), str(parser_type))
+
 class DocumentProcessor:
     """Handles document conversion using Docling or LlamaParse before LlamaIndex processing"""
     

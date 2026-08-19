@@ -3,6 +3,12 @@ REM ============================================================
 REM  Overnight integration test suite for flexible-graphrag
 REM  Run from repo root:  tests\integration\run_overnight.bat
 REM  Results logged to:   tests\integration\logs\overnight-<date>.log
+REM
+REM  Note on --backends: this is a run_matrix.py convenience shorthand
+REM  that sets GRAPH_BACKEND + VECTOR_BACKEND + SEARCH_BACKEND at once.
+REM  It is NOT a real flexible-graphrag config key.  Use the explicit
+REM  --graph-backend / --vector-backend / --search-backend flags when
+REM  you need to set only one dimension independently.
 REM ============================================================
 
 cd /d "%~dp0..\.."
@@ -77,21 +83,22 @@ echo [%TIME%] 5a. All PG stores - LI backend - graph query tests >> "%LOG%"
 %MATRIX% --pg neo4j,arcadedb,falkordb,memgraph,nebula,ladybug --vector none --search none --rdf none --backends llamaindex --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
 
 REM ============================================================
-REM  5b. PG stores - LI backend - cloud (neptune, neptune_analytics, spanner)
+REM  5b. PG stores - LI backend - cloud (TEMP commented out — restore when available)
 REM ============================================================
-echo [%TIME%] 5b. PG stores - LI backend (cloud) - general tests >> "%LOG%"
-%MATRIX% --pg neptune,neptune_analytics,spanner --vector qdrant --backends llamaindex --llm openai >> "%LOG%" 2>&1
-echo [%TIME%] 5c. PG stores - LI backend (cloud) - graph query tests >> "%LOG%"
-%MATRIX% --pg neptune,neptune_analytics,spanner --vector none --search none --rdf none --backends llamaindex --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
+REM echo [%TIME%] 5b. PG stores - LI backend (cloud) - general tests >> "%LOG%"
+REM %MATRIX% --pg neptune,neptune_analytics,spanner --vector qdrant --backends llamaindex --llm openai >> "%LOG%" 2>&1
+REM echo [%TIME%] 5c. PG stores - LI backend (cloud) - graph query tests >> "%LOG%"
+REM %MATRIX% --pg neptune,neptune_analytics,spanner --vector none --search none --rdf none --backends llamaindex --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
 
 REM ============================================================
-REM  6. All PG stores - LangChain backend
-REM     DONE: 14/14 PASS (local + neptune + neptune_analytics)
+REM  6. All PG stores - LangChain backend (local only; cloud commented below)
 REM ============================================================
 echo [%TIME%] 6. All PG stores - LC backend - general tests >> "%LOG%"
-%MATRIX% --pg neo4j,arcadedb,falkordb,memgraph,nebula,tigergraph,arangodb,apache_age,hugegraph,surrealdb,cosmos_gremlin,ladybug,neptune,neptune_analytics --vector qdrant --backends langchain --llm openai >> "%LOG%" 2>&1
+%MATRIX% --pg neo4j,arcadedb,falkordb,memgraph,nebula,tigergraph,arangodb,apache_age,hugegraph,surrealdb,cosmos_gremlin,ladybug --vector qdrant --backends langchain --llm openai >> "%LOG%" 2>&1
 echo [%TIME%] 6a. All PG stores - LC backend - graph query tests >> "%LOG%"
-%MATRIX% --pg neo4j,arcadedb,falkordb,memgraph,nebula,tigergraph,arangodb,apache_age,hugegraph,surrealdb,cosmos_gremlin,ladybug,neptune,neptune_analytics --vector none --search none --rdf none --backends langchain --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
+%MATRIX% --pg neo4j,arcadedb,falkordb,memgraph,nebula,tigergraph,arangodb,apache_age,hugegraph,surrealdb,cosmos_gremlin,ladybug --vector none --search none --rdf none --backends langchain --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
+REM Restore cloud LC PG when available:
+REM %MATRIX% --pg ...,neptune,neptune_analytics --vector qdrant --backends langchain --llm openai >> "%LOG%" 2>&1
 
 REM ============================================================
 REM  7. All RDF stores - local (fuseki, graphdb, oxigraph)
@@ -104,14 +111,13 @@ echo [%TIME%] 7b. RDF stores (local) - graph/query SPARQL fallback >> "%LOG%"
 %MATRIX% --rdf fuseki,graphdb,oxigraph --pg none --vector none --search none --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
 
 REM ============================================================
-REM  7c. RDF stores - Neptune (cloud)
-REM      DONE: 1/1 PASS
+REM  7c. RDF stores - Neptune (cloud) — TEMP commented out
 REM ============================================================
-echo [%TIME%] 7c. RDF stores - Neptune RDF - general tests >> "%LOG%"
-%MATRIX% --rdf neptune_rdf --vector qdrant --backends langchain --fusion langchain --llm openai >> "%LOG%" 2>&1
-echo [%TIME%] 7d. RDF stores - Neptune RDF - RDF-specific + graph query tests >> "%LOG%"
-%MATRIX% --rdf neptune_rdf --pg none --vector none --search none --test-path tests/integration/test_rdf.py >> "%LOG%" 2>&1
-%MATRIX% --rdf neptune_rdf --pg none --vector none --search none --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
+REM echo [%TIME%] 7c. RDF stores - Neptune RDF - general tests >> "%LOG%"
+REM %MATRIX% --rdf neptune_rdf --vector qdrant --backends langchain --fusion langchain --llm openai >> "%LOG%" 2>&1
+REM echo [%TIME%] 7d. RDF stores - Neptune RDF - RDF-specific + graph query tests >> "%LOG%"
+REM %MATRIX% --rdf neptune_rdf --pg none --vector none --search none --test-path tests/integration/test_rdf.py >> "%LOG%" 2>&1
+REM %MATRIX% --rdf neptune_rdf --pg none --vector none --search none --test-path tests/integration/test_graph_query.py >> "%LOG%" 2>&1
 
 REM ============================================================
 REM  8. All search DBs - LlamaIndex backend
@@ -189,22 +195,26 @@ REM ============================================================
 REM  15c. Incremental updates - all 4 RDF stores (local + Neptune RDF)
 REM      Verifies triples deleted on file remove
 REM ============================================================
-echo [%TIME%] 15c. Incremental - all RDF stores (fuseki, graphdb, oxigraph, neptune_rdf) >> "%LOG%"
-%MATRIX% --rdf fuseki,graphdb,oxigraph,neptune_rdf --pg none --vector qdrant --search none --backends llamaindex --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
+echo [%TIME%] 15c. Incremental - all local RDF stores (fuseki, graphdb, oxigraph) >> "%LOG%"
+%MATRIX% --rdf fuseki,graphdb,oxigraph --pg none --vector qdrant --search none --backends llamaindex --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
+REM Restore Neptune RDF when available:
+REM %MATRIX% --rdf fuseki,graphdb,oxigraph,neptune_rdf --pg none --vector qdrant --search none --backends llamaindex --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
 
 REM ============================================================
-REM  15d. Incremental updates - cloud PG stores (LI backend)
+REM  15d. Incremental updates - cloud PG stores (LI) — TEMP commented out
 REM       neptune, neptune_analytics, spanner
 REM ============================================================
-echo [%TIME%] 15d. Incremental - cloud PG stores - LI backend >> "%LOG%"
-%MATRIX% --pg neptune,neptune_analytics,spanner --vector qdrant --search none --backends llamaindex --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
+REM echo [%TIME%] 15d. Incremental - cloud PG stores - LI backend >> "%LOG%"
+REM %MATRIX% --pg neptune,neptune_analytics,spanner --vector qdrant --search none --backends llamaindex --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
 
 REM ============================================================
-REM  15e. Incremental updates - cloud PG stores (LC backend)
-REM       neptune, neptune_analytics, cosmos_gremlin (Azure)
+REM  15e. Incremental updates - cloud PG stores (LC)
+REM       cosmos_gremlin kept (local Gremlin server); neptunes commented out
 REM ============================================================
-echo [%TIME%] 15e. Incremental - cloud PG stores - LC backend >> "%LOG%"
-%MATRIX% --pg neptune,neptune_analytics,cosmos_gremlin --vector qdrant --search none --backends langchain --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
+echo [%TIME%] 15e. Incremental - cloud/local PG stores - LC backend (cosmos_gremlin) >> "%LOG%"
+%MATRIX% --pg cosmos_gremlin --vector qdrant --search none --backends langchain --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
+REM Restore neptunes when available:
+REM %MATRIX% --pg neptune,neptune_analytics,cosmos_gremlin --vector qdrant --search none --backends langchain --incremental --inc-ops ingest,add,modify,delete --llm openai >> "%LOG%" 2>&1
 
 REM  Single cleanup after all incremental sections — each run's --clean already
 REM  wipes stores before starting; this just leaves postgres tables tidy at the end.
@@ -246,4 +256,38 @@ echo [%TIME%] 18b. Folder ingest - LlamaParse - LC backend >> "%LOG%"
 
 echo. >> "%LOG%"
 echo [%TIME%] Overnight run finished >> "%LOG%"
+
+REM ============================================================
+REM  Summary + exit code.
+REM  Derived from the log rather than from ERRORLEVEL after each of the ~36
+REM  matrix calls above: those were never checked, so this script always exited
+REM  0 and run_overnight_all.bat recorded the phase as PASS even when individual
+REM  jobs had failed (two did on 2026-08-13 and went unnoticed).  run_matrix.py
+REM  prints one "[matrix] PASS/FAIL <label>" line per job, so counting them here
+REM  cannot drift out of sync with the call sites.
+REM ============================================================
+set "SUMTMP=%TEMP%\overnight-fails-%RANDOM%.txt"
+findstr /c:"[matrix] FAIL" "%LOG%" > "%SUMTMP%" 2>nul
+set OVN_FAIL=0
+for /f %%c in ('type "%SUMTMP%" ^| find /c /v ""') do set OVN_FAIL=%%c
+set OVN_PASS=0
+for /f %%c in ('findstr /c:"[matrix] PASS" "%LOG%" ^| find /c /v ""') do set OVN_PASS=%%c
+
+echo. >> "%LOG%"
+echo ============================================================ >> "%LOG%"
+echo  OVERNIGHT SUMMARY >> "%LOG%"
+echo    Jobs passed: %OVN_PASS% >> "%LOG%"
+echo    Jobs failed: %OVN_FAIL% >> "%LOG%"
+if %OVN_FAIL% GTR 0 (
+    echo. >> "%LOG%"
+    echo  Failed jobs: >> "%LOG%"
+    type "%SUMTMP%" >> "%LOG%"
+)
+echo ============================================================ >> "%LOG%"
+del "%SUMTMP%" 2>nul
+
+echo.
+echo Overnight run: %OVN_PASS% job(s) passed, %OVN_FAIL% failed.
 echo Done. Results in %LOG%
+if %OVN_FAIL% GTR 0 exit /b 1
+exit /b 0

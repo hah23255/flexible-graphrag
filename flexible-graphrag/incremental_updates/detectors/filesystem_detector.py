@@ -155,7 +155,10 @@ class FilesystemDetector(ChangeDetector):
     - Recursive directory monitoring
     - Quiet period to ignore own changes
     - Retry logic for file locks (Windows)
-    - **NEW**: Uses backend for ADD/MODIFY events (full DocumentProcessor pipeline)
+    - **Incremental mode** (``backend`` injected by orchestrator): ADD/MODIFY call
+      ``_process_via_backend`` directly; DELETE events go to the engine.
+    - **Event-only mode** (``backend is None``, e.g. CocoIndex ``FlexibleMapView``):
+      yield CREATE/UPDATE/DELETE events for the CocoIndex pipeline to process.
     
     Configuration:
         paths: List of file or directory paths to monitor
@@ -181,6 +184,86 @@ class FilesystemDetector(ChangeDetector):
         
         # Track recent events to deduplicate CREATE+UPDATE bursts
         self.recent_events: dict = {}  # path -> (event_type, timestamp)
+
+    @property
+    def _event_only(self) -> bool:
+        """When True, yield change events for CocoIndex instead of backend processing."""
+        return self.backend is None
+
+    async def _emit_create_or_update(
+        self,
+        event: ChangeEvent,
+        full_path: str,
+        is_new: bool,
+    ) -> AsyncGenerator[ChangeEvent, None]:
+        """Dispatch CREATE/UPDATE — backend pipeline or event-only (CocoIndex)."""
+        path_label = event.metadata.path
+
+        if self._event_only:
+            _meta = FileMetadata(
+                source_type="filesystem",
+                path=full_path,
+                ordinal=event.metadata.ordinal,
+                size_bytes=event.metadata.size_bytes,
+                extra=event.metadata.extra or {},
+            )
+            if is_new:
+                # New file — simple CREATE so CocoIndex ingests it fresh.
+                self.known_file_paths.add(full_path)
+                logger.info(
+                    "EVENT: create for %s (event-only — CocoIndex pipeline)",
+                    path_label,
+                )
+                yield ChangeEvent(metadata=_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
+            else:
+                # Modified file — emit DELETE then CREATE, mirroring the backend
+                # modify path (delete + add).  Most LI/LC stores do not support
+                # true in-place updates for chunked documents; CocoIndex's memo
+                # comparison is also unreliable without a real modified_time
+                # (the filesystem detector does not set modified_timestamp).
+                logger.info(
+                    "EVENT: modify for %s (event-only — CocoIndex pipeline): DELETE then CREATE",
+                    path_label,
+                )
+                yield ChangeEvent(metadata=_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                yield ChangeEvent(metadata=_meta, change_type=ChangeType.CREATE, timestamp=event.timestamp)
+            return
+
+        if is_new:
+            logger.info(f"EVENT: CREATE detected for {path_label}")
+            self.known_file_paths.add(full_path)
+            try:
+                await self._process_via_backend(full_path, path_label)
+                logger.info(f"SUCCESS: Processed {path_label} via backend pipeline")
+            except Exception as e:
+                logger.error(f"ERROR: Failed to process {path_label} via backend: {e}")
+            return
+
+        # Known file MODIFY — incremental path: DELETE + callback ADD
+        logger.info(f"EVENT: MODIFY detected for {path_label}")
+        logger.info("MODIFY: Emitting DELETE event with callback")
+
+        async def add_callback():
+            logger.info(f"MODIFY: DELETE completed, now processing ADD for {path_label}")
+            try:
+                await self._process_via_backend(full_path, path_label)
+                logger.info(f"SUCCESS: MODIFY completed for {path_label}")
+            except Exception as e:
+                logger.error(f"ERROR: Failed to process ADD for {path_label}: {e}")
+
+        delete_metadata = FileMetadata(
+            source_type="filesystem",
+            path=full_path,
+            ordinal=event.metadata.ordinal,
+            extra={},
+        )
+        yield ChangeEvent(
+            metadata=delete_metadata,
+            change_type=ChangeType.DELETE,
+            timestamp=event.timestamp,
+            is_modify_delete=True,
+            modify_callback=add_callback,
+        )
     
     async def start(self):
         """Start filesystem monitoring"""
@@ -201,14 +284,14 @@ class FilesystemDetector(ChangeDetector):
                 watch_dir = path.parent
                 handler = FilesystemEventHandler(watch_dir, self.event_queue, watch_file=path, detector=self)
                 self.observer.schedule(handler, str(watch_dir), recursive=False)
-                logger.info(f"Watching file: {path.name} (monitoring directory: {watch_dir})")
+                logger.debug(f"Watching file: {path.name} (monitoring directory: {watch_dir})")
             else:
                 handler = FilesystemEventHandler(path, self.event_queue, detector=self)
                 self.observer.schedule(handler, str(path), recursive=True)
-                logger.info(f"Watching directory: {path} (recursive)")
+                logger.debug(f"Watching directory: {path} (recursive)")
         
         self.observer.start()
-        logger.info(f"Filesystem detector started for {len(self.paths)} path(s)")
+        logger.debug(f"Filesystem detector started for {len(self.paths)} path(s)")
     
     async def stop(self):
         """Stop filesystem monitoring"""
@@ -216,17 +299,17 @@ class FilesystemDetector(ChangeDetector):
         if self.observer:
             self.observer.stop()
             self.observer.join()
-        logger.info("Filesystem detector stopped")
+        logger.debug("Filesystem detector stopped")
     
     async def _populate_known_files(self):
         """Populate known_file_paths set with all currently existing files (normalized paths)."""
         try:
-            logger.info("POPULATE: Starting to populate known_file_paths...")
+            logger.debug("POPULATE: Starting to populate known_file_paths...")
             all_files = await self.list_all_files()
             for file_meta in all_files:
                 # list_all_files already returns normalized paths
                 self.known_file_paths.add(normalize_filesystem_path(file_meta.path))
-            logger.info(f"POPULATE: Populated known_file_paths with {len(self.known_file_paths)} existing files")
+            logger.debug(f"POPULATE: Populated known_file_paths with {len(self.known_file_paths)} existing files")
             
         except Exception as e:
             logger.error(f"Error populating known_file_paths: {e}")
@@ -317,88 +400,24 @@ class FilesystemDetector(ChangeDetector):
                     # Handle CREATE events - check known_file_paths
                     elif event.change_type == ChangeType.CREATE:
                         is_new = full_path not in self.known_file_paths
-                        
-                        logger.info(f"CREATE/MODIFY check for {event.metadata.path}: is_new={is_new}")
-                        
-                        if is_new:
-                            # Truly new file - CREATE
-                            logger.info(f"EVENT: CREATE detected for {event.metadata.path}")
-                            self.known_file_paths.add(full_path)
-                            try:
-                                await self._process_via_backend(full_path, event.metadata.path)
-                                logger.info(f"SUCCESS: Processed {event.metadata.path} via backend pipeline")
-                            except Exception as e:
-                                logger.error(f"ERROR: Failed to process {event.metadata.path} via backend: {e}")
-                        else:
-                            # Already known - treat as MODIFY (DELETE + ADD)
-                            logger.info(f"EVENT: MODIFY detected for {event.metadata.path}")
-                            logger.info(f"MODIFY: Emitting DELETE event with callback")
-                            
-                            async def add_callback():
-                                logger.info(f"MODIFY: DELETE completed, now processing ADD for {event.metadata.path}")
-                                try:
-                                    await self._process_via_backend(full_path, event.metadata.path)
-                                    logger.info(f"SUCCESS: MODIFY completed for {event.metadata.path}")
-                                except Exception as e:
-                                    logger.error(f"ERROR: Failed to process ADD for {event.metadata.path}: {e}")
-                            
-                            delete_metadata = FileMetadata(
-                                source_type='filesystem',
-                                path=full_path,  # Normalized so engine doc_id matches document_state
-                                ordinal=event.metadata.ordinal,
-                                extra={}
-                            )
-                            delete_event = ChangeEvent(
-                                metadata=delete_metadata,
-                                change_type=ChangeType.DELETE,
-                                timestamp=event.timestamp,
-                                is_modify_delete=True,
-                                modify_callback=add_callback
-                            )
-                            yield delete_event
+                        logger.info(
+                            f"CREATE/MODIFY check for {event.metadata.path}: is_new={is_new}"
+                        )
+                        async for emitted in self._emit_create_or_update(
+                            event, full_path, is_new
+                        ):
+                            yield emitted
                     
                     # Handle UPDATE events
                     elif event.change_type == ChangeType.UPDATE:
                         is_new = full_path not in self.known_file_paths
-                        
-                        logger.info(f"UPDATE event for {event.metadata.path}: is_new={is_new}")
-                        
-                        if is_new:
-                            # Treat as CREATE
-                            logger.info(f"EVENT: CREATE detected for {event.metadata.path} (reported as UPDATE)")
-                            self.known_file_paths.add(full_path)
-                            try:
-                                await self._process_via_backend(full_path, event.metadata.path)
-                                logger.info(f"SUCCESS: Processed {event.metadata.path} via backend pipeline")
-                            except Exception as e:
-                                logger.error(f"ERROR: Failed to process {event.metadata.path} via backend: {e}")
-                        else:
-                            # True MODIFY (DELETE + ADD)
-                            logger.info(f"EVENT: MODIFY detected for {event.metadata.path}")
-                            logger.info(f"MODIFY: Emitting DELETE event with callback")
-                            
-                            async def add_callback():
-                                logger.info(f"MODIFY: DELETE completed, now processing ADD for {event.metadata.path}")
-                                try:
-                                    await self._process_via_backend(full_path, event.metadata.path)
-                                    logger.info(f"SUCCESS: MODIFY completed for {event.metadata.path}")
-                                except Exception as e:
-                                    logger.error(f"ERROR: Failed to process ADD for {event.metadata.path}: {e}")
-                            
-                            delete_metadata = FileMetadata(
-                                source_type='filesystem',
-                                path=full_path,  # Normalized so engine doc_id matches document_state
-                                ordinal=event.metadata.ordinal,
-                                extra={}
-                            )
-                            delete_event = ChangeEvent(
-                                metadata=delete_metadata,
-                                change_type=ChangeType.DELETE,
-                                timestamp=event.timestamp,
-                                is_modify_delete=True,
-                                modify_callback=add_callback
-                            )
-                            yield delete_event
+                        logger.info(
+                            f"UPDATE event for {event.metadata.path}: is_new={is_new}"
+                        )
+                        async for emitted in self._emit_create_or_update(
+                            event, full_path, is_new
+                        ):
+                            yield emitted
                     
                 except asyncio.TimeoutError:
                     # No event for 5 seconds, yield None to check if still running

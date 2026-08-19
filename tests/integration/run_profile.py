@@ -268,7 +268,11 @@ def main() -> int:
         else:
             print(f"[run_profile] --no-start: expecting backend already at {API_URL}")
 
-        rc = run_pytest(args.test_path, args.test_args)
+        # Propagate the merged profile env vars to the pytest subprocess so that
+        # tests can read settings like ENABLE_INCREMENTAL_UPDATES and skip
+        # accordingly, rather than relying solely on what's in the OS environment.
+        profile_env = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+        rc = run_pytest(args.test_path, args.test_args, extra_env=profile_env)
         return rc
 
     finally:

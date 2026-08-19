@@ -385,43 +385,89 @@ class S3Detector(ChangeDetector):
                                     
                                     logger.info(f"ObjectCreated event for {key}: is_new={is_new}")
                                     
+                                    ordinal = int(datetime.utcnow().timestamp() * 1_000_000)
                                     if is_new:
                                         # Truly new object - CREATE
                                         logger.info(f"EVENT: CREATE detected for {key}")
                                         self.known_object_keys.add(path_with_bucket)
-                                        try:
-                                            await self._process_via_backend(key)
-                                            logger.info(f"SUCCESS: Processed {key} via backend pipeline")
-                                        except Exception as e:
-                                            logger.error(f"ERROR: Failed to process {key} via backend: {e}")
+                                        if self.backend:
+                                            # Incremental-updates mode: process directly via backend
+                                            try:
+                                                await self._process_via_backend(key)
+                                                logger.info(f"SUCCESS: Processed {key} via backend pipeline")
+                                            except Exception as e:
+                                                logger.error(f"ERROR: Failed to process {key} via backend: {e}")
+                                        else:
+                                            # CocoIndex FlexibleMapView mode: yield ChangeEvent so
+                                            # FlexibleMapView.watch() forwards it to the CocoIndex subscriber
+                                            create_metadata = FileMetadata(
+                                                source_type='s3',
+                                                path=path_with_bucket,
+                                                ordinal=ordinal,
+                                                size_bytes=size,
+                                                extra={'event_name': event_name, 'key': key,
+                                                       'etag': s3_info.get('object', {}).get('eTag', '').strip('"')}
+                                            )
+                                            logger.info(f"EVENT: Yielding CREATE ChangeEvent for {key} (CocoIndex mode)")
+                                            self.events_processed += 1
+                                            yield ChangeEvent(
+                                                metadata=create_metadata,
+                                                change_type=ChangeType.CREATE,
+                                                timestamp=datetime.utcnow()
+                                            )
                                     else:
                                         # Already known - treat as MODIFY (DELETE + ADD)
                                         logger.info(f"EVENT: MODIFY detected for {key}")
-                                        logger.info(f"MODIFY: Emitting DELETE event with callback for {key}")
-                                        
-                                        async def add_callback():
-                                            logger.info(f"MODIFY: DELETE completed, now processing ADD for {key}")
-                                            try:
-                                                await self._process_via_backend(key)
-                                                logger.info(f"SUCCESS: MODIFY completed for {key}")
-                                            except Exception as e:
-                                                logger.error(f"ERROR: Failed to process ADD for {key}: {e}")
-                                        
-                                        ordinal = int(datetime.utcnow().timestamp() * 1_000_000)
-                                        delete_metadata = FileMetadata(
-                                            source_type='s3',
-                                            path=path_with_bucket,  # Use bucket/key format
-                                            ordinal=ordinal,
-                                            extra={'event_name': event_name}
-                                        )
-                                        delete_event = ChangeEvent(
-                                            metadata=delete_metadata,
-                                            change_type=ChangeType.DELETE,
-                                            timestamp=datetime.utcnow(),
-                                            is_modify_delete=True,
-                                            modify_callback=add_callback
-                                        )
-                                        yield delete_event
+                                        if self.backend:
+                                            # Incremental-updates mode: DELETE event with ADD callback
+                                            logger.info(f"MODIFY: Emitting DELETE event with callback for {key}")
+
+                                            async def add_callback():
+                                                logger.info(f"MODIFY: DELETE completed, now processing ADD for {key}")
+                                                try:
+                                                    await self._process_via_backend(key)
+                                                    logger.info(f"SUCCESS: MODIFY completed for {key}")
+                                                except Exception as e:
+                                                    logger.error(f"ERROR: Failed to process ADD for {key}: {e}")
+
+                                            delete_metadata = FileMetadata(
+                                                source_type='s3',
+                                                path=path_with_bucket,
+                                                ordinal=ordinal,
+                                                extra={'event_name': event_name}
+                                            )
+                                            yield ChangeEvent(
+                                                metadata=delete_metadata,
+                                                change_type=ChangeType.DELETE,
+                                                timestamp=datetime.utcnow(),
+                                                is_modify_delete=True,
+                                                modify_callback=add_callback
+                                            )
+                                        else:
+                                            # CocoIndex FlexibleMapView mode: DELETE then CREATE.
+                                            # Most LI/LC stores don't support true in-place
+                                            # updates for chunked documents, so mirroring the
+                                            # backend modify path (delete + add) is safest.
+                                            coco_meta = FileMetadata(
+                                                source_type='s3',
+                                                path=path_with_bucket,
+                                                ordinal=ordinal,
+                                                size_bytes=size,
+                                                extra={'event_name': event_name, 'key': key,
+                                                       'etag': s3_info.get('object', {}).get('eTag', '').strip('"')}
+                                            )
+                                            logger.info(f"EVENT: modify for {key} (CocoIndex mode): DELETE then CREATE")
+                                            self.events_processed += 1
+                                            yield ChangeEvent(
+                                                metadata=coco_meta,
+                                                change_type=ChangeType.DELETE,
+                                                timestamp=datetime.utcnow()
+                                            )
+                                            yield ChangeEvent(
+                                                metadata=coco_meta,
+                                                change_type=ChangeType.CREATE,
+                                                timestamp=datetime.utcnow()
+                                            )
                                 
                                 elif 'ObjectRemoved' in event_name:
                                     # DELETE

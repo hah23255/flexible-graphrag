@@ -333,16 +333,29 @@ Open-source LLM observability platform:
 
 ```bash
 docker run -d \
-  -p 3000:3000 \
+  -p 3005:3000 \
   -e DATABASE_URL="postgresql://user:password@postgres:5432/langfuse" \
   -e NEXTAUTH_SECRET="your-secret" \
   langfuse/langfuse:latest
 ```
 
-Update `.env`:
+Langfuse listens on 3000 inside the container, so it is remapped on the host for
+the same reason `docker/includes/observability.yaml` maps Grafana `3009:3000` —
+host 3000 is the Vue frontend, and 3001-3004 are taken by Milvus Attu, Memgraph
+Lab, the Pinecone info page and FalkorDB. See
+[Port Mappings](../../ADVANCED/PORT-MAPPINGS.md).
+
+Update `.env` to match the **host** port:
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:3000/api/public/ingestion/otel
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:3005/api/public/ingestion/otel
 ```
+
+This is still OTLP — it just points at Langfuse's own ingestion endpoint instead
+of the collector. `OTEL_EXPORTER_OTLP_ENDPOINT` holds one destination, so this
+**replaces** the default `http://localhost:4318`: traces go to Langfuse and the
+Jaeger / Prometheus / Grafana stack that `observability.yaml` starts no longer
+receives them. To keep both, leave the app pointed at the collector and add
+Langfuse as an extra exporter in the collector's own config.
 
 ## Production Checklist
 

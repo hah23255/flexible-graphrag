@@ -744,6 +744,7 @@ class AlfrescoSource(BaseDataSource):
         """
         import tempfile
         import os
+        import asyncio
         
         files = self.list_files()
         documents = []
@@ -761,7 +762,12 @@ class AlfrescoSource(BaseDataSource):
                     temp_file_path = self._download_document(file_info, temp_dir)
                     
                     # Process the downloaded file
-                    processed_doc = doc_processor.process_file(temp_file_path)
+                    processed_docs = asyncio.run(
+                        doc_processor.process_documents([temp_file_path])
+                    )
+                    if not processed_docs:
+                        raise ValueError(f"Failed to process document: {file_info['name']}")
+                    processed_doc = processed_docs[0]
                     
                     # Update metadata to include Alfresco information
                     processed_doc.metadata.update({
@@ -793,6 +799,24 @@ class AlfrescoSource(BaseDataSource):
         
         return documents
     
+    def read_file_bytes(self, node_id: str) -> bytes:
+        """
+        Read raw bytes of a single Alfresco document by node id, reusing the
+        existing python-alfresco-api ``content_utils.download_file`` helper
+        (NO new SDK code).  Accepts a raw node id or an ``alfresco://<id>`` URI.
+        """
+        if node_id.startswith("alfresco://"):
+            node_id = node_id[len("alfresco://"):]
+        if self.use_api and self.core_client and content_utils:
+            try:
+                content_bytes = content_utils.download_file(self.core_client, node_id)
+                if content_bytes:
+                    return content_bytes
+            except Exception as exc:
+                logger.warning("AlfrescoSource.read_file_bytes API download failed for %s: %s", node_id, exc)
+        logger.warning("AlfrescoSource.read_file_bytes: no bytes captured for %s", node_id)
+        return b""
+
     def _download_document(self, document: dict, temp_dir: str) -> str:
         """Download an Alfresco document to a temporary file and return the file path"""
         import tempfile

@@ -11,7 +11,7 @@ Flexible GraphRAG supports 10 vector databases. All are supported with both the 
 | `opensearch` | OpenSearch | 9201 |
 | `chroma` | Chroma | 8001 |
 | `milvus` | Milvus | 19530 |
-| `weaviate` | Weaviate | 8081 |
+| `weaviate` | Weaviate | 8086 |
 | `pinecone` | Pinecone | cloud |
 | `postgres` | PostgreSQL + pgvector | 5433 |
 | `lancedb` | LanceDB | embedded |
@@ -78,12 +78,12 @@ MILVUS_VECTOR_DB_CONFIG={"host": "localhost", "port": 19530, "collection_name": 
 
 ### Weaviate
 
-- **Dashboard**: Weaviate Console at http://localhost:8081/console
+- **Dashboard**: Weaviate Console at http://localhost:8086/console
 - **Docker**: `docker/includes/weaviate.yaml`
 
 ```env
 VECTOR_DB=weaviate
-WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8081", "index_name": "HybridSearch"}
+WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8086", "index_name": "HybridSearch"}
 ```
 
 ### Pinecone

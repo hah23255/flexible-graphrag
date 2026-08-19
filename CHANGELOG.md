@@ -2,6 +2,86 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-08-18] — v0.8.0: CocoIndex custom KG extractors, entity resolution, entity properties, meeting-notes example
+
+### Added
+
+- **Custom KG extractors** (CocoIndex pipeline) — subclass `KGExtractor` and point `KG_EXTRACTOR_BACKEND` at a registered name, `module:Class`, or a file path. `ctx.builtin()` delegates unrecognised content back to the built-in extractor. Memoized on `(chunk_text, spec, version)` — bump `version` when editing one.
+- **`ENTITY_RESOLUTION`** — `none` (default) | `normalize` | `llm`, applied per document after all its chunks are extracted. `entity_resolution.py` existed but had no caller; this wires it into the pipeline.
+- **Entity properties on graph nodes** — `KGTripleRow` carries subject/object properties, so ontology-declared entity properties reach the nodes, not just relation properties. Verified on all six writer families (LI + LC property graphs, RDF, native Neo4j / FalkorDB / SurrealDB).
+- **Meeting-notes example** — `examples/cocoindex/meeting_notes_graph_any/`, a port of CocoIndex's `meeting_notes_graph_neo4j` with a custom extractor and three ways to run it.
+
+### Changed
+
+- CocoIndex floor raised to **`>=1.0.16`**, the version tested against.
+- CocoIndex docs updated for the above, plus which CocoIndex connectors are not routed here; the architecture diagram now shows all three ingest pipelines.
+
+### Fixed
+
+- **`DOCUMENT_PARSER=liteparse` was silently ignored by the CocoIndex pipeline** — normalised to `docling`, which strips markdown heading markers.
+- **The CocoIndex separator splitter rewrote documents** — fragments were rejoined with a single space, collapsing newlines and indentation. Now slices the original text.
+- **Log records were lost on Windows** — `main.py`'s log file had no encoding, so `→`/`—` raised `UnicodeEncodeError` and dropped the line.
+- **SurrealDB entity properties** — its entity table is SCHEMAFULL, so each key now gets a `DEFINE FIELD` before the write.
+- **Entity resolution could merge a bare first name into the wrong person** — ambiguous first names are now refused in code before the model is consulted.
+- **Weaviate test port** (8081 → 8086, 8081 is Nuxeo) and the **React dev-server port** (documented as 5173, actually 5174; `PORT-MAPPINGS.md` also had React and Angular swapped).
+
+## [2026-08-14] — CocoIndex follow-on: incremental test matrix, port + default-path fixes
+
+### Added
+
+- **Incremental change-detection test suite for the CocoIndex pipeline** — `tests/integration/test_cocoindex_changes.py` (seed / add / modify / delete against a watched directory) plus tier runner scripts `tests/integration/run_incremental_coco.{bat,sh}`. Tiers: 0 smoke (both source backends), 1 vector stores, 2 property graphs, 3a RDF, 3b search, 4 vector stores via the **native** CocoIndex source (the only tier exercising `_DeleteObservingLiveMapView`). Verified add/modify/delete on **29 of 32 stores** — all but the three cloud PG stores (Spanner, Neptune, Neptune Analytics).
+- **Deterministic property-graph id/label test** — `tests/integration/test_pg_id_sanitizer.py`. Ten hostile cases (backslash, apostrophe, quotes, `/`, `#?`, spaces in labels, unicode, newline, leading digit) written through the real `add_graph_documents` path, removing the LLM from the loop: previously these defects appeared or vanished depending on what the model happened to extract.
+- **LangChain graph id/label sanitiser** — `langchain/graph/id_sanitizer.py`, applied on both LC write paths (default pipeline and CocoIndex `FlexiblePropertyGraph`). Node ids are treated as content (spaces/accents preserved); only characters a given store cannot represent are removed, while labels and relationship types get strict identifier treatment. The CocoIndex *native* connectors already did this for their own writes; the LangChain path did not.
+- **Nuxeo integration tests** — `test_nuxeo_ingest` / `test_nuxeo_ingest_with_sync`, and `nuxeo` added to `run_full_suite` step 4 (13 → 14 data sources).
+
+### Changed
+
+- **Weaviate moved from port 8081 to 8086**, so **Nuxeo keeps 8081** — its own deployment default, keeping `nuxeo-deployment`, the Nuxeo docs and `docs/DATA-SOURCES/README-nuxeo.md` consistent without per-machine edits. Updated across the compose include, both env samples, `README.md` and five docs; `docs/ADVANCED/PORT-MAPPINGS.md` gains a **Nuxeo** section (repository 8081, Kafka 9092, Kafka UI 8092).
+- **Source-dialog defaults are now per-source variables** — `VITE_ALFRESCO_PATH`, `VITE_CMIS_PATH`, `VITE_NUXEO_PATH` (React/Vue) and `NUXEO_PATH` (Angular), documented in each frontend `.env`. Previously the Alfresco and CMIS dialogs read `VITE_PROCESS_FOLDER_PATH` — the **local filesystem** folder for the Process Folder feature — so a Windows path appeared in repository path fields and the sensible fallback never applied.
+- **`nuxeo` instead of `nuxeo[oauth2]`** (plus explicit `authlib`) — the `oauth2` extra pulls GehirnInc `jwt`, which owns the same top-level `jwt` module as PyJWT and overwrites it, breaking every PyJWT consumer in the venv (python-arango → langchain-arangodb → the ArangoDB store, and authlib, which that same extra installs). `sources/nuxeo.py`'s existing compat shim already supports PyJWT owning `jwt`.
+- **CocoIndex monitoring** — `cocoindex_ingest_log` writes **one row per file** by default (`COCOINDEX_MONITOR_DETAIL=stages` restores per-stage rows); `cocoindex_run_log` counters are now **document** counts rather than the sum across every component (a 5-chunk file previously read as `adds=8`), with the per-component breakdown kept in `note`.
+- **Test-suite exit codes and summaries** — `run_overnight.bat` never checked `ERRORLEVEL` across ~36 matrix invocations, so it always exited 0 and `run_overnight_all.bat` reported failing phases as passing. Both now derive pass/fail from `run_matrix`'s own output and report **which jobs** failed.
+
+### Fixed
+
+- **Entity ids containing an apostrophe or backslash broke two graph stores** — `langchain_community`'s Gremlin and FalkorDB integrations interpolate node ids into quoted query literals without escaping (a query-injection hazard as much as a crash). Azure Cosmos DB for Gremlin rejected `\` outright; FalkorDB's parser rejected the escaping it emits. Both now sanitised per store.
+- **Directory ingest under the CocoIndex pipeline** — a filesystem *directory* is now registered as its own `coco.App` with its own watch root, instead of being passed to `shutil.copy2`, which fails on a directory. `enable_sync` therefore watches the directory you point at rather than the primary `WATCH_DIR`.
+- **LangChain-only property graph stores under the CocoIndex pipeline** (ArangoDB, Apache AGE, HugeGraph, TigerGraph, SurrealDB, Cosmos Gremlin) — the resolved `graph_backend` was recomputed from the environment at two use sites, discarding the automatic `llamaindex → langchain` downgrade. One asked LlamaIndex for a store it cannot serve; the other treated a legitimately absent `graph_index` as corruption and **cleared a working vector index mid-session**, so search returned results once and then failed permanently.
+- **Failed CocoIndex ingests reported success** — the REST job ignored the bridge's `status` and still emitted "Successfully ingested N document(s)".
+- **Live-mode statistics were always zero** — `handle.watch()` yields an `UpdateSnapshot`, whose counters live on `.stats`; reading it directly silently produced zeros, so `trigger="live"` rows were never written.
+- **Nuxeo was missing from the CocoIndex source layer** — added to the detector-backed registries (10th) with `NuxeoSource.read_file_bytes` (blob and inline `note:note` documents); the UI request → `connection_params` mapper also omitted it, which surfaced four layers away as CocoIndex's opaque "Child component build cancelled".
+
+---
+
+## [2026-08-12] — CocoIndex Integration
+
+### Added
+
+- **CocoIndex pipeline backend** (`cocoindex_integration/`) — optional [CocoIndex](https://github.com/cocoindex-io/cocoindex) (Rust) pipeline that runs *inside* Flexible GraphRAG (`PIPELINE_BACKEND=cocoindex`) **or** standalone. Mixes CocoIndex source/target connectors, functions, and splitters with Flexible GraphRAG sources (incl. event detectors), parsers, chunkers, embeddings, LI/LC KG extractors, and targets (all 15 property graphs, 10 vector stores, 4 RDF stores, 3 search engines). Same REST/MCP/UI endpoints.
+  - Mutually exclusive with `ENABLE_INCREMENTAL_UPDATES=true` (FG incremental uses `hybrid_system`, not CocoIndex) and `ENABLE_LANGFLOW_FLOWS=true` (CocoIndex not supported in Langflow flows); startup skips / force-disables conflicts.
+  - **`cocoindex_integration/bridge.py`** — FastAPI ↔ CocoIndex bridge; `ingest_source()` for all 13 UI datasources; lazy start when `DATA_SOURCE=""`.
+  - **`cocoindex_integration/pipeline/`** — `app.py` (thin entry), `flexible_app.py` (`FlexibleMapView` for 9 detector-backed transports), `run.py`, `bootstrap.py`, `state.py`, `providers.py`, `selectors.py`. Also runnable via `cocoindex update app.py`.
+  - **`cocoindex_integration/functions/`** — `@coco.fn` blocks: `doc_processing.py` (Docling / LlamaParse / LiteParse, `memo=True`), `chunking.py` (LI / LC / CocoIndex splitters), `embedding.py` (FG `EMBEDDING_KIND` plus CocoIndex `sentence_transformer` / in-process `litellm`), `kg_extraction.py` (LI Schema/Dynamic/Simple + LC `LLMGraphTransformer`, `memo=True`) — multi-label graphs for both CocoIndex native and Flexible (LI/LC) PG backends; CocoIndex’s own KG extractors are not used (they do not produce that shape).
+  - **`cocoindex_integration/connectors/flexible/`** — lazy `FlexibleMapView(LiveMapView)` for 9 detector-backed transports (filesystem, S3, GCS, Azure Blob, Google Drive, OneDrive, SharePoint, Box, Alfresco). Change fingerprint = `etag` when available, else detector `ordinal`.
+  - **`cocoindex_integration/connectors/cocoindex/`** — native sources (`localfs`, S3, Azure Blob, Google Drive) and targets (PG: Neo4j, FalkorDB, SurrealDB; vector: Qdrant, LanceDB, Postgres).
+  - **`cocoindex_integration/retriever_bridge.py`** — read-only vector/graph retrievers when `VECTOR_BACKEND=cocoindex` or `GRAPH_BACKEND=cocoindex`.
+  - **`cocoindex_integration/surreal_chain.py`** — CocoIndex native SurrealDB QA chain (flat schema; separate from LangChain `_surql.py`).
+  - **Change processing** — detectors + `datasource_config` still apply; no Postgres `document_state` in this mode (CocoIndex LMDB + reconciler). File/doc-level detectors; LMDB step/chunk memo for parse/embed/KG when content is re-seen. Field-specific sources/targets and finer grain need custom CocoIndex code.
+  - **Monitoring**: optional `COCOINDEX_ENABLE_PG_MONITORING=true` → `cocoindex_ingest_log` (observability only).
+  - REST: `GET /api/cocoindex/status`, `POST /api/cocoindex/sync-now`, `GET /api/cocoindex/config`.
+  - Docs: `docs/GETTING-STARTED/COCOINDEX-INTEGRATION.md`, `docs/CONFIGURATION/CONFIG-COCOINDEX.md`, `docs/DEVELOPER/DEVELOPER-COCOINDEX.md`.
+  - Install: `uv pip install -e ".[cocoindex]"`.
+
+### Fixed
+
+- **Ingest status race** — do not mark processing complete on `file_done`; wait for flexible target sinks (`wait_targets_flushed`) so search/QA see written rows.
+- **FlexibleVector dual client** — reuse `HybridSearchSystem.vector_store` when db/backend match (avoids stale Milvus/Weaviate search clients).
+- **Weaviate LI/LC** — sync client + thread bridges; avoid closed-loop / async-under-`to_thread` failures.
+- **Postgres LC writes** — prefer sync `add_*` when the store has no async engine.
+- **Milvus LC search** — set explicit `search_params` (+ dynamic fields) so similarity search does not assert.
+
+---
+
 ## [2026-08-08] — v0.7.2: Added Nuxeo data source, Alfresco OAuth2/ticket auth, ACS 26.1 upgrade, MCP OAuth + FastMCP 3.4.5
 
 ### Added

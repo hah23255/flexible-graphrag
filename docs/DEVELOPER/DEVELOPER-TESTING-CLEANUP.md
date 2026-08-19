@@ -4,16 +4,85 @@ Between tests you can clean up data using the cleanup script or per-database com
 
 ---
 
-## cleanup.py — One-Step Cleanup
+## cleanup.py — Complete Reference
 
-The `cleanup.py` script clears vector, graph, and search indexes in a single command. Run it from the `flexible-graphrag` directory:
+> **WARNING: All cleanup operations are irreversible. Data cannot be recovered once deleted.**
+> Run cleanup only when you intend to re-ingest from scratch or switch to a different database backend.
+
+The `cleanup.py` script lives in `scripts/` and is run from the `flexible-graphrag/` directory:
 
 ```bash
 cd flexible-graphrag
-python cleanup.py
+python ../scripts/cleanup.py [flags]
 ```
 
-This will clear all configured databases (vector, property graph, search) in one step.
+### Full cleanup (all stores)
+
+```bash
+python ../scripts/cleanup.py
+```
+
+Prompts for confirmation then wipes **everything**: PostgreSQL incremental tables and CocoIndex monitoring tables (`cocoindex_ingest_log`, `cocoindex_run_log`), vector store, search store, property graph store, RDF stores, CocoIndex LMDB state, and log files.
+
+To skip the prompt:
+
+```bash
+python ../scripts/cleanup.py --yes
+```
+
+> **Use with care.** Full cleanup deletes all ingested documents, embeddings, graph nodes,
+> relationships, and incremental-update state. You must re-ingest all documents afterward.
+
+### Selective cleanup (one or more stores)
+
+Selective flags skip the confirmation prompt and touch only the specified store(s):
+
+| Flag | What is deleted |
+|------|----------------|
+| `--graph` | Property graph store only (Neo4j / SurrealDB / ArcadeDB / etc.) |
+| `--vector` | Vector store only (Qdrant / LanceDB / Milvus / etc.) |
+| `--search` | Search store only (Elasticsearch / OpenSearch / BM25) |
+| `--rdf` | RDF triple stores only (Fuseki / GraphDB / Oxigraph) |
+| `--postgres` | PostgreSQL incremental-update tables (`document_state`, `datasource_config`) and CocoIndex monitoring tables (`cocoindex_ingest_log`, `cocoindex_run_log`) |
+| `--cocoindex` | CocoIndex LMDB pipeline state + source staging directory only |
+| `--logs` | Log files (`*.log`) in `flexible-graphrag/` only |
+
+Flags can be combined freely:
+
+```bash
+# Re-ingest graph only — keep vector embeddings
+python ../scripts/cleanup.py --graph
+
+# Re-ingest everything except incremental state
+python ../scripts/cleanup.py --graph --vector --search --rdf --cocoindex --logs
+
+# Switch graph backend (wipe graph + CocoIndex state, keep embeddings)
+python ../scripts/cleanup.py --graph --cocoindex
+
+# Wipe vector + graph for a full re-ingest (keep postgres incremental state)
+python ../scripts/cleanup.py --graph --vector
+```
+
+### Automated / CI mode
+
+```bash
+python ../scripts/cleanup.py --matrix-clean
+```
+
+Non-interactive mode for the integration test matrix runner. Cleans vector, search, graph, RDF,
+and CocoIndex stores without prompting. If `ENABLE_INCREMENTAL_UPDATES=true` is set in the
+environment, also clears the PostgreSQL incremental tables.
+
+### Common workflows
+
+| Scenario | Command |
+|----------|---------|
+| Switching graph database backend | `--graph --cocoindex` |
+| Switching embedding model (dimension change) | `--vector` |
+| Re-ingesting a single store after a bug fix | `--graph` or `--vector` |
+| Full reset before a demo | `--yes` (full cleanup) |
+| Clearing stuck CocoIndex pipeline state | `--cocoindex` |
+| Resetting incremental sync state | `--postgres` |
 
 ---
 
@@ -25,7 +94,8 @@ When switching embedding models, you must delete existing vector indexes due to 
 
 ## Graph Database Cleanup
 
-For graph-related cleanup commands, see [Neo4j Setup](../DATABASES/GRAPH-DATABASES/README-neo4j.md).
+For SurrealDB-specific queries and cleanup, see [SurrealDB Guide](../DATABASES/GRAPH-DATABASES/SURREALDB-GUIDE.md).
+For Neo4j-specific commands, see [Neo4j Setup](../DATABASES/GRAPH-DATABASES/README-neo4j.md).
 
 ### ArcadeDB Cleanup
 
@@ -71,12 +141,18 @@ rm -rf ./bm25_index
 
 ## Incremental State Cleanup
 
-To reset incremental update state, you can clear the PostgreSQL `document_state` table:
+To reset incremental update state, you can clear the PostgreSQL tables directly:
 
 ```sql
 -- Connect to flexible_graphrag_incremental database
 TRUNCATE TABLE document_state;
 TRUNCATE TABLE datasource_config;
+
+-- CocoIndex monitoring tables (if CocoIndex integration is enabled)
+TRUNCATE TABLE cocoindex_ingest_log;
+TRUNCATE TABLE cocoindex_run_log;
 ```
+
+Or use the cleanup script: `python ../scripts/cleanup.py --postgres`
 
 Or use pgAdmin at http://localhost:5050 (master password: `admin`, server password: `password`).

@@ -201,6 +201,18 @@ async def aingest_lc_graph(
     if _injected:
         logger.debug("LC graph ingestion: injected ref_doc_id onto %d entity nodes", _injected)
 
+    # Sanitise LLM-produced ids / labels / types for the target store BEFORE
+    # writing.  LLMGraphTransformer output goes straight into the store queries,
+    # and some stores reject characters the model happily emits (Cosmos Gremlin
+    # rejects a backslash in an id; its LangChain integration also interpolates
+    # ids into an unescaped quoted literal).  Because the offending value comes
+    # from the model, these failures are intermittent.
+    try:
+        from langchain.graph.id_sanitizer import sanitize_graph_documents
+        sanitize_graph_documents(graph_docs, str(getattr(config, "pg_graph_db", "")))
+    except Exception as _san_exc:  # noqa: BLE001 - never block ingest
+        logger.debug("LC graph ingestion: id sanitiser skipped: %s", _san_exc)
+
     # Write to graph store via add_graph_documents
     t_write_start = time.time()
     try:
@@ -559,7 +571,8 @@ def _ensure_lc_vector_index_ddl(lc_graph, config) -> None:
     index_name  = getattr(config, "langchain_pg_vector_index", "entity")
     node_label  = getattr(config, "langchain_pg_vector_node_label", "__Entity__")
     emb_prop    = getattr(config, "langchain_pg_vector_embedding_property", "embedding")
-    dims        = int(getattr(config, "embedding_dimension", 1536) or 1536)
+    from langchain.llm.embedding_factory import get_lc_embedding_dimension
+    dims = get_lc_embedding_dimension(config)
     cypher = (
         f"CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS "
         f"FOR (n:`{node_label}`) ON n.`{emb_prop}` "

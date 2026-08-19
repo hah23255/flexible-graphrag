@@ -398,6 +398,11 @@ async def search(system, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
 
     query_bundle = QueryBundle(query_str=query)
 
+    # LanceDB MVCC: reopen table at latest version before querying
+    _lance_refresh = getattr(system.vector_store, "_refresh_table", None)
+    if callable(_lance_refresh):
+        _lance_refresh()
+
     _retrieve_attempts = 0
     while True:
         try:
@@ -493,14 +498,31 @@ async def search(system, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
 
     # Check for partial initialisation
     missing_required = False
-    _vector_is_lc = hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain()
-    if str(system.config.vector_db) != "none" and not system.vector_index and not _vector_is_lc:
+    _vector_is_lc   = hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain()
+    _vector_is_coco = getattr(system.config, "vector_backend", "llamaindex").lower() == "cocoindex"
+    if str(system.config.vector_db) != "none" and not system.vector_index and not _vector_is_lc and not _vector_is_coco:
         missing_required = True
         logger.warning(f"Vector DB {system.config.vector_db} enabled but vector_index is missing")
+    # Include the ACTUAL adapter state, not just the config flag: for the
+    # LangChain-only stores (arangodb, apache_age, hugegraph, tigergraph,
+    # surrealdb, cosmos_gremlin) the effective backend is downgraded to langchain
+    # at pipeline-resolution time, but system.config.graph_backend still reads
+    # "llamaindex" from .env.  Without this the check below treated a legitimately
+    # absent graph_index as corruption and cleared a WORKING vector index --
+    # search returned results, then wiped itself and failed forever after.
+    # Mirrors retriever_setup.py's _pg_adapter_is_lc.
+    _pg_adapter = getattr(system, "pg_adapter", None)
+    _pg_adapter_is_lc = (
+        _pg_adapter is not None
+        and hasattr(_pg_adapter, "is_langchain")
+        and _pg_adapter.is_langchain()
+    )
     _is_lc_pg = (
         getattr(system.config, "graph_backend", "llamaindex").lower() == "langchain"
         or getattr(system.config, "use_langchain_pg", False)
+        or _pg_adapter_is_lc
     )
+    _is_coco_pg = getattr(system.config, "graph_backend", "llamaindex").lower() == "cocoindex"
     if (
         str(system.config.pg_graph_db) != "none" and
         system.config.enable_knowledge_graph and
@@ -511,6 +533,8 @@ async def search(system, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
             if getattr(system, "pg_adapter", None) is None:
                 missing_required = True
                 logger.warning(f"Graph DB {system.config.pg_graph_db} (langchain) enabled but pg_adapter is missing")
+        elif _is_coco_pg:
+            pass  # CocoIndex manages Neo4j natively; graph_index is intentionally absent
         elif not system.graph_index:
             missing_required = True
             logger.warning(f"Graph DB {system.config.pg_graph_db} enabled but graph_index is missing")
@@ -732,14 +756,31 @@ def get_query_engine(system, **kwargs):
 
     # Partial state check
     missing_required = False
-    _vector_is_lc = hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain()
-    if str(system.config.vector_db) != "none" and not system.vector_index and not _vector_is_lc:
+    _vector_is_lc   = hasattr(system.vector_store, "is_langchain") and system.vector_store.is_langchain()
+    _vector_is_coco = getattr(system.config, "vector_backend", "llamaindex").lower() == "cocoindex"
+    if str(system.config.vector_db) != "none" and not system.vector_index and not _vector_is_lc and not _vector_is_coco:
         missing_required = True
         logger.warning(f"Vector DB {system.config.vector_db} enabled but vector_index is missing")
+    # Include the ACTUAL adapter state, not just the config flag: for the
+    # LangChain-only stores (arangodb, apache_age, hugegraph, tigergraph,
+    # surrealdb, cosmos_gremlin) the effective backend is downgraded to langchain
+    # at pipeline-resolution time, but system.config.graph_backend still reads
+    # "llamaindex" from .env.  Without this the check below treated a legitimately
+    # absent graph_index as corruption and cleared a WORKING vector index --
+    # search returned results, then wiped itself and failed forever after.
+    # Mirrors retriever_setup.py's _pg_adapter_is_lc.
+    _pg_adapter = getattr(system, "pg_adapter", None)
+    _pg_adapter_is_lc = (
+        _pg_adapter is not None
+        and hasattr(_pg_adapter, "is_langchain")
+        and _pg_adapter.is_langchain()
+    )
     _is_lc_pg = (
         getattr(system.config, "graph_backend", "llamaindex").lower() == "langchain"
         or getattr(system.config, "use_langchain_pg", False)
+        or _pg_adapter_is_lc
     )
+    _is_coco_pg = getattr(system.config, "graph_backend", "llamaindex").lower() == "cocoindex"
     if (
         str(system.config.pg_graph_db) != "none" and
         system.config.enable_knowledge_graph and
@@ -749,6 +790,8 @@ def get_query_engine(system, **kwargs):
             if getattr(system, "pg_adapter", None) is None:
                 missing_required = True
                 logger.warning(f"Graph DB {system.config.pg_graph_db} (langchain) enabled but pg_adapter is missing")
+        elif _is_coco_pg:
+            pass  # CocoIndex manages Neo4j natively; graph_index is intentionally absent
         elif not system.graph_index:
             missing_required = True
             logger.warning(f"Graph DB {system.config.pg_graph_db} enabled but graph_index is missing")

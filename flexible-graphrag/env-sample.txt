@@ -1,6 +1,30 @@
 # Flexible GraphRAG Configuration
 
 # ====================================================================
+# Logging
+# ====================================================================
+# Python logging level for flexible-graphrag and the CocoIndex integration.
+# Output goes to FLEXIBLE_GRAPHRAG_LOG (file), separate from CocoIndex's terminal output.
+#LOG_LEVEL=DEBUG
+LOG_LEVEL=INFO
+
+# Path for the flexible-graphrag Python log file (relative to cwd or absolute).
+# Keeps flexible-graphrag logs separate from CocoIndex's Rust-level terminal tracing.
+FLEXIBLE_GRAPHRAG_LOG=flexible-graphrag-cocoindex.log
+
+# CocoIndex pipeline only — controls CocoIndex's own Rust-level tracing (terminal).
+# Independent of LOG_LEVEL above; both can be set simultaneously.
+#COCOINDEX_LOG_LEVEL=DEBUG
+COCOINDEX_LOG_LEVEL=INFO
+
+# CocoIndex anonymous usage telemetry.
+# CocoIndex sends anonymous events (platform + Python version only) to help prioritize
+# wheel builds.  To opt out, set to 1 (or any non-empty value OTHER than "0").
+# Setting to 0 or leaving unset means telemetry IS enabled.
+# See https://cocoindex.io/docs/about/telemetry/
+COCOINDEX_DISABLE_USAGE_TRACKING=1
+
+# ====================================================================
 # Property Graph, RDF Graph, Vector, Search Database Selection
 # ====================================================================
 
@@ -46,8 +70,8 @@ VECTOR_DB=qdrant
 #VECTOR_DB=none
 
 SEARCH_DB=elasticsearch
-#SEARCH_DB=bm25
 #SEARCH_DB=opensearch
+#SEARCH_DB=bm25
 #SEARCH_DB=none
 
 
@@ -59,18 +83,50 @@ SEARCH_DB=elasticsearch
 # allow all llamaindex (default) or all langchain, or mixed to be configured.
 # Ingest/reading always uses LlamaIndex readers
 
-# Chunker backend: llamaindex (default, SentenceSplitter) | langchain (text splitters)
+# Chunker backend: which library does text splitting.
+#   llamaindex  — LlamaIndex SentenceSplitter (default, tiktoken character-mode)
+#   langchain   — LangChain splitter selected by LC_SPLITTER_TYPE
+#   cocoindex   — CocoIndex native RecursiveSplitter (cocoindex.ops.text).
+#                 Supports syntax-aware (tree-sitter) splitting for 30+ languages
+#                 (Markdown, Python, Rust, TypeScript, SQL, …) when PIPELINE_BACKEND=cocoindex.
+#                 File language is auto-detected from extension via detect_code_language().
+#                 Only active in the CocoIndex pipeline (PIPELINE_BACKEND=cocoindex).
+#                 Requires: uv pip install "cocoindex[text]"  (or a full cocoindex install)
 CHUNKER_BACKEND=llamaindex
 #CHUNKER_BACKEND=langchain
+#CHUNKER_BACKEND=cocoindex
+
+# CocoIndex splitter type — only active when CHUNKER_BACKEND=cocoindex
+# Options:
+#   recursive   — RecursiveSplitter (default); syntax-aware tree-sitter splits for 30+ languages
+#   separator   — SeparatorSplitter; splits on configurable regex separators (paragraph → sentence → word)
+#COCOINDEX_SPLITTER_TYPE=recursive
+#COCOINDEX_SPLITTER_TYPE=separator
+
+# Language for CocoIndex RecursiveSplitter (CHUNKER_BACKEND=cocoindex, splitter_type=recursive only).
+# Leave empty to auto-detect from file extension. Examples: markdown, python, typescript, rust, sql
+#COCOINDEX_LANGUAGE=markdown
+
+# Separator list for CocoIndex SeparatorSplitter (CHUNKER_BACKEND=cocoindex, splitter_type=separator only).
+# Two accepted formats:
+#   JSON array  (use this when patterns contain commas like \n{2,}):
+#     COCOINDEX_SEPARATORS=["\\n{2,}", "[.!?]\\s+", "[:;]\\s+"]
+#   Pipe-separated list (simple patterns without commas):
+#     COCOINDEX_SEPARATORS=\n\n|\. |; 
+# Default when unset: ["\\n{2,}", "[.!?…]\\s+", "[:;]\\s+"]
+# (paragraph break → sentence boundary → clause boundary)
+#COCOINDEX_SEPARATORS=["\\n{2,}", "[.!?…]\\s+", "[:;]\\s+"]
 
 # Property graph backend.
 # LC-only stores (arangodb, apache_age, cosmos_gremlin, spanner, hugegraph, tigergraph,
 # surrealdb) auto-select langchain — no need to set explicitly for those.
 GRAPH_BACKEND=llamaindex
 #GRAPH_BACKEND=langchain
+#GRAPH_BACKEND=cocoindex   # CocoIndex native PG connectors; requires PIPELINE_BACKEND=cocoindex
 
 VECTOR_BACKEND=llamaindex
 #VECTOR_BACKEND=langchain
+#VECTOR_BACKEND=cocoindex
 
 SEARCH_BACKEND=llamaindex
 #SEARCH_BACKEND=langchain
@@ -81,11 +137,129 @@ SEARCH_BACKEND=llamaindex
 KG_EXTRACTOR_BACKEND=llamaindex
 #KG_EXTRACTOR_BACKEND=langchain
 
+# Entity-name de-duplication (CocoIndex pipeline only), applied to one
+# document's extracted triples after all its chunks are extracted — "Bob" in one
+# chunk and "Bob Smith" in the next are only comparable once both exist.
+# Per document, not per corpus: two different files are never merged together.
+#   none      (default) unchanged behaviour, no extra dependency
+#   normalize folds accents/case/punctuation ("bob smith" -> "Bob Smith")
+#   llm       also merges "Bob" -> "Bob Smith", "Acme Corp" -> "Acme Corporation"
+#             REQUIRES: uv pip install "cocoindex[entity_resolution]" (faiss).
+#             Without it, degrades to normalize with a warning — never fails.
+# NOTE: resolution rewrites entity ids, so enabling it against a corpus already
+# ingested without it leaves old and new nodes disagreeing. Turn it on from the
+# start, or re-ingest clean.
+#ENTITY_RESOLUTION=normalize
+#ENTITY_RESOLUTION=llm
+
+# Custom KG extractor (CocoIndex pipeline only — PIPELINE_BACKEND=cocoindex).
+# Subclass KGExtractor from cocoindex_integration.functions.kg_extractors and
+# point KG_EXTRACTOR_BACKEND at it: a registered name, an importable
+# module:Class, or a file path + class (no install / sys.path setup needed).
+#KG_EXTRACTOR_BACKEND=meeting_notes
+#KG_EXTRACTOR_BACKEND=my_package.extractors:MeetingNotesExtractor
+#KG_EXTRACTOR_BACKEND=./examples/cocoindex/meeting_notes_graph_any/extractor.py:MeetingNotesExtractor
+# Modules imported before resolution, so @register_kg_extractor names become
+# reachable without naming the class. Comma-separated.
+#KG_EXTRACTOR_MODULES=my_package.extractors
+# NOTE: extraction is memoized. Editing an extractor does NOT re-extract unless
+# you bump its `version` class attribute — you would keep reading the previous
+# implementation's cached triples.
+
 # Retrieval fusion framework
 # 'llamaindex' (default) — QueryFusionRetriever with relative_score mode;
 # 'langchain'            — LangChain EnsembleRetriever (RRF);
 RETRIEVAL_FUSION=llamaindex
 #RETRIEVAL_FUSION=langchain
+
+# CocoIndex pipeline backend
+# Routes ingest through CocoIndex for per-document LMDB memoization — unchanged
+# files are skipped automatically; only new/modified docs are reprocessed.
+# CHUNKER_BACKEND / GRAPH_BACKEND / VECTOR_BACKEND / SEARCH_BACKEND flags above still apply.
+# Mutually exclusive with:
+#   ENABLE_INCREMENTAL_UPDATES=true  — FG incremental uses hybrid_system (default
+#     pipeline), not CocoIndex; both on = bad state (startup skips FG orchestrator)
+#   ENABLE_LANGFLOW_FLOWS=true       — CocoIndex not supported in Langflow flows
+#     (startup force-disables Langflow when PIPELINE_BACKEND=cocoindex)
+# Install: uv pip install flexible-graphrag[cocoindex]
+# Docs:    docs/GETTING-STARTED/COCOINDEX-INTEGRATION.md
+#PIPELINE_BACKEND=cocoindex
+
+# LMDB state path (delete to force full reprocess)
+#COCOINDEX_DB=./cocoindex.db
+
+# Watched source directory for the CocoIndex localfs connector.
+# UI uploads land in ./uploads and are then copied here.
+#
+# Relative paths resolve against the PROCESS working directory, and the server
+# runs from flexible-graphrag/.  The code default is "./cocoindex-docs", which
+# from there means flexible-graphrag/cocoindex-docs — but the repo keeps the
+# folder at its ROOT, so use ../ to reach it.  An absolute path also works.
+#WATCH_DIR=../cocoindex-docs
+
+# Single CocoIndex refresh cadence in seconds (default 60).  Change detection is
+# always live — every change-aware source runs a persistent live stream:
+#   * filesystem (native localfs walk_dir(live=True) + flexible watchdog),
+#   * s3 / gcs / azure_blob / google_drive / onedrive / sharepoint / box / alfresco
+#     (flexible detector-backed sources via FlexibleMapView.watch()).
+# This interval is used as the BACKUP cadence in three places:
+#   * localfs walk_dir(rescan_interval=…) — periodic full rescan that catches any
+#     file-system events the watcher missed,
+#   * the restart backoff if a live stream ends/errors,
+#   * the reconcile poll for sources with NO change stream (native S3/Azure/Drive
+#     scan connectors; flexible web / wikipedia / youtube / cmis).
+# Set to 0 to disable the backup poll for non-change-aware sources.
+#COCOINDEX_POLL_INTERVAL=60
+#COCOINDEX_POLL_INTERVAL=30
+#COCOINDEX_POLL_INTERVAL=0
+
+# Per-stage Postgres monitoring — writes rows to cocoindex_ingest_log (one row per stage per file).
+# Observability only; does NOT drive change detection or incremental sync.
+# Requires POSTGRES_INCREMENTAL_URL (same DB as incremental updates — see section below).
+# Two tables are created automatically:
+#
+#   cocoindex_run_log — one row per update cycle (startup/ui/poll/live).
+#     adds / deletes / unchanged / reprocesses / errors are DOCUMENT counts.
+#     (CocoIndex's own totals sum every component it ran — the per-file worker plus
+#     parse plus embed plus one KG extraction per CHUNK — so a single 5-chunk file
+#     would read as "adds=8".  These columns are filtered to the per-file components;
+#     the raw per-component breakdown is kept in the "note" column.)
+#     Live-mode rows appear when a file is added/deleted from the watch folder, making
+#     watch-folder changes fully visible without a UI.
+#     Query example:
+#       SELECT trigger, adds, deletes, unchanged, errors, elapsed_s, logged_at
+#       FROM cocoindex_run_log ORDER BY logged_at DESC LIMIT 20;
+#
+#   cocoindex_ingest_log — per-file rows, driven by the pipeline progress hook.
+#     Only fires for files that actually ran (memo hits and pure deletes emit nothing).
+#     Query example:
+#       SELECT trigger, file_path, stage, status, detail, logged_at
+#       FROM cocoindex_ingest_log ORDER BY logged_at DESC LIMIT 50;
+#
+# Row volume for cocoindex_ingest_log (COCOINDEX_MONITOR_DETAIL):
+#   summary (default) — ONE row per file: the terminal event with its status
+#                       (completed / skipped / failed) and detail.
+#   stages            — a row per stage transition (~13 per file):
+#                       downloading→downloaded→parsing→parsed→chunked→embedded→
+#                       kg_extracting→kg_extracted→vector_indexing→graph_indexing→
+#                       search_indexing→rdf_indexing→indexing_complete→done
+#                       Use when debugging where a file stalls; it swamps the table
+#                       on a real corpus.
+#COCOINDEX_MONITOR_DETAIL=summary
+#COCOINDEX_MONITOR_DETAIL=stages
+#COCOINDEX_ENABLE_PG_MONITORING=false
+#COCOINDEX_ENABLE_PG_MONITORING=true
+
+# CocoIndex source backend — how the CocoIndex pipeline READS documents.
+# Only consulted when PIPELINE_BACKEND=cocoindex.
+#   flexible  (default) — always use FlexibleDataSource (flexible-graphrag's 13
+#                         data sources), even for filesystem. Broadest compatibility.
+#   cocoindex           — use CocoIndex-native connectors for sources that have a
+#                         native path wired and available (localfs, amazon_s3,
+#                         azure_blob, google_drive); fall back to FlexibleDataSource
+#                         for any source where the native path is not available.
+SOURCE_BACKEND=flexible
+#SOURCE_BACKEND=cocoindex
 
 
 # =============================================================================
@@ -290,14 +464,23 @@ LLAMAPARSE_MODE=cost_effective
 # S3_CONFIG={"bucket_name": "my-bucket", "access_key": "AKIAIOSFODNN7EXAMPLE", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "region_name": "us-east-1", "prefix": "documents/"}
 # Alternative format using "bucket" (S3Reader compatible):
 # S3_CONFIG={"bucket": "my-bucket", "access_key": "AKIAIOSFODNN7EXAMPLE", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "region_name": "us-east-1", "prefix": "documents/"}
+# With SQS event notifications (recommended — embed inside S3_CONFIG OR use the standalone var below):
+# S3_CONFIG={"bucket_name": "my-bucket", "access_key": "...", "secret_key": "...", "region_name": "us-east-1", "sqs_queue_url": "https://sqs.us-east-1.amazonaws.com/123456789/my-queue"}
 # Required: bucket_name (or bucket), access_key, secret_key
 # Optional: region_name (if not specified, falls back to S3_REGION_NAME env var or default "us-east-1"), prefix (folder path within bucket)
 # Note: S3_CONFIG takes precedence over individual S3_* environment variables (see section 5 below)
+#
+# Standalone SQS URL (alternative to embedding sqs_queue_url inside S3_CONFIG above).
+# The S3 detector checks S3_SQS_QUEUE_URL first, then S3_CONFIG["sqs_queue_url"].
+# Without SQS the detector falls back to periodic list-all-files mode (slower, no real-time events).
+# S3_SQS_QUEUE_URL=https://sqs.us-east-2.amazonaws.com/123456789012/my-s3-events-queue
 
 # Google Cloud Storage Configuration
 # GCS_CONFIG={"bucket_name": "my-bucket", "project_id": "my-project-123", "credentials": "{\"type\":\"service_account\",\"project_id\":\"my-project\",...}", "prefix": "documents/"}
+# With Pub/Sub event notifications (recommended for real-time change detection):
+# GCS_CONFIG={"bucket_name": "my-bucket", "project_id": "my-project-123", "credentials": "{...}", "prefix": "documents/", "pubsub_subscription": "projects/my-project/subscriptions/my-gcs-sub"}
 # Required: bucket_name, project_id, credentials (service account JSON as string)
-# Optional: prefix (folder path), folder_name, service_account_key_path (alternative to credentials string)
+# Optional: prefix (folder path), folder_name, service_account_key_path (alternative to credentials string), pubsub_subscription
 # Note: credentials should be JSON service account key from GCP Console as a string
 
 # Google Drive Configuration
@@ -582,6 +765,11 @@ ELASTICSEARCH_VECTOR_DB_CONFIG={"url": "http://localhost:9200", "index_name": "h
 
 # OpenSearch (active when VECTOR_DB=opensearch)
 OPENSEARCH_VECTOR_DB_CONFIG={"url": "http://localhost:9201", "index_name": "hybrid_search_vector"}
+# Hybrid mode only (VECTOR_DB=opensearch + SEARCH_DB=opensearch): add search_pipeline to enable
+# native KNN+BM25 in a single query. The pipeline is auto-patched at runtime if omitted, but
+# adding it here avoids the runtime patch. Create the pipeline first with:
+#   python scripts/create_opensearch_pipeline.py
+#OPENSEARCH_VECTOR_DB_CONFIG={"url": "http://localhost:9201", "index_name": "hybrid_search_vector", "search_pipeline": "hybrid-search-pipeline"}
 
 # Neo4j vector store (active when VECTOR_DB=neo4j; separate from PG_GRAPH_DB)
 NEO4J_VECTOR_DB_CONFIG={"url": "bolt://localhost:7687", "username": "neo4j", "password": "password", "index_name": "hybrid_search_vector", "database": "neo4j"}
@@ -597,11 +785,11 @@ MILVUS_VECTOR_DB_CONFIG={"host": "localhost", "port": 19530, "collection_name": 
 
 # Weaviate (active when VECTOR_DB=weaviate)
 # For local Docker instance (no authentication):
-WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8081", "index_name": "HybridSearch"}
+WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8086", "index_name": "HybridSearch"}
 # For authenticated instance (with API key):
-#WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8081", "index_name": "HybridSearch", "api_key": "your_weaviate_api_key"}
+#WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8086", "index_name": "HybridSearch", "api_key": "your_weaviate_api_key"}
 # With additional options (text_key, grpc_port, timeout):
-#WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8081", "index_name": "HybridSearch", "text_key": "content", "grpc_port": 50051, "timeout": 30}
+#WEAVIATE_VECTOR_DB_CONFIG={"url": "http://localhost:8086", "index_name": "HybridSearch", "text_key": "content", "grpc_port": 50051, "timeout": 30}
 # Weaviate Cloud (WCS):
 #WEAVIATE_VECTOR_DB_CONFIG={"url": "https://your-cluster.weaviate.network", "index_name": "HybridSearch", "api_key": "your_weaviate_api_key", "text_key": "content"}
 
@@ -631,6 +819,12 @@ ELASTICSEARCH_SEARCH_DB_CONFIG={"url": "http://localhost:9200", "index_name": "h
 
 # OpenSearch (active when SEARCH_DB=opensearch)
 # Default port for OpenSearch is 9200; use 9201 if running alongside Elasticsearch
+#
+# HYBRID MODE (VECTOR_DB=opensearch + SEARCH_DB=opensearch):
+#   OpenSearch native hybrid search (KNN + BM25 in one query) is used automatically.
+#   Only the VECTOR index is read during retrieval; the SEARCH index is never written to.
+#   Both configs are still required so the system knows both DBs are OpenSearch, but
+#   "index_name" in the search config is unused in hybrid mode (the vector index serves both).
 OPENSEARCH_SEARCH_DB_CONFIG={"url": "http://localhost:9201", "index_name": "hybrid_search_fulltext"}
 #OPENSEARCH_SEARCH_DB_CONFIG={"url": "https://localhost:9201", "index_name": "hybrid_search_fulltext", "username": "admin", "password": "admin", "verify_certs": false}
 
@@ -847,10 +1041,8 @@ OPENROUTER_MODEL=openai/gpt-4.1-mini
 # Embeddings are configured independently of your LLM provider.
 # You can mix any LLM provider with any embedding provider.
 # For detailed configuration examples, see: docs/LLM/LLM-EMBEDDING-CONFIG.md
-#
-# EMBEDDING_DIMENSION: Optional explicit dimension override (auto-detected for known models)
-#EMBEDDING_DIMENSION=768   
 
+# ── Main pipeline embedding (flexible-graphrag API server) ────────────────────
 EMBEDDING_KIND=openai
 #EMBEDDING_KIND=ollama
 #EMBEDDING_KIND=google
@@ -860,10 +1052,61 @@ EMBEDDING_KIND=openai
 #EMBEDDING_KIND=fireworks
 #EMBEDDING_KIND=openai_like
 #EMBEDDING_KIND=litellm
+#EMBEDDING_KIND=huggingface    # any HuggingFace Hub model, local, no API key
 
-# OpenAI Embeddings (default — active when EMBEDDING_KIND=openai)
-# 1536 dims
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+# ── CocoIndex pipeline embedding (COCOINDEX_EMBEDDING_KIND overrides EMBEDDING_KIND) ──
+# Lets the CocoIndex pipeline (PIPELINE_BACKEND=cocoindex) use a different embedder than
+# the default pipeline.  Leave unset to inherit EMBEDDING_KIND from the setting above.
+#
+# Values: sentence_transformer | openai | ollama | google | vertex | azure | bedrock |
+#         fireworks | openai_like | litellm
+#
+# sentence_transformer: CocoIndex-native SentenceTransformerEmbedder (GPU-accelerated, no API key)
+# Requires: uv pip install "cocoindex[sentence-transformers]"
+#COCOINDEX_EMBEDDING_KIND=sentence_transformer
+#
+# litellm: CocoIndex LiteLLMEmbedder — 100+ providers (OpenAI, Ollama, Bedrock, Gemini …)
+# Uses the litellm Python library DIRECTLY — no proxy server, no Windows antivirus issues.
+# (Unlike EMBEDDING_KIND=litellm which requires the LiteLLM proxy server running in WSL2.)
+# Requires: uv pip install "cocoindex[litellm]"  (litellm package must be installed)
+#COCOINDEX_EMBEDDING_KIND=litellm
+
+# CocoIndex sentence-transformer model (used when COCOINDEX_EMBEDDING_KIND=sentence_transformer)
+#COCOINDEX_EMBEDDING_MODEL=all-MiniLM-L6-v2              # 384 dims — fastest, default
+#COCOINDEX_EMBEDDING_MODEL=all-mpnet-base-v2             # 768 dims — higher quality
+#COCOINDEX_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5        # 384 dims — strong retrieval quality
+#COCOINDEX_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5 # 768 dims — long context (8192 tokens)
+
+# ── Dimension configuration ──────────────────────────────────────────────────
+# Dimension is auto-detected for known models.  Override only when auto-detection
+# is wrong or when using openai_like / huggingface with an unusual model.
+#
+# Per-kind dimension (wins over EMBEDDING_DIMENSION; matches your EMBEDDING_KIND above):
+OPENAI_EMBEDDING_DIMENSION=1536        # text-embedding-3-small
+#OPENAI_EMBEDDING_DIMENSION=3072       # text-embedding-3-large
+#OLLAMA_EMBEDDING_DIMENSION=768        # nomic-embed-text / mxbai-embed-large
+#GOOGLE_EMBEDDING_DIMENSION=768        # gemini-embedding-2-preview
+#VERTEX_EMBEDDING_DIMENSION=768
+#AZURE_EMBEDDING_DIMENSION=1536
+#BEDROCK_EMBEDDING_DIMENSION=1024      # amazon.titan-embed-text-v2:0
+#FIREWORKS_EMBEDDING_DIMENSION=768
+#OPENAI_LIKE_EMBEDDING_DIMENSION=768   # adjust to match your local model
+#HUGGINGFACE_EMBEDDING_DIMENSION=384   # all-MiniLM-L6-v2 default; 768 for mpnet/bge-base
+#
+# CocoIndex-specific dimension — only set when COCOINDEX_EMBEDDING_KIND is also set.
+# When COCOINDEX_EMBEDDING_KIND is unset, CocoIndex inherits EMBEDDING_KIND and its
+# dimension comes from the per-kind var above (e.g. OPENAI_EMBEDDING_DIMENSION).
+# Do NOT set COCOINDEX_EMBEDDING_DIMENSION in that case.
+# IMPORTANT: if both pipelines write to the same collection, dimensions must match.
+#COCOINDEX_EMBEDDING_DIMENSION=384     # sentence_transformer: all-MiniLM-L6-v2
+#COCOINDEX_EMBEDDING_DIMENSION=768     # sentence_transformer: all-mpnet-base-v2
+#
+# Generic fallback (lowest priority; used when no per-kind var is set):
+#EMBEDDING_DIMENSION=1536
+
+# ── Per-kind model names ──────────────────────────────────────────────────────
+# OpenAI Embeddings (active when EMBEDDING_KIND=openai)
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small       # 1536 dims
 #OPENAI_EMBEDDING_MODEL=text-embedding-3-large      # 3072 dims
 
 # Ollama Embeddings (active when EMBEDDING_KIND=ollama)
@@ -902,9 +1145,7 @@ FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 
 # OpenAI-Like Embeddings (active when EMBEDDING_KIND=openai_like)
 # Any server with a /v1/embeddings endpoint: LM Studio, LocalAI, Llamafile, etc.
-# LM Studio example
-# Use EMBEDDING_DIMENSION above (e.g. 768 for nomic-embed-text) — required, no auto-detection for openai_like
-#EMBEDDING_DIMENSION=768 
+# Set OPENAI_LIKE_EMBEDDING_DIMENSION (or EMBEDDING_DIMENSION) — required, no auto-detection.
 #OPENAI_LIKE_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5@q4_k_m
 #OPENAI_LIKE_EMBEDDING_API_BASE=http://localhost:1234/v1
 # Embedding request encoding_format. Defaults to "float" for max gateway compatibility
@@ -913,14 +1154,25 @@ FIREWORKS_EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 #OPENAI_LIKE_EMBEDDING_ENCODING_FORMAT=float
 
 # LiteLLM Embeddings (active when EMBEDDING_KIND=litellm)
-# Route embeddings through a LiteLLM proxy to any backend (OpenAI, Ollama, Bedrock, etc.)
-# Confirmed working: text-embedding-3-small via LiteLLM proxy (2026-03-19)
+# EMBEDDING_KIND=litellm: uses the litellm Python library to call any embedding provider.
+# Without LITELLM_EMBEDDING_API_BASE the library routes directly to the provider using
+# provider-specific env vars (e.g. OPENAI_API_KEY) — no proxy process needed, Windows-safe.
+# Set LITELLM_EMBEDDING_API_BASE only when routing through a LiteLLM proxy server.
 LITELLM_EMBEDDING_MODEL=text-embedding-3-small
 #LITELLM_EMBEDDING_MODEL=ollama/nomic-embed-text
 #LITELLM_EMBEDDING_API_BASE=http://localhost:11434
 # Must include /v1 suffix
-LITELLM_EMBEDDING_API_BASE=http://localhost:4000/v1
-# LITELLM_API_KEY=local                                   # LiteLLM master key
+#LITELLM_EMBEDDING_API_BASE=http://localhost:4000/v1      # Proxy only — omit for direct mode
+# LITELLM_API_KEY=local                                   # LiteLLM master key (proxy mode only)
+
+# HuggingFace Embeddings (active when EMBEDDING_KIND=huggingface)
+# Any model from HuggingFace Hub — runs locally, no API key required.
+# Install: uv pip install -e ".[huggingface]"
+#HUGGINGFACE_EMBEDDING_MODEL=all-MiniLM-L6-v2             # 384 dims — fast, default
+#HUGGINGFACE_EMBEDDING_MODEL=all-mpnet-base-v2            # 768 dims — higher quality
+#HUGGINGFACE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5       # 384 dims — strong retrieval quality
+#HUGGINGFACE_EMBEDDING_MODEL=BAAI/bge-base-en-v1.5        # 768 dims
+#HUGGINGFACE_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5       # 1024 dims
 
 # ====================================================================
 # CONTENT SOURCES CONFIGURATION
@@ -954,8 +1206,14 @@ ALFRESCO_PASSWORD=admin
 ALFRESCO_STOMP_PORT=8613
 
 # Nuxeo Configuration (if using Nuxeo)
-# Requires the `nuxeo` client: uv pip install "nuxeo[oauth2]"
+# Requires the `nuxeo` client -- installed with flexible-graphrag, no extra step.
+# Install plain `nuxeo`, NOT "nuxeo[oauth2]": that extra pulls GehirnInc's `jwt`,
+# which claims the same top-level `jwt` module as PyJWT and overwrites it,
+# breaking python-arango / the ArangoDB graph store, authlib and Langflow.
+# All three auth methods below (basic / token / oauth2) work without it.
 # NUXEO_URL: base repository URL (no /api/v1 suffix - the client appends it)
+# Port 8081 is Nuxeo's default here (nuxeo-deployment/.env NUXEO_HTTP_PORT);
+# docker/includes/weaviate.yaml publishes 8086 so the two stacks can coexist.
 NUXEO_URL=http://localhost:8081/nuxeo
 # NUXEO_AUTH_METHOD: basic | oauth2 | token  (default: basic)
 NUXEO_AUTH_METHOD=basic
@@ -963,7 +1221,7 @@ NUXEO_AUTH_METHOD=basic
 NUXEO_USERNAME=Administrator
 NUXEO_PASSWORD=Administrator
 # Path to ingest (folder or single document), e.g. /default-domain/workspaces/GraphRAG
-NUXEO_PATH=/default-domain/workspaces
+NUXEO_PATH=/default-domain/workspaces/GraphRAG
 # Token auth (auth_method=token): a Nuxeo auth token (sent as X-Authentication-Token)
 # NUXEO_TOKEN=
 # OAuth2 (auth_method=oauth2): register an OAuth2 client in Nuxeo, obtain a token out-of-band
@@ -1024,9 +1282,11 @@ MAX_PATHS_PER_CHUNK=20
 # ====================================================================
 
 # Enable incremental updates system (automatic monitoring and sync)
-# Set to "true" to enable auto-sync capabilities
-# Requires PostgreSQL for state management
+# Set to "true" to enable auto-sync capabilities on the default LI/LC pipeline
+# Requires PostgreSQL for state management (document_state + datasource_config)
 # Default: false (incremental updates disabled)
+# Mutually exclusive with PIPELINE_BACKEND=cocoindex — do not enable both
+# (startup will skip this orchestrator and log a warning if both are set).
 ENABLE_INCREMENTAL_UPDATES=false
 #ENABLE_INCREMENTAL_UPDATES=true
 
@@ -1127,20 +1387,26 @@ ENABLE_LLAMA_INDEX_INSTRUMENTATION=true
 # (e.g. for neo4j: graph_config url/username/password, from NEO4J_GRAPH_DB_CONFIG)
 
 # USE_LC_TEXT_TO_GRAPH: opt-in Cypher/SPARQL/SurrealQL text-to-query retrieval.
-# Only applies when GRAPH_BACKEND=langchain. Ignored for GRAPH_BACKEND=llamaindex.
+# Only applies when GRAPH_BACKEND=langchain. Ignored for GRAPH_BACKEND=llamaindex/cocoindex.
 #
-# Non-vector stores (apache_age, hugegraph, nebula, tigergraph, cosmos_gremlin, neptune):
+# Non-vector stores (surrealdb, apache_age, hugegraph, nebula, tigergraph, cosmos_gremlin, neptune,
+#   falkordb*):
 #   TextToGraphQueryRetriever is ALWAYS active — this flag has no effect.
 # Vector-capable stores (neo4j):
 #   Default false — GraphEntityVectorRetriever handles graph retrieval.
 #   Set true to also add TextToGraphQueryRetriever alongside vector retrieval.
+# *falkordb: no entity-level vector index — LANGCHAIN_PG_VECTOR_SEARCH=true adds the Chunk-node
+#   vector retriever separately (see that setting below); text-to-query always runs.
 #USE_LC_TEXT_TO_GRAPH=true
 USE_LC_TEXT_TO_GRAPH=false
 
-# LangChain PG vector search — entity embedding similarity search (GraphEntityVectorRetriever).
-# neo4j: searches the __Entity__[embedding] index (Neo4jVector).
-# FalkorDB: searches its own Chunk-node vector index (FalkorDBVector).
-# For neo4j only: USE_PG_NEIGHBORHOOD is auto-enabled so entity seeds are walked to text chunks.
+# LangChain PG vector search — entity / chunk embedding similarity search.
+# Only applies when GRAPH_BACKEND=langchain. Ignored for GRAPH_BACKEND=llamaindex/cocoindex.
+#
+# neo4j:    searches __Entity__[embedding] index (Neo4jVector); USE_PG_NEIGHBORHOOD auto-enabled.
+# falkordb: searches its Chunk-node vector index (FalkorDBVector); text-to-query still runs too.
+#           Set true only when you want vector similarity ON TOP OF the Cypher QA chain.
+# surrealdb / all other stores: has no vector index — leave false (no effect).
 #LANGCHAIN_PG_VECTOR_SEARCH=true
 LANGCHAIN_PG_VECTOR_SEARCH=false
 
@@ -1402,6 +1668,8 @@ ONTOLOGY_FORMAT=turtle
 # duplicate/export the bundled flows to customize them).
 
 # Off by default: the app calls the system directly (no Langflow needed).
+# Mutually exclusive with PIPELINE_BACKEND=cocoindex (CocoIndex not supported in
+# Langflow flows; startup force-disables this when CocoIndex is active).
 ENABLE_LANGFLOW_FLOWS=false
 #ENABLE_LANGFLOW_FLOWS=true
 

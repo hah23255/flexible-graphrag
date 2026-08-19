@@ -899,23 +899,28 @@ class AlfrescoDetector(ChangeDetector):
                             yield change_event
                         
                         elif event_data['change_type'] == 'CREATE':
-                            # For CREATE, process via backend (full pipeline) directly
-                            logger.info(f"STOMP EVENT: CREATE for {file_path} - processing via backend")
+                            # For CREATE, process via backend (full pipeline) or yield for CocoIndex
+                            logger.info(f"STOMP EVENT: CREATE for {file_path}")
                             
                             # Record this event to block subsequent UPDATE events
                             import time
                             node_id = event_data['node_id']
                             self._recent_events[node_id] = time.time()
                             
-                            try:
-                                await self._process_via_backend(
-                                    node_id=event_data['node_id'],
-                                    filename=event_data['name'],
-                                    file_path=file_path
-                                )
-                                logger.info(f"SUCCESS: Processed CREATE for {file_path} via backend (full pipeline)")
-                            except Exception as e:
-                                logger.error(f"ERROR: Failed to process CREATE for {file_path}: {e}")
+                            if self.backend:
+                                try:
+                                    await self._process_via_backend(
+                                        node_id=event_data['node_id'],
+                                        filename=event_data['name'],
+                                        file_path=file_path
+                                    )
+                                    logger.info(f"SUCCESS: Processed CREATE for {file_path} via backend (full pipeline)")
+                                except Exception as e:
+                                    logger.error(f"ERROR: Failed to process CREATE for {file_path}: {e}")
+                            else:
+                                # CocoIndex mode: yield CREATE so FlexibleMapView ingests it
+                                logger.info(f"STOMP EVENT: CREATE for {file_path} (CocoIndex mode)")
+                                yield ChangeEvent(change_type=ChangeType.CREATE, metadata=metadata, timestamp=None)
                         
                         elif event_data['change_type'] == 'UPDATE':
                             # For UPDATE, check deduplication first
@@ -962,45 +967,54 @@ class AlfrescoDetector(ChangeDetector):
                                 # Record this event BEFORE processing
                                 self._recent_events[node_id] = current_time
                                 
-                                try:
-                                    await self._process_via_backend(
-                                        node_id=node_id,
-                                        filename=filename,
-                                        file_path=file_path
-                                    )
-                                    logger.info(f"SUCCESS: Processed CREATE for {file_path} via backend (full pipeline)")
-                                except Exception as e:
-                                    logger.error(f"ERROR: Failed to process CREATE for {file_path}: {e}")
-                            else:
-                                # Document exists - emit DELETE with callback for ADD
-                                logger.info(f"STOMP EVENT: UPDATE for EXISTING document - emitting DELETE with callback for {file_path}")
-                                
-                                # Record this event BEFORE processing
-                                self._recent_events[node_id] = current_time
-                                
-                                # Create callback for ADD operation (to be called after DELETE completes)
-                                async def add_callback():
-                                    logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_path}")
+                                if self.backend:
                                     try:
                                         await self._process_via_backend(
                                             node_id=node_id,
                                             filename=filename,
                                             file_path=file_path
                                         )
-                                        logger.info(f"SUCCESS: UPDATE completed for {file_path}")
+                                        logger.info(f"SUCCESS: Processed CREATE for {file_path} via backend (full pipeline)")
                                     except Exception as e:
-                                        logger.error(f"ERROR: Failed to process ADD for {file_path}: {e}")
+                                        logger.error(f"ERROR: Failed to process CREATE for {file_path}: {e}")
+                                else:
+                                    # CocoIndex mode: yield CREATE
+                                    logger.info(f"STOMP EVENT: CREATE (new doc via UPDATE) for {file_path} (CocoIndex mode)")
+                                    yield ChangeEvent(change_type=ChangeType.CREATE, metadata=metadata, timestamp=None)
+                            else:
+                                # Document exists - emit DELETE then ADD
+                                logger.info(f"STOMP EVENT: UPDATE for EXISTING document for {file_path}")
                                 
-                                # Create DELETE event with callback
-                                delete_event = ChangeEvent(
-                                    metadata=metadata,
-                                    change_type=ChangeType.DELETE,
-                                    timestamp=None,
-                                    is_modify_delete=True,
-                                    modify_callback=add_callback
-                                )
-                                logger.info(f"STOMP EVENT CONVERTED: DELETE (for UPDATE) with callback for {file_path}")
-                                yield delete_event
+                                # Record this event BEFORE processing
+                                self._recent_events[node_id] = current_time
+                                
+                                if self.backend:
+                                    # Backend mode: DELETE event with ADD callback
+                                    async def add_callback():
+                                        logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_path}")
+                                        try:
+                                            await self._process_via_backend(
+                                                node_id=node_id,
+                                                filename=filename,
+                                                file_path=file_path
+                                            )
+                                            logger.info(f"SUCCESS: UPDATE completed for {file_path}")
+                                        except Exception as e:
+                                            logger.error(f"ERROR: Failed to process ADD for {file_path}: {e}")
+                                    delete_event = ChangeEvent(
+                                        metadata=metadata,
+                                        change_type=ChangeType.DELETE,
+                                        timestamp=None,
+                                        is_modify_delete=True,
+                                        modify_callback=add_callback
+                                    )
+                                    logger.info(f"STOMP EVENT CONVERTED: DELETE (for UPDATE) with callback for {file_path}")
+                                    yield delete_event
+                                else:
+                                    # CocoIndex mode: DELETE then CREATE
+                                    logger.info(f"STOMP EVENT: modify for {file_path} (CocoIndex mode): DELETE then CREATE")
+                                    yield ChangeEvent(change_type=ChangeType.DELETE, metadata=metadata, timestamp=None)
+                                    yield ChangeEvent(change_type=ChangeType.CREATE, metadata=metadata, timestamp=None)
                             
                             # Clean up old entries (older than 2x dedup window)
                             cutoff_time = current_time - (self._dedup_window_seconds * 2)

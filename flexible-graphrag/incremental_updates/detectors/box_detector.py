@@ -336,29 +336,34 @@ class BoxDetector(ChangeDetector):
                             else:
                                 # Already known - treat as UPDATE (DELETE + ADD)
                                 logger.info(f"Box EVENT: UPDATE (reported as CREATE) for {file_name}")
-                                
-                                async def add_callback():
-                                    logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_name}")
-                                    try:
-                                        await self._process_via_backend(file_id, file_name)
-                                        logger.info(f"SUCCESS: UPDATE completed for {file_name}")
-                                    except Exception as e:
-                                        logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
-                                
-                                delete_metadata = FileMetadata(
+                                _mod_meta = FileMetadata(
                                     source_type='box',
-                                    path=file_id,  # Use file_id as path for delete
+                                    path=file_id,
                                     ordinal=event.metadata.ordinal,
                                     extra={'file_id': file_id}
                                 )
-                                delete_event = ChangeEvent(
-                                    metadata=delete_metadata,
-                                    change_type=ChangeType.DELETE,
-                                    timestamp=event.timestamp,
-                                    is_modify_delete=True,
-                                    modify_callback=add_callback
-                                )
-                                yield delete_event
+                                if self.backend:
+                                    async def add_callback():
+                                        logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_name}")
+                                        try:
+                                            await self._process_via_backend(file_id, file_name)
+                                            logger.info(f"SUCCESS: UPDATE completed for {file_name}")
+                                        except Exception as e:
+                                            logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
+                                    yield ChangeEvent(
+                                        metadata=_mod_meta,
+                                        change_type=ChangeType.DELETE,
+                                        timestamp=event.timestamp,
+                                        is_modify_delete=True,
+                                        modify_callback=add_callback
+                                    )
+                                else:
+                                    # CocoIndex mode: DELETE then CREATE
+                                    # DELETE uses _mod_meta (key only); CREATE uses event.metadata
+                                    # so that file_name/path propagate correctly for download.
+                                    logger.info(f"Box EVENT: modify for {file_name} (CocoIndex mode): DELETE then CREATE")
+                                    yield ChangeEvent(metadata=_mod_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                    yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                         
                         elif event.change_type == ChangeType.UPDATE:
                             # UPDATE event - DELETE first, then ADD via callback
@@ -386,29 +391,34 @@ class BoxDetector(ChangeDetector):
                             else:
                                 # True UPDATE - DELETE + ADD
                                 logger.info(f"Box EVENT: UPDATE - emitting DELETE with callback")
-                                
-                                async def add_callback():
-                                    logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_name}")
-                                    try:
-                                        await self._process_via_backend(file_id, file_name)
-                                        logger.info(f"SUCCESS: UPDATE completed for {file_name}")
-                                    except Exception as e:
-                                        logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
-                                
-                                delete_metadata = FileMetadata(
+                                _upd_meta = FileMetadata(
                                     source_type='box',
-                                    path=file_id,  # Use file_id as path for delete
+                                    path=file_id,
                                     ordinal=event.metadata.ordinal,
                                     extra={'file_id': file_id}
                                 )
-                                delete_event = ChangeEvent(
-                                    metadata=delete_metadata,
-                                    change_type=ChangeType.DELETE,
-                                    timestamp=event.timestamp,
-                                    is_modify_delete=True,
-                                    modify_callback=add_callback
-                                )
-                                yield delete_event
+                                if self.backend:
+                                    async def add_callback():
+                                        logger.info(f"UPDATE: DELETE completed, now processing ADD for {file_name}")
+                                        try:
+                                            await self._process_via_backend(file_id, file_name)
+                                            logger.info(f"SUCCESS: UPDATE completed for {file_name}")
+                                        except Exception as e:
+                                            logger.error(f"ERROR: Failed to process ADD for {file_name}: {e}")
+                                    yield ChangeEvent(
+                                        metadata=_upd_meta,
+                                        change_type=ChangeType.DELETE,
+                                        timestamp=event.timestamp,
+                                        is_modify_delete=True,
+                                        modify_callback=add_callback
+                                    )
+                                else:
+                                    # CocoIndex mode: DELETE then CREATE
+                                    # DELETE uses _upd_meta (key only); CREATE uses event.metadata
+                                    # so that file_name/path propagate correctly for download.
+                                    logger.info(f"Box EVENT: modify for {file_name} (CocoIndex mode): DELETE then CREATE")
+                                    yield ChangeEvent(metadata=_upd_meta, change_type=ChangeType.DELETE, timestamp=event.timestamp)
+                                    yield ChangeEvent(metadata=event.metadata, change_type=ChangeType.CREATE, timestamp=event.timestamp)
                 
                 # Update stream position
                 self.stream_position = events.next_stream_position

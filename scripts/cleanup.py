@@ -58,47 +58,177 @@ def parse_postgres_url(url):
     }
 
 def cleanup_postgres():
-    """Clean PostgreSQL document_state and datasource_config tables"""
+    """Clean PostgreSQL incremental-state tables and CocoIndex monitoring tables."""
     print("\n=== PostgreSQL Cleanup ===")
 
-    # Skip when incremental updates are disabled — there is no state to clear.
-    incremental_enabled = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower()
-    if incremental_enabled not in ('true', '1', 'yes'):
-        print("  Skipped: ENABLE_INCREMENTAL_UPDATES is not enabled")
+    postgres_url = os.getenv('POSTGRES_INCREMENTAL_URL')
+    if not postgres_url:
+        print("  Skipped: POSTGRES_INCREMENTAL_URL not configured")
         return
 
     try:
         import psycopg2
-        
-        # Get connection params from POSTGRES_INCREMENTAL_URL
-        postgres_url = os.getenv('POSTGRES_INCREMENTAL_URL')
-        if not postgres_url:
-            print("  Skipped: POSTGRES_INCREMENTAL_URL not configured")
-            return
-        
+
         conn_params = parse_postgres_url(postgres_url)
         print(f"  Connecting to: {conn_params['host']}:{conn_params['port']}/{conn_params['database']}")
-        
+
         conn = psycopg2.connect(**conn_params)
         cursor = conn.cursor()
-        
-        # Delete from document_state
-        cursor.execute("DELETE FROM document_state;")
-        deleted_docs = cursor.rowcount
-        print(f"  Deleted {deleted_docs} rows from document_state")
-        
-        # Delete from datasource_config
-        cursor.execute("DELETE FROM datasource_config;")
-        deleted_sources = cursor.rowcount
-        print(f"  Deleted {deleted_sources} rows from datasource_config")
-        
+
+        incremental_enabled = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower() in ('true', '1', 'yes')
+        cocoindex_enabled = os.getenv('PIPELINE_BACKEND', '').lower() == 'cocoindex'
+
+        # document_state: incremental updates only.
+        if incremental_enabled:
+            cursor.execute("DELETE FROM document_state;")
+            print(f"  Deleted {cursor.rowcount} rows from document_state")
+        else:
+            print("  Skipped document_state (ENABLE_INCREMENTAL_UPDATES is not enabled)")
+
+        # datasource_config: written by incremental updates AND by CocoIndex bridge.
+        # Always clean when ENABLE_INCREMENTAL_UPDATES=true or PIPELINE_BACKEND=cocoindex.
+        if incremental_enabled or cocoindex_enabled:
+            cursor.execute("DELETE FROM datasource_config;")
+            print(f"  Deleted {cursor.rowcount} rows from datasource_config")
+        else:
+            print("  Skipped datasource_config (ENABLE_INCREMENTAL_UPDATES and PIPELINE_BACKEND=cocoindex both off)")
+
+        # CocoIndex monitoring tables: only when CocoIndex pipeline is active.
+        # Tables are created by cocoindex_integration/monitoring.py; may not exist
+        # if CocoIndex monitoring was never enabled.
+        if cocoindex_enabled:
+            for monitoring_table in ("cocoindex_ingest_log", "cocoindex_run_log"):
+                try:
+                    cursor.execute(
+                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s);",
+                        (monitoring_table,),
+                    )
+                    (exists,) = cursor.fetchone()
+                    if exists:
+                        cursor.execute(f"DELETE FROM {monitoring_table};")
+                        print(f"  Deleted {cursor.rowcount} rows from {monitoring_table}")
+                    else:
+                        print(f"  Skipped {monitoring_table} (table does not exist)")
+                except Exception as _me:
+                    print(f"  {monitoring_table} cleanup skipped: {_me}")
+        else:
+            print("  Skipped cocoindex_ingest_log / cocoindex_run_log (PIPELINE_BACKEND=cocoindex not set)")
+
         conn.commit()
         cursor.close()
         conn.close()
         print("  PostgreSQL cleanup: SUCCESS")
-        
+
     except Exception as e:
         print(f"  PostgreSQL cleanup: FAILED - {e}")
+
+def _cleanup_postgres_vector_store(config: dict) -> None:
+    """Clear pgvector rows — CocoIndex plain table, LlamaIndex data_* table, LangChain PGVector."""
+    try:
+        import psycopg2
+        from psycopg2 import sql as pg_sql
+
+        host = config.get('host', 'localhost')
+        port = config.get('port', 5433)
+        database = config.get('database', 'postgres')
+        username = config.get('username') or config.get('user', 'postgres')
+        password = config.get('password', '')
+        table_name = config.get(
+            'table_name',
+            config.get('collection_name', 'hybrid_search_vectors'),
+        )
+        pg_schema = str(config.get('schema', config.get('pg_schema', 'public')))
+
+        conn_str = config.get('connection_string')
+        if conn_str:
+            conn_str_pg2 = (
+                conn_str
+                .replace('postgresql+psycopg://', 'postgresql://')
+                .replace('postgresql+asyncpg://', 'postgresql://')
+            )
+            conn = psycopg2.connect(conn_str_pg2)
+        else:
+            conn = psycopg2.connect(
+                host=host, port=port, dbname=database,
+                user=username, password=password,
+            )
+
+        print(f"  Connected to PostgreSQL: {host}:{port}/{database}")
+        cursor = conn.cursor()
+        cleaned_any = False
+
+        def _truncate_if_exists(physical_table: str, label: str) -> None:
+            nonlocal cleaned_any
+            cursor.execute("SELECT to_regclass(%s)", (f"{pg_schema}.{physical_table}",))
+            reg = cursor.fetchone()
+            if not reg or not reg[0]:
+                print(f"  Table {pg_schema}.{physical_table} does not exist (already clean)")
+                return
+            cursor.execute(
+                pg_sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
+                    pg_sql.Identifier(pg_schema),
+                    pg_sql.Identifier(physical_table),
+                )
+            )
+            row_count = cursor.fetchone()[0]
+            cursor.execute(
+                pg_sql.SQL("TRUNCATE TABLE {}.{}").format(
+                    pg_sql.Identifier(pg_schema),
+                    pg_sql.Identifier(physical_table),
+                )
+            )
+            print(
+                f"  Truncated {label} table {pg_schema}.{physical_table} "
+                f"({row_count} row(s))"
+            )
+            cleaned_any = True
+
+        # CocoIndex: writes to table_name directly (e.g. hybrid_search_vectors).
+        _truncate_if_exists(table_name, "CocoIndex pgvector")
+        # LlamaIndex PGVectorStore: data_{table_name.lower()} (see PGVectorStore source).
+        _truncate_if_exists(f"data_{table_name.lower()}", "LlamaIndex PGVectorStore")
+
+        cursor.execute("SELECT to_regclass('public.langchain_pg_collection')")
+        if cursor.fetchone()[0]:
+            cursor.execute(
+                "SELECT uuid FROM langchain_pg_collection WHERE name = %s",
+                (table_name,),
+            )
+            row = cursor.fetchone()
+            if row:
+                collection_uuid = row[0]
+                cursor.execute(
+                    "DELETE FROM langchain_pg_embedding WHERE collection_id = %s",
+                    (collection_uuid,),
+                )
+                deleted = cursor.rowcount
+                cursor.execute(
+                    "DELETE FROM langchain_pg_collection WHERE uuid = %s",
+                    (collection_uuid,),
+                )
+                print(
+                    f"  Deleted {deleted} LangChain pg_embedding row(s) "
+                    f"for collection '{table_name}'"
+                )
+                cleaned_any = True
+            else:
+                print(
+                    f"  LangChain collection '{table_name}' not found "
+                    f"(already clean)"
+                )
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        if cleaned_any:
+            print("  Vector store cleanup: SUCCESS")
+        else:
+            print("  Vector store cleanup: nothing to delete (already clean)")
+
+    except Exception as e:
+        print(f"  pgvector cleanup failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 def cleanup_vector_store():
     """Delete vector store using LlamaIndex abstractions"""
@@ -111,40 +241,38 @@ def cleanup_vector_store():
         print("  Skipped: VECTOR_DB=none (no vector database configured)")
         return
 
+    # Per-store config takes precedence: {TYPE}_VECTOR_DB_CONFIG > VECTOR_DB_CONFIG
+    _vtype_upper = vector_db.upper()
+    vector_db_config_str = (
+        os.getenv(f"{_vtype_upper}_VECTOR_DB_CONFIG")
+        or os.getenv('VECTOR_DB_CONFIG')
+        or '{}'
+    )
+    config = json.loads(vector_db_config_str)
+
+    # Postgres: no factory/LlamaIndex import needed (CocoIndex uses its own table).
+    if vector_db.lower() == 'postgres':
+        _cleanup_postgres_vector_store(config)
+        return
+
     vector_store = None
     try:
-        from factories import DatabaseFactory
-        from config import VectorDBType
-        
-        # Per-store config takes precedence: {TYPE}_VECTOR_DB_CONFIG > VECTOR_DB_CONFIG
-        # This matches the precedence order in config.py.__init__
-        _vtype_upper = vector_db.upper()
-        vector_db_config_str = (
-            os.getenv(f"{_vtype_upper}_VECTOR_DB_CONFIG")
-            or os.getenv('VECTOR_DB_CONFIG')
-            or '{}'
-        )
-        config = json.loads(vector_db_config_str)
+        # NOTE: do NOT import factories/config here — `from factories import
+        # DatabaseFactory` pulls in the entire LlamaIndex framework (~12s) and is
+        # only needed by the LlamaIndex fallback path below.  Every direct-client
+        # branch (qdrant, opensearch, neo4j, milvus, weaviate, lancedb, pinecone,
+        # elasticsearch, chroma) returns before the fallback, so the import is
+        # deferred to just before it.
 
         # Get collection name from config
         collection_name = config.get('collection_name', 'hybrid_search_vector')
         print(f"  Target collection: {collection_name}")
-        
-        # Get embedding dimension (required for some stores)
-        embed_dim = 1536  # Default for OpenAI text-embedding-3-small
-        
-        # Convert string to enum (values are lowercase)
-        try:
-            db_type_enum = VectorDBType(vector_db.lower())
-        except ValueError:
-            print(f"  ERROR: Unknown vector DB type: {vector_db}")
-            return
-        
+
         # For Qdrant, use direct client for more reliable deletion
         if vector_db.lower() == 'qdrant':
             try:
                 from qdrant_client import QdrantClient
-                
+
                 # Get connection params
                 host = config.get('host', 'localhost')
                 port = config.get('port', 6333)
@@ -158,17 +286,17 @@ def cleanup_vector_store():
                 else:
                     client = QdrantClient(host=host, port=port, check_compatibility=False)
                     print(f"  Connected to Qdrant: {host}:{port}")
-                
+
                 # Check if collection exists
                 collections = client.get_collections().collections
                 collection_names = [c.name for c in collections]
-                
+
                 if collection_name in collection_names:
                     client.delete_collection(collection_name)
                     print(f"  Deleted collection: {collection_name}")
                 else:
                     print(f"  Collection '{collection_name}' does not exist (already clean)")
-                
+
                 client.close()
                 print(f"  Vector store cleanup: SUCCESS")
                 return
@@ -348,23 +476,33 @@ def cleanup_vector_store():
                 traceback.print_exc()
                 return
 
-        # LanceDB: drop the table
+        # LanceDB: delete the whole DB directory (avoids stale schema across
+        # CocoIndex point_id vs LlamaIndex id column layouts).
         elif vector_db.lower() == 'lancedb':
             try:
-                import lancedb
+                import shutil
+                from pathlib import Path
 
                 uri = config.get('uri', './lancedb')
                 table_name = config.get('table_name', 'hybrid_search')
+                db_path = Path(uri)
 
-                print(f"  Opening LanceDB at: {uri}")
-                db = lancedb.connect(uri)
+                if db_path.exists():
+                    # Prefer drop-table when possible, then wipe the folder so
+                    # leftover versions/manifests cannot recreate a mismatched schema.
+                    try:
+                        import lancedb
+                        db = lancedb.connect(uri)
+                        if table_name in db.table_names():
+                            db.drop_table(table_name)
+                            print(f"  Dropped table: {table_name}")
+                    except Exception as drop_exc:
+                        print(f"  LanceDB drop_table skipped: {drop_exc}")
 
-                table_names = db.table_names()
-                if table_name in table_names:
-                    db.drop_table(table_name)
-                    print(f"  Dropped table: {table_name}")
+                    shutil.rmtree(db_path, ignore_errors=True)
+                    print(f"  Deleted LanceDB directory: {db_path.resolve()}")
                 else:
-                    print(f"  Table '{table_name}' does not exist (already clean)")
+                    print(f"  LanceDB directory '{uri}' does not exist (already clean)")
 
                 print(f"  Vector store cleanup: SUCCESS")
                 return
@@ -409,73 +547,7 @@ def cleanup_vector_store():
                 traceback.print_exc()
                 return
 
-        # pgvector (postgres): drop the LangChain-postgres collection table
-        elif vector_db.lower() == 'postgres':
-            try:
-                import psycopg2
-
-                host = config.get('host', 'localhost')
-                port = config.get('port', 5433)
-                database = config.get('database', 'postgres')
-                username = config.get('username') or config.get('user', 'postgres')
-                password = config.get('password', '')
-                table_name = config.get('table_name', 'hybrid_search_vectors')
-
-                conn_str = config.get('connection_string')
-                if conn_str:
-                    # Strip asyncpg:// or postgresql+psycopg:// scheme for psycopg2
-                    conn_str_pg2 = (
-                        conn_str
-                        .replace('postgresql+psycopg://', 'postgresql://')
-                        .replace('postgresql+asyncpg://', 'postgresql://')
-                    )
-                    conn = psycopg2.connect(conn_str_pg2)
-                else:
-                    conn = psycopg2.connect(
-                        host=host, port=port, dbname=database,
-                        user=username, password=password
-                    )
-
-                print(f"  Connected to PostgreSQL: {host}:{port}/{database}")
-                cursor = conn.cursor()
-
-                # langchain-postgres (PGVector) creates two tables:
-                #   langchain_pg_collection — collection metadata
-                #   langchain_pg_embedding  — the actual vectors
-                # Deleting all rows from langchain_pg_embedding for this collection
-                # is sufficient for a clean slate without dropping schema.
-                cursor.execute(
-                    "SELECT uuid FROM langchain_pg_collection WHERE name = %s",
-                    (table_name,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    collection_uuid = row[0]
-                    cursor.execute(
-                        "DELETE FROM langchain_pg_embedding WHERE collection_id = %s",
-                        (collection_uuid,)
-                    )
-                    deleted = cursor.rowcount
-                    cursor.execute(
-                        "DELETE FROM langchain_pg_collection WHERE uuid = %s",
-                        (collection_uuid,)
-                    )
-                    conn.commit()
-                    print(f"  Deleted {deleted} embeddings and collection '{table_name}'")
-                else:
-                    print(f"  Collection '{table_name}' does not exist (already clean)")
-
-                cursor.close()
-                conn.close()
-                print(f"  Vector store cleanup: SUCCESS")
-                return
-
-            except Exception as e:
-                print(f"  pgvector cleanup failed: {e}")
-                import traceback
-                traceback.print_exc()
-                return
-
+        # pgvector handled above (before factory import)
         # Elasticsearch (when used as vector store)
         elif vector_db.lower() == 'elasticsearch':
             try:
@@ -538,6 +610,17 @@ def cleanup_vector_store():
                 print(f"  Falling back to LlamaIndex method...")
 
         # Fallback: Create vector store using factory and try LlamaIndex methods
+        # (heavy imports deferred to here — direct-client stores never reach this)
+        from factories import DatabaseFactory
+        from config import VectorDBType
+
+        embed_dim = 1536  # Default for OpenAI text-embedding-3-small
+        try:
+            db_type_enum = VectorDBType(vector_db.lower())
+        except ValueError:
+            print(f"  ERROR: Unknown vector DB type: {vector_db}")
+            return
+
         vector_store = DatabaseFactory.create_vector_store(
             db_type=db_type_enum,
             config=config
@@ -601,9 +684,11 @@ def cleanup_search_store():
 
     search_store = None
     try:
-        from factories import DatabaseFactory
-        from config import SearchDBType
-        
+        # NOTE: do NOT import factories/config here — it pulls in the entire
+        # LlamaIndex framework (~12s) and is only needed by the LlamaIndex
+        # fallback below.  Elasticsearch/OpenSearch use a direct client and
+        # return before the fallback, so the import is deferred.
+
         # Per-store config takes precedence: {TYPE}_SEARCH_DB_CONFIG > SEARCH_DB_CONFIG
         _stype_upper = search_db.upper()
         search_db_config_str = (
@@ -616,17 +701,7 @@ def cleanup_search_store():
         # Get index name from config
         index_name = config.get('index_name', 'hybrid_search_fulltext')
         print(f"  Target index: {index_name}")
-        
-        # Get embedding dimension (required for some stores)
-        embed_dim = 1536  # Default for OpenAI text-embedding-3-small
-        
-        # Convert string to enum (values are lowercase)
-        try:
-            db_type_enum = SearchDBType(search_db.lower())
-        except ValueError:
-            print(f"  ERROR: Unknown search DB type: {search_db}")
-            return
-        
+
         # For OpenSearch/Elasticsearch, use direct client for more reliable deletion
         if search_db.lower() in ['opensearch', 'elasticsearch']:
             try:
@@ -705,6 +780,17 @@ def cleanup_search_store():
                 print(f"  Falling back to LlamaIndex method...")
         
         # Fallback: Create search store using factory and try LlamaIndex methods
+        # (heavy imports deferred to here — direct-client stores never reach this)
+        from factories import DatabaseFactory
+        from config import SearchDBType
+
+        embed_dim = 1536  # Default for OpenAI text-embedding-3-small
+        try:
+            db_type_enum = SearchDBType(search_db.lower())
+        except ValueError:
+            print(f"  ERROR: Unknown search DB type: {search_db}")
+            return
+
         search_store = DatabaseFactory.create_search_store(
             db_type=db_type_enum,
             config=config
@@ -758,6 +844,44 @@ def cleanup_search_store():
             except Exception:
                 pass  # Ignore close errors
 
+
+def _parse_surreal_info_tables(info_result):
+    """Extract table names from SurrealDB ``INFO FOR DB`` (v2 ``tb`` / v3 ``tables``)."""
+    if not info_result:
+        return []
+
+    def _table_names_from_dict(d):
+        if not isinstance(d, dict):
+            return []
+        for key in ("tables", "tb"):
+            bucket = d.get(key)
+            if isinstance(bucket, dict):
+                return list(bucket.keys())
+        return []
+
+    def _collect_from_payload(payload):
+        names = []
+        if isinstance(payload, dict):
+            names.extend(_table_names_from_dict(payload))
+            nested = payload.get("result")
+            if nested is not None and nested is not payload:
+                names.extend(_collect_from_payload(nested))
+        elif isinstance(payload, list):
+            for item in payload:
+                names.extend(_collect_from_payload(item))
+        return names
+
+    return sorted(set(_collect_from_payload(info_result)))
+
+
+def _is_surreal_graph_table(name: str) -> bool:
+    """True for CocoIndex / LangChain graph node, edge, and MENTIONS tables."""
+    if name in ("MENTIONS", "mentions"):
+        return True
+    lowered = name.lower()
+    return lowered.startswith("graph_") or lowered.startswith("relation_")
+
+
 def cleanup_graph_store():
     """Clean graph store using LlamaIndex abstractions"""
     print("\n=== Graph Store Cleanup ===")
@@ -770,9 +894,10 @@ def cleanup_graph_store():
         return
 
     try:
-        from factories import DatabaseFactory
-        from config import PropertyGraphType
-        
+        # NOTE: factories/config import removed — the graph cleanup uses direct
+        # native clients for every store and never needs the LlamaIndex factory
+        # (importing it pulls in the whole framework, ~12s).
+
         # Parse graph DB config — per-store key takes precedence over generic fallback.
         # Pattern: {TYPE}_GRAPH_DB_CONFIG (e.g. NEPTUNE_GRAPH_DB_CONFIG, NEO4J_GRAPH_DB_CONFIG)
         per_store_key = f"{graph_db.upper()}_GRAPH_DB_CONFIG"
@@ -1143,18 +1268,19 @@ def cleanup_graph_store():
                 conn.use(namespace, database)
                 # List all tables and delete those belonging to the graph
                 info_result = conn.query_raw("INFO FOR DB")
-                tables = []
-                if info_result and isinstance(info_result, list):
-                    tb_dict = info_result[0].get("result", {}).get("tb", {}) if info_result[0] else {}
-                    tables = list(tb_dict.keys())
-                elif info_result and isinstance(info_result, dict):
-                    tables = list(info_result.get("result", {}).get("tb", {}).keys())
-                print(f"  Tables found: {tables}")
+                tables = _parse_surreal_info_tables(info_result)
+                if tables:
+                    preview = ", ".join(tables[:12])
+                    if len(tables) > 12:
+                        preview += ", ..."
+                    print(f"  Tables found ({len(tables)}): {preview}")
+                else:
+                    print("  Tables found: (none parsed from INFO FOR DB)")
                 deleted = 0
                 for tbl in tables:
-                    if tbl.startswith(("graph_", "relation_", "Graph_", "Relation_")):
-                        conn.query_raw(f"DELETE {tbl}")
-                        print(f"  Deleted all records from: {tbl}")
+                    if _is_surreal_graph_table(tbl):
+                        conn.query_raw(f"REMOVE TABLE IF EXISTS {tbl}")
+                        print(f"  Removed table: {tbl}")
                         deleted += 1
                 if deleted == 0:
                     print("  No graph tables found (already clean or nothing ingested yet)")
@@ -1461,6 +1587,62 @@ def cleanup_rdf_stores():
         traceback.print_exc()
 
 
+def cleanup_cocoindex():
+    """Clear CocoIndex LMDB state and the cocoindex-docs source directory.
+
+    Only runs when PIPELINE_BACKEND=cocoindex or when cocoindex.db / the
+    cocoindex-docs dir is detected alongside the app directory.  Safe to call
+    even when CocoIndex is not configured — it just prints 'nothing to do'.
+    """
+    print("\n=== CocoIndex Cleanup ===")
+    pipeline_backend = os.getenv("PIPELINE_BACKEND", "default").lower()
+
+    # Resolve paths relative to the app directory
+    cocoindex_db = _APP_DIR / os.getenv("COCOINDEX_DB", "cocoindex.db")
+    watch_dir_env = os.getenv("WATCH_DIR", "")
+    source_dir = Path(watch_dir_env) if watch_dir_env else (_APP_DIR / "cocoindex-docs")
+
+    if pipeline_backend != "cocoindex" and not cocoindex_db.exists() and not source_dir.exists():
+        print("  PIPELINE_BACKEND != cocoindex and no CocoIndex artefacts found — skipping.")
+        return
+
+    # 1. Delete LMDB state (the "what was already processed" memory)
+    if cocoindex_db.exists():
+        try:
+            if cocoindex_db.is_dir():
+                import shutil as _shutil
+                _shutil.rmtree(cocoindex_db)
+            else:
+                cocoindex_db.unlink()
+            print(f"  Deleted CocoIndex LMDB state: {cocoindex_db}")
+        except Exception as exc:
+            print(f"  WARNING: could not delete {cocoindex_db}: {exc}")
+    else:
+        print(f"  LMDB state not found (already clean): {cocoindex_db}")
+
+    # 2. Delete files inside the CocoIndex source directory.
+    # Deleting the db without clearing the source dir causes a full re-ingest
+    # on next startup — usually not what you want during cleanup.
+    if source_dir.exists() and source_dir.is_dir():
+        files = list(source_dir.iterdir())
+        if files:
+            try:
+                for f in files:
+                    if f.is_file():
+                        f.unlink()
+                    elif f.is_dir():
+                        import shutil as _shutil
+                        _shutil.rmtree(f)
+                print(f"  Cleared {len(files)} item(s) from CocoIndex source dir: {source_dir}")
+            except Exception as exc:
+                print(f"  WARNING: could not fully clear {source_dir}: {exc}")
+        else:
+            print(f"  CocoIndex source dir already empty: {source_dir}")
+    else:
+        print(f"  CocoIndex source dir not found (already clean): {source_dir}")
+
+
+
 def cleanup_log_files():
     """Delete all *.log files in the flexible-graphrag app directory"""
     print("\n=== Log File Cleanup ===")
@@ -1488,33 +1670,89 @@ def cleanup_log_files():
 
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="Flexible GraphRAG cleanup")
-    ap.add_argument(
-        "--matrix-clean", action="store_true",
-        help=(
-            "Non-interactive mode for matrix test runner: skips postgres "
-            "incremental-update tables and log files; cleans only the "
-            "vector/search/graph/RDF stores indicated by env vars."
+    ap = argparse.ArgumentParser(
+        description="Flexible GraphRAG cleanup",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Selective flags (can be combined):\n"
+            "  --graph     clean graph store only\n"
+            "  --vector    clean vector store only\n"
+            "  --search    clean search store only\n"
+            "  --rdf       clean RDF stores only\n"
+            "  --postgres  clean PostgreSQL incremental tables only\n"
+            "  --cocoindex clean CocoIndex LMDB state only\n"
+            "  --logs      clean log files only\n\n"
+            "With no selective flags the full interactive cleanup runs (all stores).\n"
+            "Selective flags skip the confirmation prompt."
         ),
     )
-    args, _ = ap.parse_known_args()
+    ap.add_argument("--matrix-clean", action="store_true",
+                    help="Non-interactive mode for matrix test runner.")
+    ap.add_argument("--graph",     action="store_true", help="Clean graph store only.")
+    ap.add_argument("--vector",    action="store_true", help="Clean vector store only.")
+    ap.add_argument("--search",    action="store_true", help="Clean search store only.")
+    ap.add_argument("--rdf",       action="store_true", help="Clean RDF stores only.")
+    ap.add_argument("--postgres",  action="store_true", help="Clean PostgreSQL incremental tables only.")
+    ap.add_argument("--cocoindex", action="store_true", help="Clean CocoIndex LMDB state only.")
+    ap.add_argument("--logs",      action="store_true", help="Clean log files only.")
+    ap.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt.")
+    args = ap.parse_args()
 
+    # --- matrix-clean mode (automated test runner) ---
     if args.matrix_clean:
-        # Targeted, non-interactive cleanup for automated matrix runs.
-        # When ENABLE_INCREMENTAL_UPDATES=true, also clear the incremental
-        # Postgres tables so datasource re-registration starts fresh each run.
+        import time as _t
         print("=== Matrix clean (vector / search / graph / RDF only) ===")
-        cleanup_vector_store()
-        cleanup_search_store()
-        cleanup_graph_store()
-        cleanup_rdf_stores()
-        incremental_enabled = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower()
-        if incremental_enabled in ('true', '1', 'yes'):
-            print("  ENABLE_INCREMENTAL_UPDATES=true: also clearing incremental Postgres tables...")
-            cleanup_postgres()
+        # datasource_config is cleaned when ENABLE_INCREMENTAL_UPDATES=true or pipeline_backend=cocoindex.
+        # document_state is cleaned inside cleanup_postgres() only when ENABLE_INCREMENTAL_UPDATES=true.
+        _steps = [
+            ("vector", cleanup_vector_store),
+            ("search", cleanup_search_store),
+            ("graph", cleanup_graph_store),
+            ("rdf", cleanup_rdf_stores),
+            ("cocoindex", cleanup_cocoindex),
+            ("postgres", cleanup_postgres),
+        ]
+        _timings: list = []
+        for _name, _fn in _steps:
+            _t0 = _t.perf_counter()
+            try:
+                _fn()
+            finally:
+                _timings.append((_name, _t.perf_counter() - _t0))
+        print("=== Matrix clean timings (s) ===")
+        for _name, _dt in sorted(_timings, key=lambda x: -x[1]):
+            print(f"  TIMING {_name:10s} {_dt:6.2f}s")
+        print(f"  TIMING {'TOTAL':10s} {sum(d for _, d in _timings):6.2f}s")
         print("=== Matrix clean done ===")
         return
 
+    # --- selective mode (one or more store flags) ---
+    _selective = [args.graph, args.vector, args.search, args.rdf,
+                  args.postgres, args.cocoindex, args.logs]
+    if any(_selective):
+        print("=" * 60)
+        print("Flexible GraphRAG - Selective Cleanup")
+        print("=" * 60)
+        if args.graph:
+            cleanup_graph_store()
+        if args.vector:
+            cleanup_vector_store()
+        if args.search:
+            cleanup_search_store()
+        if args.rdf:
+            cleanup_rdf_stores()
+        if args.postgres:
+            cleanup_postgres()
+        if args.cocoindex:
+            cleanup_cocoindex()
+        if args.logs:
+            cleanup_log_files()
+        print("\n" + "=" * 60)
+        print("Selective cleanup complete!")
+        print("=" * 60)
+        return
+
+    # --- full interactive cleanup ---
     print("=" * 60)
     print("Flexible GraphRAG - Database Cleanup Script")
     print("=" * 60)
@@ -1524,23 +1762,28 @@ def main():
     print("  - Search Store (all fulltext indexes)")
     print("  - Graph Store (all nodes, relationships, constraints, indexes)")
     print("  - RDF Stores (all triples in configured stores)")
+    print("  - CocoIndex LMDB state + source files (if PIPELINE_BACKEND=cocoindex)")
     print("  - Log files (all *.log in flexible-graphrag/)")
     print("\nThis action CANNOT be undone!")
-    
-    response = input("\nProceed with cleanup? [y/N] (default: N): ").strip().lower()
+
+    if args.yes:
+        response = "y"
+    else:
+        response = input("\nProceed with cleanup? [y/N] (default: N): ").strip().lower()
     if response not in ['y', 'yes']:
         print("\nCleanup cancelled.")
         sys.exit(0)
-    
+
     print("\nStarting cleanup...")
-    
+
     cleanup_postgres()
     cleanup_vector_store()
     cleanup_search_store()
     cleanup_graph_store()
     cleanup_rdf_stores()
+    cleanup_cocoindex()
     cleanup_log_files()
-    
+
     print("\n" + "=" * 60)
     print("Cleanup complete!")
     print("=" * 60)

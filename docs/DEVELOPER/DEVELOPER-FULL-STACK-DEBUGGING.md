@@ -52,7 +52,8 @@ LOG_LEVEL=WARNING # minimal
 
 ### React (Vite)
 
-- Dev server: `http://localhost:5173` (or `5174` depending on port availability)
+- Dev server: `http://localhost:5174` (set in `vite.config.ts`; Vite moves to the
+  next free port if it is taken)
 - VS Code uses the "Vite" debug configuration with `sourceMapPathOverrides`
 - Browser DevTools → Sources tab for breakpoints in TypeScript source
 

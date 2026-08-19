@@ -134,7 +134,10 @@ export default defineComponent({
   setup(props, { emit }) {
     const v: any = props.value || {};
     const defaultUrl = import.meta.env.VITE_ALFRESCO_BASE_URL || 'http://localhost:8080';
-    const defaultPath = import.meta.env.VITE_PROCESS_FOLDER_PATH || '/Shared/GraphRAG';
+    // VITE_ALFRESCO_PATH, not VITE_PROCESS_FOLDER_PATH: the latter is the LOCAL
+    // filesystem folder for Process Folder, so reusing it put a Windows path in
+    // an Alfresco repository field and this fallback never applied.
+    const defaultPath = import.meta.env.VITE_ALFRESCO_PATH || '/Shared/GraphRAG';
 
     const url = ref(v.url ?? defaultUrl);
     const authMethod = ref(v.auth_method ?? 'basic');

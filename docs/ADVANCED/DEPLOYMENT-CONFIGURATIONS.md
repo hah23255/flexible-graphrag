@@ -34,7 +34,7 @@ Flexible GraphRAG supports three deployment configurations, each optimized for d
 |                                                         |
 |  +---------------------------------------------+        |
 |  |  Frontend (Local Process)                   |        |
-|  |  Port: 3000/4200/5173                       |        |
+|  |  Port: 3000/4200/5174                       |        |
 |  |  • npm run dev                              |        |
 |  |  • Hot reload enabled                       |        |
 |  |  • Direct filesystem access                 |        |
@@ -115,7 +115,7 @@ uv run start.py
 cd flexible-graphrag-ui/frontend-react
 npm install
 npm run dev
-# Runs on http://localhost:5173
+# Runs on http://localhost:5174
 
 # Vue
 cd flexible-graphrag-ui/frontend-vue
@@ -166,7 +166,7 @@ npm start
 |                                                         |
 |  +---------------------------------------------+        |
 |  |  Frontend (Local Process)                   |        |
-|  |  Port: 3000/4200/5173                       |        |
+|  |  Port: 3000/4200/5174                       |        |
 |  |  • npm run dev                              |        |
 |  |  • Hot reload enabled                       |        |
 |  |  • Direct filesystem access                 |        |
@@ -550,12 +550,12 @@ docker-compose -f docker-compose.yaml -p flexible-graphrag down -v
 ### Port Mappings by Configuration
 
 **Standalone**:
-- Frontend: 3000/4200/5173 (local process)
+- Frontend: 3000/4200/5174 (local process)
 - Backend: 8000 (local process)
 - Databases: 6333, 7687, 9200, etc. (local or Docker)
 
 **Hybrid (Databases in Docker)**:
-- Frontend: 3000/4200/5173 (local process)
+- Frontend: 3000/4200/5174 (local process)
 - Backend: 8000 (local process)
 - Databases: 6333, 7687, 9200, etc. (Docker containers, exposed to host)
 

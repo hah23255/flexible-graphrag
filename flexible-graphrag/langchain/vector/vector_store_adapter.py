@@ -6,8 +6,9 @@ LlamaIndex implementation lives in :mod:`llamaindex.vector.vector_store_factory`
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+from typing import Any, List
 
 from adapters.vector.vector_store_adapter import VectorStoreAdapter
 
@@ -41,6 +42,30 @@ class LangChainVectorAdapter(VectorStoreAdapter):
 
     def is_langchain(self) -> bool:
         return True
+
+    async def insert_nodes(self, nodes: List[Any]) -> None:
+        """Insert pre-embedded LlamaIndex TextNodes (LI pipeline path only).
+
+        Called by the *non*-CocoIndex ingestion pipeline (``ingest/update_vector.py``)
+        when ``VECTOR_BACKEND=langchain``.  The CocoIndex pipeline instead uses the
+        connector-layer writer
+        (``cocoindex_integration.connectors.flexible._vector_writer``) so no LI
+        TextNode is created on the LC path.
+        """
+        from langchain.utils import llamaindex_nodes_to_langchain_docs  # local import — langchain optional dep
+        lc_docs = llamaindex_nodes_to_langchain_docs(nodes)
+        store = self._store
+        store_name = type(store).__name__
+        aadd = getattr(store, "aadd_documents", None)
+        add = getattr(store, "add_documents", None)
+        if aadd is not None:
+            await aadd(lc_docs)
+            logger.info("insert_nodes: added %d docs to %s via aadd_documents", len(lc_docs), store_name)
+        elif add is not None:
+            await asyncio.to_thread(add, lc_docs)
+            logger.info("insert_nodes: added %d docs to %s via add_documents", len(lc_docs), store_name)
+        else:
+            logger.warning("insert_nodes: %s has no add_documents — skipped", store_name)
 
     # ------------------------------------------------------------------
     # Helpers for subclasses that need to auto-create their backing store

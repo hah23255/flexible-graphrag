@@ -5,7 +5,7 @@
 | Frontend | URL |
 |---|---|
 | Backend API | http://localhost:8000 |
-| React | http://localhost:5173 (`npm run dev`) |
+| React | http://localhost:5174 (`npm run dev`) |
 | Angular | http://localhost:4200 (`npm start`) |
 | Vue | http://localhost:3000 (`npm run dev`) |
 

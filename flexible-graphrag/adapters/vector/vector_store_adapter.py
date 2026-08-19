@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,20 @@ class VectorStoreAdapter(ABC):
     @abstractmethod
     def is_langchain(self) -> bool:
         """Return True if this adapter wraps a LangChain store."""
+
+    @abstractmethod
+    async def insert_nodes(self, nodes: List[Any]) -> None:
+        """Insert LlamaIndex TextNode objects into the vector store.
+
+        Used by the *non*-CocoIndex ingestion pipeline (``ingest/update_vector.py``).
+        The caller is responsible for setting ``node.relationships`` (SOURCE) so that
+        ``node.ref_doc_id`` resolves to a stable document ID for later deletion.
+
+        The CocoIndex pipeline's row-ingestion contract (pre-embedded VectorRow
+        dicts) lives in the connector layer
+        (``cocoindex_integration.connectors.flexible._vector_writer``) so this
+        adapter interface stays framework-neutral.
+        """
 
 
 def build_vector_adapter(

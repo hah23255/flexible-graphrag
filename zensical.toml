@@ -34,8 +34,8 @@ nav = [
     {"Python Backend"            = "GETTING-STARTED/PYTHON-BACKEND.md"},
     {"Frontend Setup"            = "GETTING-STARTED/FRONTEND-SETUP.md"},
     {"Docker Deployment"         = "GETTING-STARTED/DOCKER-DEPLOYMENT.md"},
-    {"Environment Configuration" = "GETTING-STARTED/ENVIRONMENT-CONFIGURATION.md"},
     {"Langflow Integration"      = "GETTING-STARTED/LANGFLOW-INTEGRATION.md"}
+    {"CocoIndex Integration"     = "GETTING-STARTED/COCOINDEX-INTEGRATION.md"}
   ]},
   {"Configuration" = [
     {"Database Configuration" = [
@@ -123,6 +123,7 @@ nav = [
     {"Testing & Cleanup"    = "DEVELOPER/DEVELOPER-TESTING-CLEANUP.md"},
     {"Full-Stack Debugging" = "DEVELOPER/DEVELOPER-FULL-STACK-DEBUGGING.md"},
     {"Documentation System" = "DEVELOPER/DEVELOPER-DOCS-SYSTEM.md"},
+    {"CocoIndex Developer"  = "DEVELOPER/DEVELOPER-COCOINDEX.md"},
     {"Observability" = [
       {"Overview"        = "DEVELOPER/OBSERVABILITY/OBSERVABILITY.md"},
       {"Installation"    = "DEVELOPER/OBSERVABILITY/INSTALLATION-OBSERVABILITY.md"},

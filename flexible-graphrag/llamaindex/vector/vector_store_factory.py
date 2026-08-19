@@ -9,7 +9,8 @@ The LangChain implementation lives in :mod:`langchain.vector.vector_store_adapte
 """
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+import asyncio
+from typing import Any, Dict, List, Optional
 import logging
 
 from config import VectorDBType, LLMProvider
@@ -52,6 +53,40 @@ class LlamaIndexVectorAdapter(VectorStoreAdapter):
 
     def is_langchain(self) -> bool:
         return False
+
+    async def insert_nodes(self, nodes: List[Any]) -> None:
+        """Insert pre-embedded LlamaIndex TextNodes into the vector store.
+
+        Mirrors the dispatch logic in ``ingest/update_vector.py::update_vector()``:
+        - ElasticsearchStore / WeaviateVectorStore: use ``async_add`` directly
+          (they use aiohttp internally; calling from a thread would bind the session
+          to the wrong event loop).
+        - Everything else: ``store.add(nodes)`` in a thread-pool executor.
+
+        The nodes must already have ``node.embedding`` set and their SOURCE
+        relationship populated so ``node.ref_doc_id`` resolves to the stable
+        document ID used for deletion.
+        """
+        store = self._store
+        store_name = type(store).__name__
+        if store_name in ("ElasticsearchStore", "WeaviateVectorStore") and hasattr(store, "async_add"):
+            if store_name == "WeaviateVectorStore":
+                # Only auto-connect a real async client.  Sync-backed stores
+                # (LlamaIndexWeaviateAdapter) patch async_add → to_thread(add)
+                # and must not have connect() awaited on the sync client.
+                aclient = getattr(store, "_aclient", None)
+                if aclient is not None:
+                    try:
+                        connected = bool(getattr(aclient, "is_connected", lambda: False)())
+                    except Exception:
+                        connected = False
+                    if not connected:
+                        await aclient.connect()
+            node_ids = await store.async_add(nodes)
+            logger.info("insert_nodes: added %d nodes to %s via async_add", len(node_ids), store_name)
+        else:
+            await asyncio.to_thread(store.add, nodes)
+            logger.info("insert_nodes: added %d nodes to %s", len(nodes), store_name)
 
     def __getattr__(self, name: str):
         """Delegate unknown attribute access to the wrapped LlamaIndex store."""

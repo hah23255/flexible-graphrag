@@ -19,6 +19,7 @@ Flexible GraphRAG is a multi-layered document intelligence platform that support
 - **Hybrid search**: Vector similarity, full-text search (BM25/Elasticsearch/OpenSearch), and graph traversal (GraphRAG)
 - **Multiple interfaces**: REST API, MCP protocol for AI assistants, and web UIs (Angular, React, Vue)
 - **Flexible databases**: 10 vector stores, 15 property graph databases, 3 RDF graph stores, 3 search engines, 13 LLM providers
+- **Three ingest pipelines**, one at a time: the default LlamaIndex/LangChain pipeline, the CocoIndex pipeline, or Langflow visual flows. Both the default and CocoIndex pipelines keep a corpus up to date incrementally — the default through [auto-sync incremental updates](../DATA-SOURCES/INCREMENTAL-UPDATE-AUTO-SYNC/README.md), CocoIndex through its own memoization and target-state reconciliation
 
 ```
 +--------------------------------------------------------------------------+
@@ -38,6 +39,18 @@ Flexible GraphRAG is a multi-layered document intelligence platform that support
 |                   |   (main.py)       |                                  |
 |                   +--------+----------+                                  |
 |                            |                                             |
+|         +------------------+------------------+                          |
+|         |                  |                  |                          |
+|  +------v-------+  +-------v------+  +--------v-----+                    |
+|  |   Default    |  |  CocoIndex   |  |   Langflow   |                    |
+|  |   pipeline   |  |   pipeline   |  |    flows     |                    |
+|  |              |  |              |  |              |                    |
+|  | LlamaIndex / |  | PIPELINE_    |  | ENABLE_      |                    |
+|  |  LangChain   |  |  BACKEND=    |  |  LANGFLOW_   |                    |
+|  |              |  |  cocoindex   |  |  FLOWS=true  |                    |
+|  +--------------+  +--------------+  +--------------+                    |
+|          choose one - mutually exclusive at startup                      |
+|                            |                                             |
 |  +------------------------------------------------------+                |
 |  |       MCP Server (flexible-graphrag-mcp/)            |                |
 |  |  +------------------------------------------------+  |                |
@@ -46,7 +59,7 @@ Flexible GraphRAG is a multi-layered document intelligence platform that support
 |  |  |  - Lightweight (4 dependencies)                |  |                |
 |  |  |  - Works with Claude Desktop & MCP Inspector   |  |                |
 |  |  +------------------------------------------------+  |                |
-|  +------------------------------------------------------+                | 
+|  +------------------------------------------------------+                |
 |                                                                          |
 +--------------------------------------------------------------------------+
 ```
@@ -481,7 +494,7 @@ SEARCH_DB=elasticsearch        # Any search engine
 |                                                              |
 |  React Frontend (TypeScript + Material-UI)                   |
 |  +----------------------------------------------------+      |
-|  | • Port: 5173 (dev), 8070/ui/react/ (Docker)        |      |
+|  | • Port: 5174 (dev), 8070/ui/react/ (Docker)        |      |
 |  | • Framework: React 18+ with Hooks                  |      |
 |  | • UI Library: Material-UI (MUI)                    |      |
 |  | • State: React Hooks (useState, useEffect)         |      |
@@ -549,7 +562,7 @@ Flexible GraphRAG supports three deployment configurations optimized for differe
 |  Frontend (Local) → Backend (Local) → Databases (Local) |
 |                                                         |
 |  Ports:                                                 |
-|  • Frontend: 3000/4200/5173                             |
+|  • Frontend: 3000/4200/5174                             |
 |  • Backend: 8000                                        |
 |  • Neo4j: 7687, Qdrant: 6333, Elasticsearch: 9200       |
 |                                                         |
@@ -587,7 +600,7 @@ npm run dev
 |  Frontend (Local) → Backend (Local) → Databases (Docker)|
 |                                                         |
 |  Ports:                                                 |
-|  • Frontend: 3000/4200/5173                             |
+|  • Frontend: 3000/4200/5174                             |
 |  • Backend: 8000                                        |
 |  • Databases: 7687, 6333, 9200, etc. (Docker exposed)   |
 |                                                         |

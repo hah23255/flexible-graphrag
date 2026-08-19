@@ -106,7 +106,12 @@ The `Flexible: *` nodes speak **LlamaIndex** `Data`/documents; stock Langflow no
 
 ## Regenerating the bundled flow JSONs
 
-Regeneration is only needed when you **change internal flexible-graphrag code** — the flow JSONs *embed* the component code, so an edit to a component (or the pipeline it calls) isn't picked up in flow mode until the flows are regenerated. Normal use never needs it: the app drives the existing flows over the Langflow **REST API**, passing per-run config as the flow's `input_value`.
+Regeneration is needed in two situations:
+
+- **You change flexible-graphrag code** — the flow JSONs *embed* the component source, so an edit to a component file (or any pipeline function it calls) isn't picked up in flow mode until the flows are regenerated.
+- **You upgrade Langflow** — the flow JSON schema can change between Langflow minor versions (node/edge structure, template fields). The bundled JSONs were generated against a specific version; if Langflow rejects or mis-renders a flow after an upgrade, regenerate to get the current-version format.
+
+Normal use never needs it: the app drives the existing flows over the Langflow **REST API**, passing per-run config as the flow's `input_value`.
 
 The **four** flows in `flows/` are generated from the **real registered component templates** (via `lfx.custom.utils.build_custom_component_template`), then assembled into nodes + edges:
 
@@ -123,7 +128,7 @@ Regenerate all four from the live components:
 python flexible-graphrag/langflow_components/generate_flows.py   # run in the Langflow venv
 ```
 
-It validates each with `lfx.graph.graph.base.Graph.from_payload(data).prepare()` before writing. In app-driven flow mode the backend **deletes and re-uploads** the flow matching the JSON's `name` on every startup (see [Langflow Integration](../GETTING-STARTED/LANGFLOW-INTEGRATION.md#customizing-the-flows)), so regenerate rather than hand-editing the running flow in the UI. **Re-run the generator whenever you edit a component** (its code is embedded in the flow JSON), then restart the backend.
+It validates each with `lfx.graph.graph.base.Graph.from_payload(data).prepare()` before writing. In app-driven flow mode the backend **deletes and re-uploads** the flow matching the JSON's `name` on every startup (see [Langflow Integration](../GETTING-STARTED/LANGFLOW-INTEGRATION.md#customizing-the-flows)), so regenerate rather than hand-editing the running flow in the UI. **Re-run the generator whenever you edit a component or upgrade Langflow** (its code and the JSON schema are both embedded in the flow JSON), then restart the backend.
 
 ---
 

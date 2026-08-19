@@ -13,8 +13,21 @@ if sys.version_info >= (3, 14):
     except ImportError:
         pass
 
+# Use the OS certificate store for TLS verification when available. Antivirus /
+# corporate TLS-inspection proxies (e.g. Norton Web Shield) re-sign every HTTPS
+# connection with a root that Windows trusts but certifi does not, which makes
+# every outbound call fail with CERTIFICATE_VERIFY_FAILED. Opt out with
+# USE_SYSTEM_CERT_STORE=false.
+if os.getenv("USE_SYSTEM_CERT_STORE", "true").lower() != "false":
+    try:
+        import truststore as _truststore
+        _truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import monotonic as _monotonic
 from dotenv import load_dotenv
 
 # Load .env FIRST before any other imports (especially backend.py) so environment vars are available
@@ -230,33 +243,38 @@ def _apply_python314_patches() -> None:
         import httpcore._async.connection_pool as _hc_pool
         import httpcore._async.http11 as _hc_http11
 
-        class _SafeAsyncShieldCancellation:
-            def __init__(self) -> None:
-                self._active = asyncio.current_task() is not None
-                if self._active:
-                    self._orig = _httpcore_sync._orig_AsyncShieldCancellation()
+        # If cocoindex_integration._compat already patched AsyncShieldCancellation
+        # (CLI mode: _compat runs before main.py), skip to avoid double-patch
+        # mutual-recursion: each wrapper's __init__ would call the other's class
+        # causing a RecursionError 540 frames deep.
+        if not hasattr(_httpcore_sync, "_orig_AsyncShieldCancellation"):
+            class _SafeAsyncShieldCancellation:
+                def __init__(self) -> None:
+                    self._active = asyncio.current_task() is not None
+                    if self._active:
+                        self._orig = _httpcore_sync._orig_AsyncShieldCancellation()
 
-            def __enter__(self):
-                if self._active:
-                    self._orig.__enter__()
-                return self
+                def __enter__(self):
+                    if self._active:
+                        self._orig.__enter__()
+                    return self
 
-            def __exit__(self, *args):
-                if self._active:
-                    return self._orig.__exit__(*args)
-                return False
+                def __exit__(self, *args):
+                    if self._active:
+                        return self._orig.__exit__(*args)
+                    return False
 
-        # Save original so the wrapper above can instantiate it
-        _httpcore_sync._orig_AsyncShieldCancellation = _httpcore_sync.AsyncShieldCancellation
-        _httpcore_sync.AsyncShieldCancellation = _SafeAsyncShieldCancellation
-        # Also update the references already cached by the async sub-modules
-        _hc_pool.AsyncShieldCancellation = _SafeAsyncShieldCancellation
-        _hc_http11.AsyncShieldCancellation = _SafeAsyncShieldCancellation
-        try:
-            import httpcore._async.http2 as _hc_http2
-            _hc_http2.AsyncShieldCancellation = _SafeAsyncShieldCancellation
-        except Exception:
-            pass
+            # Save original so the wrapper above can instantiate it
+            _httpcore_sync._orig_AsyncShieldCancellation = _httpcore_sync.AsyncShieldCancellation
+            _httpcore_sync.AsyncShieldCancellation = _SafeAsyncShieldCancellation
+            # Also update the references already cached by the async sub-modules
+            _hc_pool.AsyncShieldCancellation = _SafeAsyncShieldCancellation
+            _hc_http11.AsyncShieldCancellation = _SafeAsyncShieldCancellation
+            try:
+                import httpcore._async.http2 as _hc_http2
+                _hc_http2.AsyncShieldCancellation = _SafeAsyncShieldCancellation
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -344,6 +362,24 @@ def _apply_python314_patches() -> None:
 
 _apply_python314_patches()
 
+# When the CocoIndex pipeline is active, apply the full CocoIndex async
+# compatibility patch suite (includes neo4j AsyncCooperativeRLock,
+# falkordb.asyncio / surrealdb.AsyncSurreal task-context guards, etc.) that
+# are needed for Python-backed native connectors running under CocoIndex's
+# Rust dispatcher where ``asyncio.current_task()`` returns ``None``.
+#
+# _compat.apply_async_patches() is idempotent (guarded by _PATCHED flag +
+# per-patch guards) so it is safe to call even though _apply_python314_patches()
+# already applied the anyio/httpcore/sniffio/nest_asyncio/wait_for subset.
+if os.getenv("PIPELINE_BACKEND", "default").lower() == "cocoindex":
+    try:
+        from cocoindex_integration._compat import (  # type: ignore[import-untyped]
+            apply_async_patches as _apply_coco_compat_patches,
+        )
+        _apply_coco_compat_patches()
+    except Exception:
+        pass
+
 
 def _patch_ssl_context() -> None:
     """Patch ssl.create_default_context so all Python versions work on Windows.
@@ -363,24 +399,15 @@ def _patch_ssl_context() -> None:
     Fix: wrap create_default_context to clear VERIFY_X509_STRICT and also
     call load_default_certs() so the Windows cert store supplements certifi.
     """
+    # Implementation lives in ssl_compat so the Langflow components and the
+    # examples/ scripts share it instead of each carrying a copy.
     try:
-        import ssl as _ssl
-        _orig_create_default_context = _ssl.create_default_context
+        from ssl_compat import patch_ssl_context as _patch  # noqa: PLC0415
 
-        def _patched_create_default_context(*args, **kwargs):
-            ctx = _orig_create_default_context(*args, **kwargs)
-            if hasattr(_ssl, "VERIFY_X509_STRICT"):
-                ctx.verify_flags &= ~_ssl.VERIFY_X509_STRICT
-            try:
-                ctx.load_default_certs(_ssl.Purpose.SERVER_AUTH)
-            except Exception:
-                pass
-            return ctx
-
-        _ssl.create_default_context = _patched_create_default_context
-        logger.info(
-            "SSL patch applied: cleared VERIFY_X509_STRICT, added OS cert store"
-        )
+        if _patch():
+            logger.info(
+                "SSL patch applied: cleared VERIFY_X509_STRICT, added OS cert store"
+            )
     except Exception:
         pass
 
@@ -431,7 +458,19 @@ _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
 
 # Force logging to work properly with uvicorn
-file_handler = logging.FileHandler(log_filename)
+#
+# encoding is load-bearing on Windows.  Without it FileHandler uses the locale
+# encoding (cp1252 here), which cannot represent characters this codebase logs
+# routinely — "→" in the backend-resolution messages, "—" in several warnings —
+# so writing one raises
+#
+#     UnicodeEncodeError: 'charmap' codec can't encode character '→'
+#
+# and the record is mangled or lost exactly when something has gone wrong and you
+# most need to read it (the ontology "could not load … — <urlopen error>"
+# warning was landing that way).  Matches setup_cli_logging() in
+# cocoindex_integration/_compat.py, which already opens its log file as UTF-8.
+file_handler = logging.FileHandler(log_filename, encoding="utf-8")
 file_handler.setLevel(_log_level)
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(_log_level)
@@ -456,6 +495,13 @@ logging.getLogger("azure.storage.blob").setLevel(logging.WARNING)
 logging.getLogger("azure.storage.blob.changefeed").setLevel(logging.WARNING)
 
 # Suppress Neo4j driver connection-pool and I/O noise at DEBUG level
+# kafka-python logs every fetch/heartbeat/offset-commit at DEBUG; the Nuxeo
+# audit consumer polls continuously, which swamps the log at LOG_LEVEL=DEBUG.
+for _kafka_logger in (
+    "kafka", "kafka.client", "kafka.conn", "kafka.consumer",
+    "kafka.coordinator", "kafka.protocol", "kafka.cluster",
+):
+    logging.getLogger(_kafka_logger).setLevel(logging.WARNING)
 logging.getLogger("neo4j").setLevel(logging.WARNING)
 logging.getLogger("neo4j.io").setLevel(logging.WARNING)
 logging.getLogger("neo4j.pool").setLevel(logging.WARNING)
@@ -484,16 +530,242 @@ logger.info(f"Starting application with log file: {log_filename}")
 file_handler.flush()
 console_handler.flush()
 
-# Global references for incremental system
+# Global references for incremental system and CocoIndex bridge
 incremental_manager = None
+cocoindex_bridge = None   # CocoIndexBridge instance (set when PIPELINE_BACKEND=cocoindex)
+
+
+def _log_cocoindex_pipeline_config() -> None:
+    """Emit the structured CocoIndex LLM / DB / framework config block to the log."""
+    try:
+        from cocoindex_integration.pipeline.env_config import load_config_from_env as _lcfe  # noqa: PLC0415
+        from cocoindex_integration.pipeline.flexible_app import (  # noqa: PLC0415
+            _resolve_pipeline_config as _rpc,
+            log_pipeline_config as _lpc,
+        )
+        _raw = _lcfe()
+        _lpc(_raw, _rpc(_raw))
+    except Exception as _log_exc:
+        logger.debug("CocoIndex config log failed: %s", _log_exc)
+
+
+async def _ensure_cocoindex_bridge(fg_config=None) -> bool:
+    """Start the CocoIndex bridge on first use when PIPELINE_BACKEND=cocoindex.
+
+    When DATA_SOURCE is empty at startup the bridge is deferred until the user
+    submits a source through the UI (or another ingest call).
+    """
+    global cocoindex_bridge
+    if os.getenv("PIPELINE_BACKEND", "default").lower() != "cocoindex":
+        return False
+    if cocoindex_bridge is not None:
+        return True
+    try:
+        from cocoindex_integration.bridge import CocoIndexBridge
+        cocoindex_bridge = CocoIndexBridge(fg_config=fg_config)
+        await cocoindex_bridge.start()
+        logger.info(
+            "SUCCESS: CocoIndex pipeline bridge started (lazy) — "
+            "source=%s  watch_dir=%s  db=%s",
+            cocoindex_bridge._data_source or "(UI sources only)",
+            cocoindex_bridge._source_dir,
+            cocoindex_bridge._db_path,
+        )
+        _log_cocoindex_pipeline_config()
+        return True
+    except Exception as _ce:
+        logger.error("ERROR: Failed to start CocoIndex bridge (lazy): %s", _ce)
+        import traceback as _tb
+        _tb.print_exc()
+        cocoindex_bridge = None
+        return False
+
+# ---------------------------------------------------------------------------
+# Startup helpers — called from lifespan()
+# ---------------------------------------------------------------------------
+
+async def _startup_cocoindex_bridge(backend) -> None:
+    """Start CocoIndex bridge at app startup when PIPELINE_BACKEND=cocoindex.
+
+    Sets the module-level ``cocoindex_bridge`` global on success.
+    Defers start when DATA_SOURCE is empty (bridge starts lazily on first UI ingest).
+    """
+    global cocoindex_bridge
+    _pipeline_backend = os.getenv("PIPELINE_BACKEND", "default").lower()
+    if "DATA_SOURCE" in os.environ:
+        _startup_data_source = os.getenv("DATA_SOURCE", "").strip()
+        if _startup_data_source.lower() == "none":
+            _startup_data_source = ""
+    else:
+        _startup_data_source = "filesystem"
+
+    if _pipeline_backend != "cocoindex":
+        logger.info(
+            "INFO: Using per-stage pipeline config (PIPELINE_BACKEND=%s; "
+            "set PIPELINE_BACKEND=cocoindex to enable CocoIndex memoized pipeline)",
+            _pipeline_backend,
+        )
+        return
+
+    if not _startup_data_source:
+        logger.info(
+            "CocoIndex pipeline configured (PIPELINE_BACKEND=cocoindex) but "
+            "DATA_SOURCE is empty — bridge deferred until first UI ingest. "
+            "Set DATA_SOURCE=filesystem to auto-start a primary source at boot."
+        )
+        return
+
+    try:
+        from cocoindex_integration.bridge import CocoIndexBridge
+        cocoindex_bridge = CocoIndexBridge(fg_config=getattr(backend.system, "config", None))
+        await cocoindex_bridge.start()
+        logger.info(
+            "SUCCESS: CocoIndex pipeline bridge started — "
+            "source=%s  watch_dir=%s  db=%s",
+            cocoindex_bridge._data_source,
+            cocoindex_bridge._source_dir,
+            cocoindex_bridge._db_path,
+        )
+        _log_cocoindex_pipeline_config()
+    except Exception as _ce:
+        logger.error("ERROR: Failed to start CocoIndex bridge: %s", _ce)
+        import traceback as _tb
+        _tb.print_exc()
+        cocoindex_bridge = None
+
+
+async def _startup_langflow(backend) -> None:
+    """Bind Langflow flows at startup when ENABLE_LANGFLOW_FLOWS=true (best-effort).
+
+    Mutually exclusive with ``PIPELINE_BACKEND=cocoindex``: CocoIndex is not wired
+    into Langflow flows.  When CocoIndex is active, force-disable flow mode so
+    ingest/search/QA do not split across incompatible orchestrators.
+    """
+    pipeline_backend = os.getenv("PIPELINE_BACKEND", "default").lower()
+    if pipeline_backend == "cocoindex":
+        if backend.settings.enable_langflow_flows:
+            logger.warning(
+                "ENABLE_LANGFLOW_FLOWS=true is ignored when "
+                "PIPELINE_BACKEND=cocoindex (mutually exclusive — CocoIndex is "
+                "not supported inside Langflow flows). Flow mode disabled for "
+                "this process. Set ENABLE_LANGFLOW_FLOWS=false to silence this "
+                "warning."
+            )
+            backend.settings.enable_langflow_flows = False
+        else:
+            logger.info(
+                "Langflow flow mode disabled "
+                "(PIPELINE_BACKEND=cocoindex — CocoIndex owns ingest)"
+            )
+        return
+
+    if backend.settings.enable_langflow_flows:
+        logger.info(
+            "Langflow flow mode ENABLED — ingest/query run via Langflow flows at %s",
+            backend.settings.langflow_url,
+        )
+        try:
+            fsvc = await backend._get_flow_service()
+            logger.info(
+                "Langflow flows bound — ingest_flow_id=%s, query_flow_id=%s",
+                fsvc.ingestion_flow_id, fsvc.query_flow_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not bind Langflow flows at startup (will retry on first request): %s", e
+            )
+    else:
+        logger.info("Langflow flow mode disabled (ENABLE_LANGFLOW_FLOWS not true) — using direct pipeline")
+
+
+async def _startup_incremental_manager(backend) -> None:
+    """Initialize incremental update system when ENABLE_INCREMENTAL_UPDATES=true.
+
+    Sets the module-level ``incremental_manager`` global on success.
+
+    Mutually exclusive with ``PIPELINE_BACKEND=cocoindex``.  The FG incremental
+    engine ingests via ``hybrid_system`` (default LI/LC pipeline), not CocoIndex.
+    If both were started, UI/REST could use CocoIndex while detectors re-ingest
+    through the default pipeline — a bad state.  When CocoIndex is active, skip
+    this orchestrator even if ``ENABLE_INCREMENTAL_UPDATES=true``.
+    """
+    global incremental_manager
+    enable_incremental = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower() == 'true'
+    postgres_url = os.getenv('POSTGRES_INCREMENTAL_URL')
+    pipeline_backend = os.getenv("PIPELINE_BACKEND", "default").lower()
+
+    if pipeline_backend == "cocoindex":
+        if enable_incremental:
+            logger.warning(
+                "ENABLE_INCREMENTAL_UPDATES=true is ignored when "
+                "PIPELINE_BACKEND=cocoindex (mutually exclusive). The FG "
+                "incremental engine uses the default hybrid_system pipeline, "
+                "not CocoIndex — both enabled is a bad state. document_state "
+                "orchestrator will not start. Set ENABLE_INCREMENTAL_UPDATES=false "
+                "to silence this warning."
+            )
+        else:
+            logger.info(
+                "INFO: FG incremental orchestrator not started "
+                "(PIPELINE_BACKEND=cocoindex — CocoIndex owns change processing)"
+            )
+        return
+
+    if not enable_incremental:
+        logger.info("INFO: Incremental updates disabled (set ENABLE_INCREMENTAL_UPDATES=true to enable)")
+        return
+
+    if not postgres_url:
+        logger.warning("WARNING: ENABLE_INCREMENTAL_UPDATES=true but POSTGRES_INCREMENTAL_URL not set")
+        logger.warning("   Incremental updates disabled - set POSTGRES_INCREMENTAL_URL in .env")
+        return
+
+    try:
+        from incremental_system import IncrementalSystemManager
+        incremental_manager = IncrementalSystemManager.get_instance()
+        await incremental_manager.initialize(
+            postgres_url=postgres_url,
+            vector_index=backend.system.vector_index,
+            graph_index=backend.system.graph_index,
+            search_index=None,
+            doc_processor=backend.system.document_processor,
+            app_config=backend.system.config,
+            hybrid_system=backend.system,
+            backend=backend,
+        )
+        await incremental_manager.start_monitoring()
+        logger.info("SUCCESS: Incremental updates enabled and monitoring started")
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"ERROR: Failed to initialize incremental updates: {error_msg}")
+        _db_missing = "does not exist" in error_msg
+        _server_down = (
+            "refused" in error_msg.lower()
+            or "WinError" in error_msg
+            or "could not connect" in error_msg.lower()
+            or "connect call failed" in error_msg.lower()
+        )
+        if _db_missing:
+            logger.info("  The incremental updates database does not exist yet.")
+            logger.info("  Recreate the PostgreSQL container and volume so the init scripts run fresh:")
+            logger.info("    docker compose -p flexible-graphrag down postgres-pgvector pgadmin")
+            logger.info("    docker volume rm flexible-graphrag_postgres_data flexible-graphrag_pgadmin_data")
+            logger.info("    docker compose -p flexible-graphrag up -d postgres-pgvector pgadmin")
+        elif _server_down:
+            logger.info("  PostgreSQL is not running. Start the containers:")
+            logger.info("    docker compose -p flexible-graphrag up -d postgres-pgvector pgadmin")
+        else:
+            import traceback
+            traceback.print_exc()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application startup/shutdown lifecycle.
-    Initialize incremental system at startup.
+    Initialize incremental system (or CocoIndex bridge) at startup.
     """
-    global incremental_manager
+    global incremental_manager, cocoindex_bridge
     
     # === STARTUP ===
     logger.info("Application startup...")
@@ -515,86 +787,16 @@ async def lifespan(app: FastAPI):
 
     import asyncio as _asyncio
     _asyncio.get_event_loop().set_exception_handler(_suppress_closed_loop_noise)
-    
-    # Initialize backend (hybrid_system lazy-loaded)
+
     backend = get_backend()
     logger.info("Backend initialized")
 
-    # Langflow flow mode: log status and eagerly bind the flows (best-effort — langflow may
-    # not be up yet; it will retry on first request).
-    if backend.settings.enable_langflow_flows:
-        logger.info("Langflow flow mode ENABLED — ingest/query run via Langflow flows at %s",
-                    backend.settings.langflow_url)
-        try:
-            fsvc = await backend._get_flow_service()
-            logger.info("Langflow flows bound — ingest_flow_id=%s, query_flow_id=%s",
-                        fsvc.ingestion_flow_id, fsvc.query_flow_id)
-        except Exception as e:
-            logger.warning("Could not bind Langflow flows at startup (will retry on first request): %s", e)
-    else:
-        logger.info("Langflow flow mode disabled (ENABLE_LANGFLOW_FLOWS not true) — using direct pipeline")
+    await _startup_cocoindex_bridge(backend)
+    await _startup_langflow(backend)
+    await _startup_incremental_manager(backend)
 
-    # Check if incremental updates enabled
-    enable_incremental = os.getenv('ENABLE_INCREMENTAL_UPDATES', 'false').lower() == 'true'
-    postgres_url = os.getenv('POSTGRES_INCREMENTAL_URL')
-    
-    if enable_incremental:
-        if not postgres_url:
-            logger.warning("WARNING: ENABLE_INCREMENTAL_UPDATES=true but POSTGRES_INCREMENTAL_URL not set")
-            logger.warning("   Incremental updates disabled - set POSTGRES_INCREMENTAL_URL in .env")
-        else:
-            try:
-                # Import incremental system
-                from incremental_system import IncrementalSystemManager
-                
-                # Create singleton instance
-                incremental_manager = IncrementalSystemManager.get_instance()
-                
-                # Initialize (reuses backend's indexes!)
-                # Indexes are connected to existing data at startup via _initialize_indexes()
-                # Engine can access them immediately for both search and incremental updates
-                await incremental_manager.initialize(
-                    postgres_url=postgres_url,
-                    vector_index=backend.system.vector_index,  # Connected to existing vector data
-                    graph_index=backend.system.graph_index,    # Connected to existing graph data
-                    search_index=None,  # HybridSearchSystem doesn't expose search_index directly
-                    doc_processor=backend.system.document_processor,  # Correct attribute name
-                    app_config=backend.system.config,
-                    hybrid_system=backend.system,  # Engine uses this for insert operations
-                    backend=backend  # NEW: Pass backend for detector ADD/MODIFY processing
-                )
-                
-                # Start background monitoring
-                await incremental_manager.start_monitoring()
-                
-                logger.info("SUCCESS: Incremental updates enabled and monitoring started")
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"ERROR: Failed to initialize incremental updates: {error_msg}")
-                _db_missing = "does not exist" in error_msg
-                _server_down = (
-                    "refused" in error_msg.lower()
-                    or "WinError" in error_msg
-                    or "could not connect" in error_msg.lower()
-                    or "connect call failed" in error_msg.lower()
-                )
-                if _db_missing:
-                    logger.info("  The incremental updates database does not exist yet.")
-                    logger.info("  Recreate the PostgreSQL container and volume so the init scripts run fresh:")
-                    logger.info("    docker compose -p flexible-graphrag down postgres-pgvector pgadmin")
-                    logger.info("    docker volume rm flexible-graphrag_postgres_data flexible-graphrag_pgadmin_data")
-                    logger.info("    docker compose -p flexible-graphrag up -d postgres-pgvector pgadmin")
-                elif _server_down:
-                    logger.info("  PostgreSQL is not running. Start the containers:")
-                    logger.info("    docker compose -p flexible-graphrag up -d postgres-pgvector pgadmin")
-                else:
-                    import traceback
-                    traceback.print_exc()
-    else:
-        logger.info("INFO: Incremental updates disabled (set ENABLE_INCREMENTAL_UPDATES=true to enable)")
-    
     yield
-    
+
     # === SHUTDOWN ===
     logger.info("Shutting down application...")
     if incremental_manager:
@@ -603,7 +805,14 @@ async def lifespan(app: FastAPI):
             logger.info("SUCCESS: Incremental system stopped")
         except Exception as e:
             logger.error(f"Error stopping incremental system: {e}")
-    
+
+    if cocoindex_bridge:
+        try:
+            await cocoindex_bridge.stop()
+            logger.info("SUCCESS: CocoIndex bridge stopped")
+        except Exception as e:
+            logger.error(f"Error stopping CocoIndex bridge: {e}")
+
     logger.info("SUCCESS: Shutdown complete")
 
 # Initialize FastAPI app with lifespan
@@ -717,17 +926,19 @@ class S3Config(BaseModel):
 
 class GCSConfig(BaseModel):
     bucket_name: str
-    credentials: str
+    credentials: Optional[str] = None           # Service-account JSON string (inline)
+    service_account_key_path: Optional[str] = None  # Path to service-account JSON file
     prefix: Optional[str] = None
-    pubsub_subscription: Optional[str] = None  # Optional: Pub/Sub subscription for event-based sync
+    pubsub_subscription: Optional[str] = None   # Pub/Sub subscription for event-based sync
 
 class AzureBlobConfig(BaseModel):
     container_name: str
-    account_url: str
+    account_url: Optional[str] = None
     blob: Optional[str] = None  # renamed from blob_name to match LlamaCloud
     prefix: Optional[str] = None
-    account_name: str
-    account_key: str
+    account_name: Optional[str] = None
+    account_key: Optional[str] = None
+    connection_string: Optional[str] = None  # alternative to account_url + account_key
 
 class OneDriveConfig(BaseModel):
     user_principal_name: str  # Required field from LlamaCloud
@@ -844,219 +1055,921 @@ async def _create_document_states_after_ingestion(processing_id: str, config_id:
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# Ingest endpoint helpers
+# ---------------------------------------------------------------------------
+
+def _build_ingest_kwargs(request) -> dict:
+    """Extract datasource config dicts from an IngestRequest into backend kwargs."""
+    kwargs: dict = {}
+    if request.skip_graph:
+        kwargs['skip_graph'] = request.skip_graph
+
+    for attr, key in [
+        ('cmis_config', 'cmis_config'),
+        ('alfresco_config', 'alfresco_config'),
+        ('web_config', 'web_config'),
+        ('wikipedia_config', 'wikipedia_config'),
+        ('youtube_config', 'youtube_config'),
+        ('s3_config', 's3_config'),
+        ('gcs_config', 'gcs_config'),
+        ('azure_blob_config', 'azure_blob_config'),
+        ('onedrive_config', 'onedrive_config'),
+        ('sharepoint_config', 'sharepoint_config'),
+        ('google_drive_config', 'google_drive_config'),
+    ]:
+        val = getattr(request, attr, None)
+        if val:
+            kwargs[key] = val.dict()
+
+    # Nuxeo uses exclude_none so unset auth fields don't override source defaults.
+    if request.nuxeo_config:
+        kwargs['nuxeo_config'] = request.nuxeo_config.dict(exclude_none=True)
+
+    if request.box_config:
+        box_dict = request.box_config.dict()
+        # Map UI parameter names to BoxSource expected names
+        if 'folder_id' in box_dict and box_dict['folder_id']:
+            box_dict['box_folder_id'] = box_dict.pop('folder_id')
+        if 'developer_token' in box_dict and box_dict['developer_token']:
+            box_dict['access_token'] = box_dict.pop('developer_token')
+        kwargs['box_config'] = box_dict
+
+    return kwargs
+
+
+def _resolve_config_id(data_source: str, request, paths: Optional[List[str]]) -> str:
+    """Return a stable uuid5 config_id derived from the datasource identity.
+
+    The ID is deterministic across restarts — it is embedded in every doc's
+    ref_doc_id and used for incremental-sync and CocoIndex per-app keying.
+    """
+    import uuid as _uuid_mod
+    _DS_NAMESPACE = _uuid_mod.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # DNS namespace
+    parts = [data_source]
+    if data_source == "alfresco" and request.alfresco_config:
+        ac = request.alfresco_config
+        parts += [ac.url or "", ac.username or "", ac.path or ""]
+    elif data_source == "nuxeo" and request.nuxeo_config:
+        nc = request.nuxeo_config
+        parts += [nc.url or "", nc.username or "", nc.path or ""]
+    elif data_source == "filesystem":
+        parts += sorted(paths or [])
+    elif data_source == "s3" and request.s3_config:
+        sc = request.s3_config
+        parts += [sc.bucket_name or "", sc.prefix or ""]
+    elif data_source == "azure_blob" and request.azure_blob_config:
+        ab = request.azure_blob_config
+        parts += [
+            ab.connection_string or ab.account_url or "",
+            ab.account_name or "",
+            ab.container_name or "",
+            ab.prefix or "",
+        ]
+    elif data_source == "gcs" and request.gcs_config:
+        gc = request.gcs_config
+        parts += [gc.bucket_name or "", gc.prefix or ""]
+    elif data_source == "onedrive" and request.onedrive_config:
+        od = request.onedrive_config
+        parts += [od.user_principal_name or ""]
+    elif data_source == "sharepoint" and request.sharepoint_config:
+        sp = request.sharepoint_config
+        parts += [sp.site_name or "", sp.site_id or "", sp.folder_path or ""]
+    elif data_source == "box" and request.box_config:
+        bx = request.box_config
+        parts += [bx.folder_id or ""]
+    elif data_source == "google_drive" and request.google_drive_config:
+        gd = request.google_drive_config
+        parts += [gd.folder_id or ""]
+    elif data_source == "cmis" and request.cmis_config:
+        cm = request.cmis_config
+        parts += [cm.url or "", cm.username or "", cm.folder_path or ""]
+    elif data_source == "web" and request.web_config:
+        parts += [str(getattr(request.web_config, "url", "") or "")]
+    elif data_source == "wikipedia" and request.wikipedia_config:
+        parts += [str(
+            getattr(request.wikipedia_config, "query", "")
+            or getattr(request.wikipedia_config, "page", "")
+            or ""
+        )]
+    elif data_source == "youtube" and request.youtube_config:
+        parts += [str(getattr(request.youtube_config, "url", "") or "")]
+    return str(_uuid_mod.uuid5(_DS_NAMESPACE, "|".join(parts)))
+
+
+def _coco_connection_params_for_request(data_source: str, request) -> Dict[str, Any]:
+    """Build connection_params for CocoIndex bridge.ingest_source() from a UI request.
+
+    Covers all 13 remote/URL sources.  ``filesystem`` is intentionally absent —
+    it needs no connection_params and is routed to bridge.ingest_files().
+
+    A source MISSING from this map fails in a way that points nowhere near here:
+    the params come back empty, ``build_app_for_config`` then sets no
+    ``_source_config_override``, ``flexible_app_main`` falls back to the
+    ``{PREFIX}_*`` environment variables, and if those are unset the detector is
+    built with no url -- which surfaces from inside CocoIndex's task as the
+    opaque "Child component build cancelled".  Keep this list in step with
+    ``_SOURCE_ENV_PREFIX`` in cocoindex_integration/pipeline/flexible_app.py.
+    """
+    cp: Dict[str, Any] = {}
+    if data_source == "s3" and request.s3_config:
+        cp = request.s3_config.dict(exclude_none=True)
+    elif data_source == "alfresco" and request.alfresco_config:
+        cp = request.alfresco_config.dict(exclude_none=True)
+        if "stomp_port" not in cp:
+            _sp = os.getenv("ALFRESCO_STOMP_PORT")
+            if _sp:
+                cp["stomp_port"] = int(_sp)
+    elif data_source == "nuxeo" and request.nuxeo_config:
+        # exclude_none so unset auth fields don't override source defaults,
+        # matching how _build_ingest_kwargs passes nuxeo_config.
+        cp = request.nuxeo_config.dict(exclude_none=True)
+    elif data_source == "cmis" and request.cmis_config:
+        cp = request.cmis_config.dict(exclude_none=True)
+    elif data_source == "gcs" and request.gcs_config:
+        cp = request.gcs_config.dict(exclude_none=True)
+    elif data_source == "azure_blob" and request.azure_blob_config:
+        cp = request.azure_blob_config.dict(exclude_none=True)
+    elif data_source == "box" and request.box_config:
+        cp = request.box_config.dict(exclude_none=True)
+    elif data_source == "onedrive" and request.onedrive_config:
+        cp = request.onedrive_config.dict(exclude_none=True)
+    elif data_source == "sharepoint" and request.sharepoint_config:
+        cp = request.sharepoint_config.dict(exclude_none=True)
+    elif data_source == "google_drive" and request.google_drive_config:
+        cp = request.google_drive_config.dict(exclude_none=True)
+    elif data_source == "web" and request.web_config:
+        cp = request.web_config.dict(exclude_none=True)
+    elif data_source == "wikipedia" and request.wikipedia_config:
+        cp = request.wikipedia_config.dict(exclude_none=True)
+    elif data_source == "youtube" and request.youtube_config:
+        cp = request.youtube_config.dict(exclude_none=True)
+    return cp
+
+
+def _build_sync_connection_params(
+    data_source: str, request, paths: Optional[List[str]]
+) -> tuple:
+    """Return (connection_params, source_path) for incremental-sync registration.
+
+    Returns ({}, None) when the datasource does not have enough config to register.
+    """
+    import json as _json
+    connection_params: Dict[str, Any] = {}
+    source_path: Optional[str] = None
+
+    if data_source == "filesystem":
+        if paths and os.path.isabs(paths[0]):
+            connection_params = {'paths': paths}
+            source_path = paths[0] if len(paths) == 1 else os.path.commonpath(paths)
+        else:
+            uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+            connection_params = {'paths': [uploads_dir]}
+            source_path = uploads_dir
+
+    elif data_source == "s3" and request.s3_config:
+        connection_params = request.s3_config.dict(exclude_none=True)
+        if not connection_params.get('region_name'):
+            connection_params['region_name'] = os.getenv('S3_REGION_NAME', 'us-east-1')
+            logger.info(f"Set S3 region_name to: {connection_params['region_name']}")
+        if not connection_params.get('sqs_queue_url'):
+            _sqs = os.getenv('S3_SQS_QUEUE_URL')
+            if not _sqs:
+                _s3cfg = os.getenv('S3_CONFIG')
+                if _s3cfg:
+                    try:
+                        _sqs = _json.loads(_s3cfg).get('sqs_queue_url')
+                    except Exception:
+                        pass
+            if _sqs:
+                connection_params['sqs_queue_url'] = _sqs
+                logger.info("S3 datasource: sqs_queue_url merged from env var into connection_params")
+        source_path = f"s3://{connection_params.get('bucket_name', 'unknown')}"
+
+    elif data_source == "alfresco" and request.alfresco_config:
+        connection_params = request.alfresco_config.dict(exclude_none=True)
+        source_path = connection_params.get('path', '/unknown')
+        if 'stomp_port' not in connection_params:
+            stomp_port = os.getenv("ALFRESCO_STOMP_PORT")
+            if stomp_port:
+                connection_params["stomp_port"] = int(stomp_port)
+                logger.info(f"Added ALFRESCO_STOMP_PORT={stomp_port} to datasource config")
+
+    elif data_source == "nuxeo" and request.nuxeo_config:
+        connection_params = request.nuxeo_config.dict(exclude_none=True)
+        source_path = connection_params.get('path', '/unknown')
+
+    elif data_source == "google_drive" and request.google_drive_config:
+        connection_params = request.google_drive_config.dict(exclude_none=True)
+        source_path = f"google_drive://{connection_params.get('folder_id', 'root')}"
+
+    elif data_source == "gcs" and request.gcs_config:
+        connection_params = request.gcs_config.dict(exclude_none=True)
+        source_path = f"gs://{connection_params.get('bucket_name', 'unknown')}"
+
+    elif data_source == "azure_blob" and request.azure_blob_config:
+        connection_params = request.azure_blob_config.dict(exclude_none=True)
+        source_path = f"azure://{connection_params.get('container_name', 'unknown')}"
+
+    elif data_source == "box" and request.box_config:
+        connection_params = request.box_config.dict(exclude_none=True)
+        source_path = f"box://{connection_params.get('folder_id', '0')}"
+
+    elif data_source == "onedrive" and request.onedrive_config:
+        connection_params = request.onedrive_config.dict(exclude_none=True)
+        source_path = f"onedrive://{connection_params.get('user_principal_name', 'unknown')}"
+
+    elif data_source == "sharepoint" and request.sharepoint_config:
+        connection_params = request.sharepoint_config.dict(exclude_none=True)
+        source_path = f"sharepoint://{connection_params.get('site_name', 'unknown')}"
+
+    return connection_params, source_path
+
+
+async def _enable_incremental_sync(
+    data_source: str,
+    result: dict,
+    config_id: str,
+    request,
+    paths: Optional[List[str]],
+    inc_mgr,
+) -> None:
+    """Register datasource for incremental sync after a successful ingest.
+
+    Creates document_state rows SYNCHRONOUSLY before starting the detector so the
+    detector's first scan finds all files already tracked (prevents duplicate ingest).
+    ORDER MATTERS: document_state rows must exist before add_datasource_for_sync().
+    """
+    import time
+    connection_params, _source_path = _build_sync_connection_params(data_source, request, paths)
+    if not connection_params or not config_id:
+        logger.warning(f"Could not enable sync for {data_source}: missing configuration")
+        result['sync_enabled'] = False
+        return
+
+    processing_id = result['processing_id']
+    logger.info(
+        f"Creating document_state records synchronously for {data_source} "
+        "before starting sync monitoring..."
+    )
+    await _create_document_states_after_ingestion(
+        processing_id=processing_id,
+        config_id=config_id,
+        paths=paths or [],
+        data_source=data_source,
+        skip_graph=request.skip_graph,
+    )
+    logger.info(f"Document_state records created synchronously for {data_source}")
+
+    # NOW start monitoring — detector's first scan finds files already in document_state.
+    await inc_mgr.add_datasource_for_sync(
+        source_type=data_source,
+        source_name=f"{data_source}_{int(time.time())}",
+        connection_params=connection_params,
+        config_id=config_id,
+        skip_graph=request.skip_graph,
+    )
+    logger.info(
+        f"SUCCESS: Enabled incremental sync for {data_source}: {config_id}, "
+        f"skip_graph={request.skip_graph}"
+    )
+    result['sync_enabled'] = True
+    result['config_id'] = config_id
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# Max time to wait for a CocoIndex live stream to finish at least one file before
+# declaring the ingest failed.  Never inferred from file counts — cloud sources
+# legitimately report 0 files (or chunk counts instead of file counts).
+_LIVE_INGEST_TIMEOUT: float = _env_float("COCOINDEX_LIVE_INGEST_TIMEOUT", 600.0)
+
+# For a *directory* registration the live stream keeps emitting file_done events
+# for siblings after the first one.  Once the stream has been quiet this long, the
+# directory is treated as fully processed.
+_DIR_QUIET_SECONDS: float = _env_float("COCOINDEX_DIR_QUIET_SECONDS", 15.0)
+
+
+async def _start_cocoindex_ingest(
+    data_source: str,
+    paths: Optional[List[str]],
+    config_id: str,
+    bridge_primary_ds: str,
+    conn_params: Dict[str, Any],
+    skip_graph: bool = False,
+    enable_sync: bool = False,
+) -> dict:
+    """Register a background CocoIndex ingest task and return immediately.
+
+    The background task (``_run_cocoindex_bg``) updates PROCESSING_STATUS as it
+    progresses so the SSE stream can show per-file / per-stage advancement.
+    Returns the initial ``result`` dict with ``processing_id`` and ``status="started"``.
+    """
+    from datetime import datetime as _dt
+
+    _skip_graph = skip_graph
+    _coco_pid = backend_instance._create_processing_id()
+    _coco_paths = list(paths or [])
+    _n_files = max(len(_coco_paths), 1)
+
+    # Build the initial per-file pending list the UI's Process tab needs.
+    _now_iso = _dt.now().isoformat()
+    _file_progress_init = [
+        {
+            "index": _fi,
+            "filename": Path(_fp).name,
+            "filepath": str(_fp),
+            # A directory (watch-folder registration) has no per-file event of
+            # its own — the live stream emits file_done for its *children*.  The
+            # completion barrier keys on filename, so without this flag the
+            # directory entry could never be satisfied and the ingest hung for
+            # the full live-wait timeout.
+            "is_dir": os.path.isdir(str(_fp)),
+            "status": "processing",
+            "progress": 0,
+            "phase": "cocoindex",
+            "message": "CocoIndex pipeline running...",
+            "started_at": _now_iso,
+            "completed_at": None,
+            "error": None,
+        }
+        for _fi, _fp in enumerate(_coco_paths)
+    ] or [{
+        "index": 0,
+        "filename": data_source or "source",
+        "filepath": data_source or "source",
+        "status": "processing",
+        "progress": 0,
+        "phase": "cocoindex",
+        "message": "CocoIndex pipeline running...",
+        "started_at": _now_iso,
+        "completed_at": None,
+        "error": None,
+    }]
+
+    # Register as "started" immediately so the SSE stream has something to return.
+    backend_instance._update_processing_status(
+        _coco_pid, "started",
+        f"CocoIndex: processing {_n_files} file(s)...",
+        progress=5,
+        files_completed=0, total_files=_n_files,
+        file_progress=_file_progress_init,
+    )
+
+    # ── Filesystem routing inputs (see the route block in _run_cocoindex_bg) ──
+    # Directories become their own CocoIndex app with their own watch root;
+    # loose files keep going through the WATCH_DIR staging path.
+    _dir_paths = [str(_p) for _p in _coco_paths if os.path.isdir(str(_p))]
+
+    def _same_path(a: str, b: str) -> bool:
+        """True when two paths name the same folder (case/sep-insensitive on Windows)."""
+        if not a or not b:
+            return False
+        try:
+            return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+                os.path.realpath(b)
+            )
+        except OSError:
+            return False
+
+    # If the requested folder IS the bridge's own WATCH_DIR, the primary .env app
+    # already watches it — building a second app on the same root would process
+    # every file twice.  Fall back to the staging path in that case.
+    _bridge_watch_dir = getattr(cocoindex_bridge, "_source_dir", "") if cocoindex_bridge else ""
+    _dirs_are_watch_dir = bool(_dir_paths) and all(
+        _same_path(_d, _bridge_watch_dir) for _d in _dir_paths
+    )
+    if _dirs_are_watch_dir:
+        logger.info(
+            "CocoIndex ingest: %s is the primary WATCH_DIR — using the existing "
+            "primary app instead of registering a duplicate source",
+            _dir_paths[0],
+        )
+
+    async def _run_cocoindex_bg(
+        bridge=cocoindex_bridge,
+        pid=_coco_pid,
+        fpaths=_coco_paths,
+        ds=data_source,
+        sg=_skip_graph,
+        n=_n_files,
+        fp_init=_file_progress_init,
+        connection_params=conn_params,
+        cfg_id=config_id,
+        primary_ds=bridge_primary_ds,
+        _enable_sync=enable_sync,
+        dir_paths=_dir_paths,
+        _dir_is_watch_dir=_dirs_are_watch_dir,
+    ):
+        """Background task: run CocoIndex bridge and update PROCESSING_STATUS.
+
+        Postgres monitoring rows are written by the bridge's own monitor, not
+        here.  This task used to open a second CocoIngestMonitor (its own asyncpg
+        pool, per request) and log every progress event a second time, so each
+        stage produced two cocoindex_ingest_log rows under two different run_ids.
+        Passing ``run_id=pid`` down instead gives one row per event, keyed by the
+        processing_id so DB rows join back to this UI job.
+        """
+        try:
+            backend_instance._update_processing_status(
+                pid, "processing",
+                f"CocoIndex: indexing {n} file(s) — please wait...",
+                progress=10,
+                files_completed=0, total_files=n,
+                file_progress=[{**f, "progress": 10} for f in fp_init],
+            )
+
+            # ── Per-file / per-stage progress bridge ──────────────────────────
+            # CocoIndex emits dict events via the progress hook.  We translate
+            # them into _update_processing_status so the Process tab shows real
+            # per-file stage advancement instead of a single 10→100 jump.
+            _stage_pct = {
+                "downloading": 15, "downloaded": 25,
+                "parsing": 35, "parsed": 50,
+                "chunked": 60, "embedded": 68,
+                "kg_extracting": 72, "kg_extracted": 78,
+                "vector_indexing": 82, "graph_indexing": 86,
+                "search_indexing": 90, "rdf_indexing": 93,
+                "indexing_complete": 97,
+                "synced": 97,  # legacy alias
+            }
+            _stage_msg = {
+                "downloading": "Downloading...", "downloaded": "Downloaded",
+                "parsing": "Parsing document...", "parsed": "Parsed",
+                "chunked": "Chunked", "embedded": "Embedded",
+                "kg_extracting": "Extracting knowledge graph...",
+                "kg_extracted": "KG extraction complete",
+                "vector_indexing": "Writing vector index...",
+                "graph_indexing": "Writing property graph...",
+                "search_indexing": "Writing search index...",
+                "rdf_indexing": "Writing RDF graph...",
+                "indexing_complete": "Indexes updated",
+                "synced": "Writing to indexes...",
+            }
+            _fp_state: dict = {f["filename"]: dict(f) for f in fp_init}
+            _fp_order: list = [f["filename"] for f in fp_init]
+            _completed_names: set = set()
+            _live_done = asyncio.Event()
+            _ingest_job_finished = False
+            # Wall-clock of the most recent CocoIndex progress event.  Used to
+            # detect that a directory registration has stopped producing files.
+            _last_event_at: float = _monotonic()
+            _has_dir_entry = any(f.get("is_dir") for f in fp_init)
+
+            def _finalize_ingest_status(
+                *, msg: str | None = None, force_failed: bool = False
+            ) -> None:
+                nonlocal _ingest_job_finished
+                if _ingest_job_finished:
+                    return
+                _ingest_job_finished = True
+                _done_iso = _dt.now().isoformat()
+                _done_n = len([
+                    f for f in fp_init
+                    if f["filename"] in _completed_names
+                    or os.path.basename(f["filename"]) in _completed_names
+                ])
+                _any_failed = any(
+                    _fp_state.get(f["filename"], {}).get("status") == "failed"
+                    for f in fp_init
+                )
+                # NOTE: never decide success from file counts — cloud sources
+                # legitimately report 0 files (or chunk counts instead).  Only an
+                # explicit failure or a pipeline timeout marks the job failed.
+                _final = "failed" if (_any_failed or force_failed) else "completed"
+                _fp_done = []
+                for f in fp_init:
+                    _fe = dict(_fp_state.get(f["filename"], {
+                        **f, "status": _final, "progress": 100,
+                        "phase": "completed", "message": "Processing completed",
+                        "completed_at": _done_iso,
+                    }))
+                    if _fe.get("status") in ("completed", "skipped"):
+                        _fe["phase"] = "completed"
+                        _fe["progress"] = 100
+                    _fp_done.append(_fe)
+                _status_msg = msg or (
+                    f"CocoIndex: {_done_n}/{n} file(s) processed"
+                    if _final == "completed"
+                    else f"CocoIndex pipeline error: one or more files failed"
+                )
+                backend_instance._update_processing_status(
+                    pid, _final, _status_msg,
+                    progress=100 if _final == "completed" else 0,
+                    files_completed=_done_n, total_files=n,
+                    file_progress=_fp_done,
+                )
+
+            def _ingest_files_done() -> bool:
+                for f in fp_init:
+                    if f.get("is_dir"):
+                        # Directory registration: satisfied once any child file
+                        # has finished.  How long to keep collecting siblings is
+                        # decided by the quiet-period wait in _wait_live_done().
+                        if not _completed_names:
+                            return False
+                        continue
+                    if not (
+                        f["filename"] in _completed_names
+                        or os.path.basename(f["filename"]) in _completed_names
+                    ):
+                        return False
+                return True
+
+            def _coco_progress(evt: dict) -> None:
+                nonlocal _last_event_at
+                _last_event_at = _monotonic()
+                try:
+                    # NOTE: no Postgres logging here — the bridge's monitor hook
+                    # wraps this callback and writes the cocoindex_ingest_log row
+                    # (once, under run_id=pid).  This callback is UI state only.
+                    _fname = evt.get("file_name") or evt.get("file_path") or "source"
+                    _ev = evt.get("event")
+                    _entry = _fp_state.get(_fname)
+                    if _entry is None:
+                        _base = os.path.basename(_fname)
+                        for _k, _v in _fp_state.items():
+                            if _k == _base or os.path.basename(_k) == _base:
+                                _entry = _v
+                                break
+                    if _entry is None:
+                        # Cloud source file not in the initial list — add it.
+                        _entry = {
+                            "index": len(_fp_order),
+                            "filename": _fname,
+                            "filepath": evt.get("file_path", _fname),
+                            "status": "processing", "progress": 10,
+                            "phase": "cocoindex", "message": "Processing...",
+                            "started_at": _dt.now().isoformat(),
+                            "completed_at": None, "error": None,
+                        }
+                        _fp_state[_fname] = _entry
+                        _fp_order.append(_fname)
+                    if _ev == "file_done":
+                        _st = evt.get("status", "completed")
+                        _completed_names.add(_fname)
+                        _completed_names.add(os.path.basename(_fname))
+                        _entry.update({
+                            "status": "completed" if _st in ("completed", "skipped") else "failed",
+                            "progress": 100,
+                            "phase": "indexing",
+                            "message": (
+                                # Transform finished; flexible TargetStateProvider sinks
+                                # (vector/search/graph writes) may still be in flight.
+                                "Writing indexes..." if _st == "completed"
+                                else "Skipped (unchanged)" if _st == "skipped"
+                                else _st.capitalize()
+                            ),
+                            "completed_at": _dt.now().isoformat(),
+                        })
+                        if _ingest_files_done():
+                            # Signal transform complete only — do NOT finalize status
+                            # here. Flexible sinks run after file_done; finalizing early
+                            # lets hybrid search race ahead of vector writes (0 results).
+                            _live_done.set()
+                            return  # all transforms done — keep status at processing
+                    else:  # file_stage
+                        _stg = evt.get("stage", "")
+                        _entry.update({
+                            "status": "processing",
+                            "progress": _stage_pct.get(_stg, _entry.get("progress", 10)),
+                            "phase": _stg or _entry.get("phase", "cocoindex"),
+                            "message": _stage_msg.get(_stg, _stg or "Processing..."),
+                        })
+                    _done = len([
+                        f for f in fp_init
+                        if f["filename"] in _completed_names
+                        or os.path.basename(f["filename"]) in _completed_names
+                    ])
+                    _tot = max(len(_fp_order), n)
+                    _overall = 10 + int(85 * _done / _tot) if _tot else 10
+                    backend_instance._update_processing_status(
+                        pid, "processing",
+                        f"CocoIndex: {_done}/{_tot} file(s) — {_entry.get('message', '')}",
+                        progress=min(_overall, 99),
+                        files_completed=_done, total_files=_tot,
+                        file_progress=[_fp_state[k] for k in _fp_order],
+                    )
+                except Exception as _pe:
+                    logger.debug("coco progress cb error (ignored): %s", _pe)
+
+            # Route to the appropriate bridge method.
+            # ``ds == ""`` is short-circuited before this task is created, so only
+            # "filesystem" and remote sources reach here.
+            if ds == "filesystem" and dir_paths and not _dir_is_watch_dir:
+                # A filesystem *directory* is a data source in its own right —
+                # exactly like an S3 bucket or an Alfresco site — so it gets its
+                # own coco.App with its own watch root, keyed by config_id.
+                #
+                # It must NOT go through ingest_files(): that copies each path
+                # into WATCH_DIR, and shutil.copy2() on a directory raises, so
+                # the whole registration failed with nothing staged.  Routing
+                # here also means enable_sync starts a live stream on *this*
+                # directory rather than on the primary .env WATCH_DIR — which is
+                # what makes "watch any folder you point at" work under the
+                # CocoIndex pipeline, matching the default pipeline's behaviour.
+                #
+                # ``paths`` carries every requested path (files and folders):
+                # the flexible filesystem source and its detector both accept a
+                # mixed list and walk directories recursively.
+                _fs_params = {"paths": list(fpaths), "path": dir_paths[0]}
+                coco_result = await bridge.ingest_source(
+                    "filesystem", _fs_params,
+                    config_id=cfg_id,
+                    source_name=f"filesystem ({dir_paths[0]})",
+                    skip_graph=sg,
+                    enable_sync=_enable_sync,
+                    progress_cb=_coco_progress,
+                    run_id=pid,
+                )
+            elif ds == "filesystem":
+                # Loose files (UI upload staging, or a folder that IS the primary
+                # WATCH_DIR) — stage into WATCH_DIR and let the primary app pick
+                # them up.
+                coco_result = await bridge.ingest_files(
+                    fpaths, skip_graph=sg, progress_cb=_coco_progress,
+                    run_id=pid,
+                )
+            elif ds == primary_ds and not connection_params:
+                # Same source type as primary .env source AND no explicit per-source
+                # config from the UI — primary app already covers this; just update.
+                coco_result = await bridge.update(
+                    progress_cb=_coco_progress, run_id=pid,
+                )
+            else:
+                # Different source, or same type but different UI config (e.g. a
+                # different S3 bucket).  Build/run a dedicated app keyed by config_id.
+                coco_result = await bridge.ingest_source(
+                    ds, connection_params,
+                    config_id=cfg_id,
+                    source_name=f"{ds} ({cfg_id[:8]})" if cfg_id else ds,
+                    skip_graph=sg,
+                    enable_sync=_enable_sync,
+                    progress_cb=_coco_progress,
+                    run_id=pid,
+                )
+
+            # A failed bridge call must not be reported as a successful ingest.
+            # Without this the job fell through to the completion message and the
+            # UI said "Successfully ingested N document(s)!" for a run where the
+            # CocoIndex app errored and wrote nothing.
+            if coco_result.get("status") == "error":
+                _err = str(coco_result.get("error") or "unknown error")
+                logger.error(
+                    "CocoIndex ingest %s: bridge reported failure: %s", pid, _err,
+                )
+                _finalize_ingest_status(
+                    msg=f"CocoIndex pipeline error: {_err}", force_failed=True,
+                )
+                return
+
+            # Live mode: ingest_files only stages files; processing runs in the
+            # background live stream — wait for file_done progress events.
+            if coco_result.get("live_deferred"):
+                async def _wait_live_done() -> bool:
+                    """Wait for the live stream.  True = nothing ever processed."""
+                    _deadline = _monotonic() + _LIVE_INGEST_TIMEOUT
+                    try:
+                        await asyncio.wait_for(
+                            _live_done.wait(),
+                            timeout=max(1.0, _deadline - _monotonic()),
+                        )
+                    except asyncio.TimeoutError:
+                        return True
+                    if not _has_dir_entry:
+                        return False
+                    # Directory registration: siblings keep arriving after the
+                    # first file_done.  Settle once the stream goes quiet rather
+                    # than releasing on the first child.
+                    while _monotonic() < _deadline:
+                        _idle = _monotonic() - _last_event_at
+                        if _idle >= _DIR_QUIET_SECONDS:
+                            break
+                        await asyncio.sleep(min(1.0, _DIR_QUIET_SECONDS - _idle))
+                    return False
+
+                if await _wait_live_done():
+                    logger.error(
+                        "CocoIndex live ingest %s: no file completed within %.0fs — "
+                        "marking failed. Is the live stream running for this source?",
+                        pid, _LIVE_INGEST_TIMEOUT,
+                    )
+                    _finalize_ingest_status(
+                        msg=(
+                            f"CocoIndex pipeline timed out after "
+                            f"{_LIVE_INGEST_TIMEOUT:.0f}s — no file finished processing."
+                        ),
+                        force_failed=True,
+                    )
+                    return
+
+            # Flexible TargetStateProvider sinks (vector/search/graph) run after
+            # process_file emits file_done.  Wait until those writes finish so
+            # search/QA immediately after ingest does not race an empty index.
+            try:
+                from cocoindex_integration.connectors.flexible.base import (
+                    wait_targets_flushed as _wait_targets_flushed,
+                )
+                await _wait_targets_flushed(timeout=180.0)
+            except Exception as _sink_exc:
+                logger.debug(
+                    "CocoIndex ingest %s: wait_targets_flushed skipped: %s",
+                    pid, _sink_exc,
+                )
+
+            _done_iso = _dt.now().isoformat()
+            _added = len([
+                f for f in fp_init
+                if f["filename"] in _completed_names
+                or os.path.basename(f["filename"]) in _completed_names
+            ])
+            if not coco_result.get("live_deferred"):
+                # The bridge returns flat, already document-level counters
+                # (adds / deletes / unchanged / errors) — there is no "stats"
+                # object in the result dict.  ``adds`` counts newly processed
+                # documents; ``unchanged`` are memo hits, which still count as
+                # successfully ingested from the caller's point of view.
+                _reported = int(coco_result.get("adds") or 0)
+                _added = max(_added, _reported)
+                if not _added:
+                    _added = n
+
+            from ingest._helpers import generate_completion_message as _gen_completion_msg
+            _cfg = getattr(backend_instance.system, "config", None)
+            if _cfg is not None:
+                _msg = _gen_completion_msg(_cfg, max(_added, n), skip_graph=sg)
+                try:
+                    # Import from the submodule that actually defines it, NOT
+                    # ``from cocoindex_integration.pipeline import app`` — the
+                    # package __init__ rebinds the name ``app`` to the coco.App
+                    # instance, so that form yields an App (no such method) and
+                    # the AttributeError was silently swallowed below.
+                    from cocoindex_integration.pipeline.state import (
+                        native_pg_write_skipped as _native_pg_write_skipped,
+                    )
+                    if _native_pg_write_skipped():
+                        _pg = str(getattr(_cfg, "pg_graph_db", "none"))
+                        _msg = (
+                            f"Successfully ingested {max(_added, n)} document(s)! "
+                            f"Vector index updated. "
+                            f"Property graph write to {_pg} was skipped — "
+                            f"database unreachable (see log)."
+                        )
+                except Exception:
+                    pass
+            else:
+                _msg = f"Successfully processed {max(_added, n)} file(s)."
+
+            if not _ingest_job_finished:
+                _fp_done = []
+                for f in fp_init:
+                    _fe = dict(_fp_state.get(f["filename"], {
+                        **f, "status": "completed", "progress": 100,
+                        "phase": "completed", "message": "Processing completed",
+                        "completed_at": _done_iso,
+                    }))
+                    if _fe.get("status") == "completed":
+                        _fe["phase"] = "completed"
+                        _fe["progress"] = 100
+                    _fp_done.append(_fe)
+                backend_instance._update_processing_status(
+                    pid, "completed", _msg,
+                    progress=100,
+                    files_completed=_added, total_files=n,
+                    file_progress=_fp_done,
+                )
+            logger.info("CocoIndex background task %s: completed", pid)
+        except asyncio.CancelledError:
+            logger.warning("CocoIndex background task %s: cancelled (shutdown)", pid)
+            raise
+        except Exception as _bg_exc:
+            logger.error("CocoIndex background task %s: failed: %s", pid, _bg_exc)
+            backend_instance._update_processing_status(
+                pid, "failed",
+                f"CocoIndex pipeline error: {_bg_exc}",
+                progress=0,
+                file_progress=[
+                    {**f, "status": "failed", "error": str(_bg_exc)}
+                    for f in fp_init
+                ],
+            )
+        finally:
+            try:
+                # Clearing the hook here is REQUIRED: on the live-deferred path
+                # bridge.update() deliberately leaves it installed and documents
+                # this finally block as the owner of the cleanup.  Import from
+                # pipeline.run directly — ``from ...pipeline import app`` returns
+                # the coco.App instance (the package __init__ rebinds that name),
+                # so the old form raised AttributeError into the bare except and
+                # the hook leaked into every subsequent cycle.
+                from cocoindex_integration.pipeline.run import (
+                    set_progress_hook as _set_progress_hook,
+                )
+                _set_progress_hook(None)
+            except Exception as _hook_exc:
+                logger.debug(
+                    "CocoIndex ingest %s: could not clear progress hook: %s",
+                    pid, _hook_exc,
+                )
+
+    asyncio.create_task(_run_cocoindex_bg(), name=f"cocoindex-ingest-{_coco_pid}")
+
+    if enable_sync:
+        logger.info(
+            "CocoIndex bridge: enable_sync=true acknowledged — "
+            "CocoIndex tracks document state via LMDB automatically."
+        )
+
+    return {
+        "processing_id": _coco_pid,
+        "status": "started",
+        "message": f"CocoIndex: processing {_n_files} file(s) in background",
+        "pipeline_backend": "cocoindex",
+    }
+
+
 @app.post("/api/ingest")
 async def ingest(request: IngestRequest):
     try:
-        # request embeds *_config models with credentials — redact before logging
         from flow_service import redact_config_for_log
         logger.info("Starting async document ingestion: %s", redact_config_for_log(request.dict()))
         logger.info(f"Data source: {request.data_source}, Paths: {request.paths}")
-        
+
         data_source = request.data_source or str(settings.data_source)
         paths = request.paths
-        
-        # Prepare additional kwargs for data source configs
-        kwargs = {}
-        
-        # Pass skip_graph flag if set
-        if request.skip_graph:
-            kwargs['skip_graph'] = request.skip_graph
-            logger.info(f"Per-ingest skip_graph flag set to: {request.skip_graph}")
-        
-        if request.cmis_config:
-            kwargs['cmis_config'] = request.cmis_config.dict()
-        if request.alfresco_config:
-            kwargs['alfresco_config'] = request.alfresco_config.dict()
-        if request.nuxeo_config:
-            kwargs['nuxeo_config'] = request.nuxeo_config.dict(exclude_none=True)
-        if request.web_config:
-            kwargs['web_config'] = request.web_config.dict()
-        if request.wikipedia_config:
-            kwargs['wikipedia_config'] = request.wikipedia_config.dict()
-        if request.youtube_config:
-            kwargs['youtube_config'] = request.youtube_config.dict()
-        if request.s3_config:
-            kwargs['s3_config'] = request.s3_config.dict()
-        if request.gcs_config:
-            kwargs['gcs_config'] = request.gcs_config.dict()
-        if request.azure_blob_config:
-            kwargs['azure_blob_config'] = request.azure_blob_config.dict()
-        if request.onedrive_config:
-            kwargs['onedrive_config'] = request.onedrive_config.dict()
-        if request.sharepoint_config:
-            kwargs['sharepoint_config'] = request.sharepoint_config.dict()
-        if request.box_config:
-            box_dict = request.box_config.dict()
-            # Map UI parameter names to BoxSource expected names
-            if 'folder_id' in box_dict and box_dict['folder_id']:
-                box_dict['box_folder_id'] = box_dict['folder_id']
-                del box_dict['folder_id']  # Remove the UI parameter name
-            if 'developer_token' in box_dict and box_dict['developer_token']:
-                box_dict['access_token'] = box_dict['developer_token']
-                del box_dict['developer_token']  # Remove the UI parameter name
-            kwargs['box_config'] = box_dict
-        if request.google_drive_config:
-            kwargs['google_drive_config'] = request.google_drive_config.dict()
-        
-        # Generate config_id BEFORE ingestion if sync enabled.
-        # IMPORTANT: config_id must be STABLE across restarts — it is embedded in
-        # every doc's ref_doc_id and used by delete_doc() to find RDF triples.
-        # Use uuid5 (name-based) derived from the datasource identity so the same
-        # datasource always produces the same config_id regardless of restarts.
-        config_id = None
+
+        # Build backend kwargs and stable config_id from datasource identity.
+        kwargs = _build_ingest_kwargs(request)
+        config_id = _resolve_config_id(data_source, request, paths)
         if request.enable_sync:
-            import uuid as _uuid_mod
-            _DS_NAMESPACE = _uuid_mod.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # URL namespace
-            # Build a stable identity string from datasource type + connection identity
-            _identity_parts = [data_source]
-            if data_source == "alfresco" and request.alfresco_config:
-                ac = request.alfresco_config
-                _identity_parts += [ac.url or "", ac.username or "", ac.path or ""]
-            elif data_source == "nuxeo" and request.nuxeo_config:
-                nc = request.nuxeo_config
-                _identity_parts += [nc.url or "", nc.username or "", nc.path or ""]
-            elif data_source == "filesystem":
-                _identity_parts += sorted(paths or [])
-            elif data_source == "s3" and request.s3_config:
-                sc = request.s3_config
-                _identity_parts += [sc.bucket_name or "", sc.prefix or ""]
-            elif data_source == "azure_blob" and request.azure_blob_config:
-                ab = request.azure_blob_config
-                # AzureBlobConfig has no connection_string field — identify by account + container + prefix
-                _identity_parts += [ab.account_url or "", ab.container_name or "", ab.prefix or ""]
-            elif data_source == "gcs" and request.gcs_config:
-                gc = request.gcs_config
-                _identity_parts += [gc.bucket_name or "", gc.prefix or ""]
-            elif data_source == "onedrive" and request.onedrive_config:
-                od = request.onedrive_config
-                _identity_parts += [od.user_principal_name or ""]
-            elif data_source == "sharepoint" and request.sharepoint_config:
-                sp = request.sharepoint_config
-                # SharePointConfig has no site_url — identify by site + folder scope
-                _identity_parts += [sp.site_name or "", sp.site_id or "", sp.folder_path or ""]
-            elif data_source == "box" and request.box_config:
-                bx = request.box_config
-                _identity_parts += [bx.folder_id or ""]
-            elif data_source == "google_drive" and request.google_drive_config:
-                gd = request.google_drive_config
-                _identity_parts += [gd.folder_id or ""]
-            elif data_source == "cmis" and request.cmis_config:
-                cm = request.cmis_config
-                # CmisConfig has url + folder_path (no repository_id/path attrs)
-                _identity_parts += [cm.url or "", cm.folder_path or ""]
-            _identity_str = "|".join(_identity_parts)
-            config_id = str(_uuid_mod.uuid5(_DS_NAMESPACE, _identity_str))
             kwargs['config_id'] = config_id
             logger.info(f"Stable config_id for sync ({data_source}): {config_id}")
-        
-        result = await backend_instance.ingest_documents(data_source=data_source, paths=paths, **kwargs)
-        
-        # If enable_sync is True and incremental system is initialized, add datasource for monitoring
+
+        # ── CocoIndex pipeline routing ─────────────────────────────────────────
+        _bridge_primary_ds = (
+            getattr(cocoindex_bridge, "_data_source", "filesystem")
+            if cocoindex_bridge else ""
+        )
+        _used_cocoindex = False
+
+        # Lazy-start bridge when DATA_SOURCE was empty at boot but user picked a
+        # source through the UI (PIPELINE_BACKEND=cocoindex guard inside helper).
+        if os.getenv("PIPELINE_BACKEND", "default").lower() == "cocoindex":
+            await _ensure_cocoindex_bridge(
+                fg_config=getattr(backend_instance.system, "config", None),
+            )
+
+        if cocoindex_bridge and data_source == "":
+            # Empty data_source: nothing to start — already-running apps keep
+            # everything up to date on their own live/poll loops.
+            logger.info(
+                "CocoIndex bridge active and data_source is empty — no new ingest "
+                "started; existing apps continue their live/poll updates."
+            )
+            _used_cocoindex = True
+            result = {
+                "processing_id": None,
+                "status": "noop",
+                "message": "No data_source specified; existing CocoIndex sources keep updating.",
+                "pipeline_backend": "cocoindex",
+            }
+        elif cocoindex_bridge:
+            _conn_params = _coco_connection_params_for_request(data_source, request)
+            result = await _start_cocoindex_ingest(
+                data_source=data_source,
+                paths=paths,
+                config_id=config_id,
+                bridge_primary_ds=_bridge_primary_ds,
+                conn_params=_conn_params,
+                skip_graph=getattr(request, "skip_graph", False) or False,
+                enable_sync=bool(getattr(request, "enable_sync", False)),
+            )
+            _used_cocoindex = True
+
+        if not _used_cocoindex:
+            result = await backend_instance.ingest_documents(data_source=data_source, paths=paths, **kwargs)
+
+        # ── Incremental sync registration ──────────────────────────────────────
         if request.enable_sync and incremental_manager and incremental_manager.is_initialized():
             try:
-                import time
-                
-                # Determine source path based on data source type
-                source_path = None
-                connection_params = {}
-                
-                if data_source == "filesystem":
-                    # Check if paths are full paths (MCP/local) or just filenames (file upload UI)
-                    if paths and os.path.isabs(paths[0]):
-                        # MCP or local filesystem path - monitor the actual paths
-                        connection_params = {'paths': paths}
-                        source_path = paths[0] if len(paths) == 1 else os.path.commonpath(paths)
-                    else:
-                        # File uploads - monitor the uploads directory
-                        uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
-                        connection_params = {'paths': [uploads_dir]}
-                        source_path = uploads_dir
-                    
-                elif data_source == "s3" and request.s3_config:
-                    connection_params = request.s3_config.dict(exclude_none=True)
-                    # Ensure region_name is set - use env var or default to us-east-1
-                    if not connection_params.get('region_name'):
-                        connection_params['region_name'] = os.getenv('S3_REGION_NAME', 'us-east-1')
-                        logger.info(f"Set S3 region_name to: {connection_params['region_name']}")
-                    source_path = f"s3://{connection_params.get('bucket_name', 'unknown')}"
-                    
-                elif data_source == "alfresco" and request.alfresco_config:
-                    connection_params = request.alfresco_config.dict(exclude_none=True)
-                    source_path = connection_params.get('path', '/unknown')
-                    # Add STOMP port if configured in environment and not already in params
-                    if 'stomp_port' not in connection_params:
-                        stomp_port = os.getenv("ALFRESCO_STOMP_PORT")
-                        if stomp_port:
-                            connection_params["stomp_port"] = int(stomp_port)
-                            logger.info(f"Added ALFRESCO_STOMP_PORT={stomp_port} to datasource config")
-                    
-                elif data_source == "nuxeo" and request.nuxeo_config:
-                    connection_params = request.nuxeo_config.dict(exclude_none=True)
-                    source_path = connection_params.get('path', '/unknown')
-
-                elif data_source == "google_drive" and request.google_drive_config:
-                    connection_params = request.google_drive_config.dict(exclude_none=True)
-                    source_path = f"google_drive://{connection_params.get('folder_id', 'root')}"
-                    
-                elif data_source == "gcs" and request.gcs_config:
-                    connection_params = request.gcs_config.dict(exclude_none=True)
-                    source_path = f"gs://{connection_params.get('bucket_name', 'unknown')}"
-                    
-                elif data_source == "azure_blob" and request.azure_blob_config:
-                    connection_params = request.azure_blob_config.dict(exclude_none=True)
-                    source_path = f"azure://{connection_params.get('container_name', 'unknown')}"
-                    
-                elif data_source == "box" and request.box_config:
-                    connection_params = request.box_config.dict(exclude_none=True)
-                    source_path = f"box://{connection_params.get('folder_id', '0')}"
-                    
-                elif data_source == "onedrive" and request.onedrive_config:
-                    connection_params = request.onedrive_config.dict(exclude_none=True)
-                    source_path = f"onedrive://{connection_params.get('user_principal_name', 'unknown')}"
-                    
-                elif data_source == "sharepoint" and request.sharepoint_config:
-                    connection_params = request.sharepoint_config.dict(exclude_none=True)
-                    source_path = f"sharepoint://{connection_params.get('site_name', 'unknown')}"
-                    
-                # Add datasource for incremental sync
-                if connection_params and config_id:
-                    # ORDER MATTERS: create document_state records SYNCHRONOUSLY *before* starting the
-                    # sync detector. Otherwise the detector's first periodic refresh / watchdog runs
-                    # while these rows don't exist yet, sees the just-ingested files as NEW, and
-                    # re-ingests them → duplicate chunks. This is acute in Langflow flow mode, where the
-                    # ingest flow (and its doc_states) complete well after /api/ingest returns, so the
-                    # detector would otherwise scan mid-ingest. (_create_document_states_after_ingestion
-                    # polls the processing_id until the flow completes, then writes the rows; skip_graph
-                    # is passed explicitly so it doesn't need the datasource_config row that
-                    # add_datasource_for_sync creates below.)
-                    processing_id = result['processing_id']
-                    logger.info(f"Creating document_state records synchronously for {data_source} before starting sync monitoring...")
-                    await _create_document_states_after_ingestion(
-                        processing_id=processing_id,
-                        config_id=config_id,  # Same config_id used throughout
-                        paths=paths or [],
-                        data_source=data_source,  # Pass data source type for proper handling
-                        skip_graph=request.skip_graph
-                    )
-                    logger.info(f"Document_state records created synchronously for {data_source}")
-
-                    # NOW start monitoring — the detector's first scan finds these files already tracked
-                    # (in document_state) and won't re-ingest them.
-                    await incremental_manager.add_datasource_for_sync(
-                        source_type=data_source,
-                        source_name=f"{data_source}_{int(time.time())}",
-                        connection_params=connection_params,
-                        config_id=config_id,  # Pass our pre-generated config_id
-                        skip_graph=request.skip_graph  # Pass skip_graph flag
-                    )
-
-                    logger.info(f"SUCCESS: Enabled incremental sync for {data_source}: {config_id}, skip_graph={request.skip_graph}")
-                    result['sync_enabled'] = True
-                    result['config_id'] = config_id
-                else:
-                    logger.warning(f"Could not enable sync for {data_source}: missing configuration")
-                    result['sync_enabled'] = False
-                    
+                await _enable_incremental_sync(
+                    data_source=data_source,
+                    result=result,
+                    config_id=config_id,
+                    request=request,
+                    paths=paths,
+                    inc_mgr=incremental_manager,
+                )
+            except asyncio.CancelledError:
+                logger.warning("ingest: sync registration cancelled (server shutting down)")
+                raise HTTPException(status_code=503, detail="Server is shutting down")
             except Exception as e:
                 logger.error(f"Error enabling incremental sync: {e}")
                 import traceback
@@ -1064,13 +1977,17 @@ async def ingest(request: IngestRequest):
                 result['sync_enabled'] = False
         else:
             result['sync_enabled'] = False
-        
+
         logger.info(f"Document ingestion started with ID: {result['processing_id']}")
         return result
-            
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error starting document ingestion: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 def cleanup_uploads(keep_recent_files: int = 0):
     """Clean up uploaded files, optionally keeping most recent files"""
@@ -1224,7 +2141,53 @@ async def get_status():
         raise
     except Exception as e:
         logger.error(f"Error fetching status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail= str(e))
+
+async def _start_cocoindex_text_ingest(
+    content: str,
+    source_name: str,
+    skip_graph: bool = False,
+) -> dict:
+    """Route raw text through CocoIndex (same branch pattern as ``/api/ingest``).
+
+    Stages content into ``uploads/`` as a ``.txt`` file, then reuses
+    ``_start_cocoindex_ingest`` → ``bridge.ingest_files`` so native CocoIndex
+    vector/graph targets are used (not the flexible LlamaIndex write path).
+    """
+    await _ensure_cocoindex_bridge(
+        getattr(backend_instance.system, "config", None)
+    )
+    if not cocoindex_bridge:
+        raise HTTPException(
+            status_code=500,
+            detail="CocoIndex bridge unavailable for text ingest",
+        )
+
+    _safe_name = Path(source_name or "text_input.txt").name
+    if not _safe_name.lower().endswith((".txt", ".md", ".markdown", ".html", ".htm")):
+        _safe_name = f"{_safe_name}.txt"
+    if not _safe_name or _safe_name in (".", ".."):
+        _safe_name = "text_input.txt"
+
+    _uploads = Path(getattr(cocoindex_bridge, "_uploads_dir", "./uploads"))
+    _uploads.mkdir(parents=True, exist_ok=True)
+    _staged = _uploads / _safe_name
+    _staged.write_text(content, encoding="utf-8")
+    logger.info(
+        "CocoIndex text ingest: staged %d chars -> %s",
+        len(content), _staged,
+    )
+
+    return await _start_cocoindex_ingest(
+        data_source="filesystem",
+        paths=[str(_staged)],
+        config_id="",
+        bridge_primary_ds=getattr(cocoindex_bridge, "_data_source", "filesystem") or "filesystem",
+        conn_params={},
+        skip_graph=skip_graph,
+        enable_sync=False,
+    )
+
 
 @app.post("/api/test-sample")
 async def test_sample_default(request: SampleTestRequest):
@@ -1235,8 +2198,15 @@ async def test_sample_default(request: SampleTestRequest):
         skip_graph = request.skip_graph
 
         logger.info("Starting async sample text processing")
-        result = await backend_instance.ingest_text(content=content, source_name=source_name, skip_graph=skip_graph)
-        
+        if os.getenv("PIPELINE_BACKEND", "default").lower() == "cocoindex":
+            result = await _start_cocoindex_text_ingest(
+                content=content, source_name=source_name, skip_graph=skip_graph,
+            )
+        else:
+            result = await backend_instance.ingest_text(
+                content=content, source_name=source_name, skip_graph=skip_graph,
+            )
+
         # Return the async processing response (same format as ingest-text)
         logger.info(f"Sample text processing started with ID: {result['processing_id']}")
         return result
@@ -1249,8 +2219,19 @@ async def ingest_custom_text(request: TextIngestRequest):
     """Start async text ingestion and return processing ID."""
     try:
         logger.info(f"Starting async text ingestion: source='{request.source_name}'")
-        result = await backend_instance.ingest_text(content=request.content, source_name=request.source_name, skip_graph=request.skip_graph)
-        
+        if os.getenv("PIPELINE_BACKEND", "default").lower() == "cocoindex":
+            result = await _start_cocoindex_text_ingest(
+                content=request.content,
+                source_name=request.source_name or "text_input",
+                skip_graph=request.skip_graph,
+            )
+        else:
+            result = await backend_instance.ingest_text(
+                content=request.content,
+                source_name=request.source_name,
+                skip_graph=request.skip_graph,
+            )
+
         logger.info(f"Text ingestion started with ID: {result['processing_id']}")
         return result
     except Exception as e:
@@ -2230,6 +3211,97 @@ async def enable_datasource(config_id: str):
     except Exception as e:
         logger.error(f"Error enabling datasource: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CocoIndex pipeline bridge endpoints
+# Active only when PIPELINE_BACKEND=cocoindex is set in .env.
+# These endpoints let you trigger on-demand updates, check status, and force
+# a full reprocess — mirroring what ``cocoindex update`` does from the CLI.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/cocoindex/status")
+async def cocoindex_status():
+    """Return CocoIndex bridge status and last update results.
+
+    Returns 200 with ``{"active": false}`` when PIPELINE_BACKEND != cocoindex.
+    """
+    if not cocoindex_bridge:
+        return {
+            "active": False,
+            "message": (
+                "CocoIndex pipeline bridge is not running. "
+                "Set PIPELINE_BACKEND=cocoindex in .env to enable it."
+            ),
+        }
+    return {"active": True, **cocoindex_bridge.status()}
+
+
+@app.post("/api/cocoindex/sync-now")
+async def cocoindex_sync_now(request: dict = None):
+    """Trigger a CocoIndex update cycle — mirrors ``POST /api/sync/sync-now``.
+
+    Processes all pending / changed files through the CocoIndex pipeline.
+    CocoIndex's LMDB memoization means unchanged documents are skipped
+    automatically; only new or modified files are re-processed.
+
+    Equivalent to running:
+      ``cocoindex update cocoindex_integration/pipeline/app.py``
+
+    The pipeline ``app.py`` is configured by ``.env`` — same sources, targets,
+    and functions as when running the CLI directly.
+
+    Optional JSON body:
+      ``{"full_reprocess": true}``  — invalidate LMDB memo state and reprocess
+      every document from scratch (slow; use after changing chunking / extraction
+      config).  Equivalent to deleting ``cocoindex.db`` and re-running.
+
+    Returns update stats and elapsed time.
+    """
+    if not cocoindex_bridge:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CocoIndex bridge is not running. "
+                "Set PIPELINE_BACKEND=cocoindex in .env to enable it."
+            ),
+        )
+    full_reprocess = bool((request or {}).get("full_reprocess", False))
+    try:
+        result = await cocoindex_bridge.sync_now(full_reprocess=full_reprocess)
+        return result
+    except asyncio.CancelledError:
+        logger.warning("cocoindex/sync-now: request cancelled (server shutting down)")
+        raise HTTPException(status_code=503, detail="Server is shutting down")
+    except Exception as exc:
+        logger.error("cocoindex/sync-now error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/cocoindex/config")
+async def cocoindex_config():
+    """Show the CocoIndex pipeline configuration loaded from .env.
+
+    Returns the same ``load_config_from_env()`` dict that
+    ``cocoindex_integration/pipeline/app.py`` uses — useful for verifying
+    the bridge sees the right source / target / function settings before
+    triggering a sync.
+
+    The same config is used whether you trigger ingest via:
+      - REST:  ``POST /api/cocoindex/sync-now`` (server bridge)
+      - CLI:   ``cocoindex update cocoindex_integration/pipeline/app.py``
+    """
+    try:
+        from cocoindex_integration.pipeline.app import load_config_from_env
+        cfg = load_config_from_env()
+        return {
+            "active": cocoindex_bridge is not None,
+            "pipeline_app": "cocoindex_integration/pipeline/app.py",
+            "cli_equivalent": "cocoindex update cocoindex_integration/pipeline/app.py",
+            "pipeline_config": cfg,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 # Backend API only - no frontend serving
 @app.get("/")

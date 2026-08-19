@@ -10,6 +10,7 @@ from llama_index.core import Document
 
 from .base import BaseDataSource
 from .passthrough_extractor import PassthroughExtractor
+from .extractor_extensions import PASSTHROUGH_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -58,23 +59,8 @@ class AzureBlobSource(BaseDataSource):
         # Create passthrough extractor with progress tracking
         passthrough = PassthroughExtractor(progress_callback=progress_callback)
         
-        # Map all supported file types to passthrough extractor
-        file_extractor = {
-            ".pdf": passthrough,
-            ".docx": passthrough,
-            ".pptx": passthrough,
-            ".xlsx": passthrough,
-            ".doc": passthrough,
-            ".ppt": passthrough,
-            ".xls": passthrough,
-            ".txt": passthrough,
-            ".md": passthrough,
-            ".html": passthrough,
-            ".csv": passthrough,
-            ".png": passthrough,
-            ".jpg": passthrough,
-            ".jpeg": passthrough,
-        }
+        # Map all supported file types to passthrough extractor (not hardcoded here)
+        file_extractor = {ext: passthrough for ext in PASSTHROUGH_EXTENSIONS}
         
         # Initialize AzStorageBlobReader with credentials and passthrough extractors
         reader_kwargs = {
@@ -98,7 +84,100 @@ class AzureBlobSource(BaseDataSource):
         reader = AzStorageBlobReader(**reader_kwargs)
         
         return reader, passthrough
-    
+
+    def get_placeholder_docs(self, extractor=None) -> List[Document]:
+        """
+        Return reader-level placeholder documents captured by *extractor*.
+
+        Azure Blob caveat
+        -----------------
+        ``AzStorageBlobReader`` downloads each blob to a **temporary directory**
+        and deletes that directory after calling the extractor.  This means:
+
+        * ``PassthroughExtractor`` (default, no bytes capture): returns a
+          placeholder with the local temp path — which no longer exists by the
+          time ``process_documents_from_metadata`` is called.  Use
+          ``get_documents()`` / ``get_documents_with_progress()`` instead.
+
+        * ``BytesCaptureExtractor`` (CocoIndex path): reads the bytes from the
+          temp file *immediately* inside the extractor call, before the temp dir
+          is deleted.  This is the correct extractor for CocoIndex ingestion.
+
+        Parameters
+        ----------
+        extractor:
+            Required for Azure Blob when you want raw bytes.  Pass
+            ``BytesCaptureExtractor()``.  If None, uses PassthroughExtractor
+            (path-only placeholder — only useful if a later step re-downloads).
+        """
+        from llama_index.readers.azstorage_blob import AzStorageBlobReader
+
+        actual_extractor = extractor or PassthroughExtractor()
+        file_extractor = {ext: actual_extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "container_name": self.container_name,
+            "file_extractor": file_extractor,
+        }
+        if self.connection_string:
+            reader_kwargs["connection_string"] = self.connection_string
+        elif self.account_url and self.account_key:
+            reader_kwargs["account_url"] = self.account_url
+            reader_kwargs["credential"] = self.account_key
+        if self.blob_name:
+            reader_kwargs["blob"] = self.blob_name
+        elif self.prefix:
+            reader_kwargs["prefix"] = self.prefix
+
+        reader = AzStorageBlobReader(**reader_kwargs)
+        return reader.load_data()
+
+    def read_file_bytes(self, blob_name: str) -> bytes:
+        """
+        Read the raw bytes of a single Azure blob, reusing the source's cached
+        credentials/config and the LlamaIndex ``AzStorageBlobReader`` restricted
+        to one blob.
+
+        NO new SDK code — uses the same reader machinery as the full listing with
+        a ``BytesCaptureExtractor``.  Azure blobs are downloaded to a temp dir that
+        the reader deletes after ``load_data``; ``BytesCaptureExtractor`` reads the
+        bytes WITHIN that scope (inside the extractor call) so nothing is lost.
+
+        Parameters
+        ----------
+        blob_name:
+            The blob name within the container (may include a folder path).
+
+        Returns
+        -------
+        Raw file bytes (``b""`` if the blob could not be read).
+        """
+        from llama_index.readers.azstorage_blob import AzStorageBlobReader
+        from .bytes_capture_extractor import BytesCaptureExtractor
+
+        extractor = BytesCaptureExtractor()
+        file_extractor = {ext: extractor for ext in PASSTHROUGH_EXTENSIONS}
+
+        reader_kwargs: Dict[str, Any] = {
+            "container_name": self.container_name,
+            "blob": blob_name,  # single blob — restricts reader to one key
+            "file_extractor": file_extractor,
+        }
+        if self.connection_string:
+            reader_kwargs["connection_string"] = self.connection_string
+        elif self.account_url and self.account_key:
+            reader_kwargs["account_url"] = self.account_url
+            reader_kwargs["credential"] = self.account_key
+
+        reader = AzStorageBlobReader(**reader_kwargs)
+        docs = reader.load_data()
+        for d in docs:
+            rb = d.metadata.get("raw_bytes")
+            if rb is not None:
+                return rb
+        logger.warning("AzureBlobSource.read_file_bytes: no bytes captured for blob %s", blob_name)
+        return b""
+
     def get_documents(self) -> List[Document]:
         """Load files via AzStorageBlobReader (with passthrough), then process with DocumentProcessor"""
         try:

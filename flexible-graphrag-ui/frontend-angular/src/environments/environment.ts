@@ -8,7 +8,8 @@ export const environment = {
   defaultFolderPath: '/Shared/GraphRAG', // Default folder path for CMIS
   cmisBaseUrl: 'http://localhost:8080', // Default for standalone development
   alfrescoBaseUrl: 'http://localhost:8080', // Default for standalone development
-  nuxeoBaseUrl: 'http://localhost:8081/nuxeo' // Default for standalone development
+  nuxeoBaseUrl: 'http://localhost:8081/nuxeo', // Default for standalone development
+  nuxeoPath: '/default-domain/workspaces/GraphRAG' // Default Nuxeo folder shown in the source dialog
 };
 
 /*
