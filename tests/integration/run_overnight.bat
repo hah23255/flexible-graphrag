@@ -52,8 +52,12 @@ echo [%TIME%] 2b. All embedding providers - LC backend >> "%LOG%"
 
 REM ============================================================
 REM  2c. LiteLLM embedding - both LI and LC backends
-REM      Requires LiteLLM proxy running: litellm --config litellm_config.yaml --port 4000
-REM      Skip if proxy not running (will error with connection refused, not 403)
+REM      Runs DIRECT - no proxy. The litellm library calls the provider itself using
+REM      its own env vars (OPENAI_API_KEY etc), which is why this profile sets only
+REM      EMBEDDING_KIND=litellm. Same for the litellm LLM profile in section 1.
+REM      A proxy is only used if .env sets LITELLM_API_BASE / LITELLM_EMBEDDING_API_BASE,
+REM      so leave those commented out for these runs:
+REM        litellm --config litellm_config.yaml --port 4000   (proxy mode only)
 REM ============================================================
 echo [%TIME%] 2c. LiteLLM embedding - both backends >> "%LOG%"
 %MATRIX% --vector qdrant --backends both --embedding litellm >> "%LOG%" 2>&1

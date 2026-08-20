@@ -165,7 +165,8 @@ CHUNKER_BACKEND=llamaindex   # llamaindex (default) | langchain | cocoindex
 #   recursive (default) | character | token | markdown | python | sentence_transformers
 #LC_SPLITTER_TYPE=recursive
 
-# Applies when CHUNKER_BACKEND=cocoindex — requires: uv pip install "cocoindex[text]"
+# Applies when CHUNKER_BACKEND=cocoindex (no extra needed — the splitters are in the
+# base cocoindex package as of 1.0.20)
 #   recursive  RecursiveSplitter (default); syntax-aware tree-sitter splits for 30+ languages
 #   separator  SeparatorSplitter; splits on regex separators, then packs to CHUNK_SIZE
 COCOINDEX_SPLITTER_TYPE=recursive
@@ -197,7 +198,7 @@ can use different embedders from one `.env`.
 #COCOINDEX_EMBEDDING_KIND=
 
 # Local sentence-transformers — GPU-accelerated, no API key.
-#   Requires: uv pip install "cocoindex[sentence-transformers]"
+#   Requires: uv pip install "cocoindex[sentence_transformers]"
 #COCOINDEX_EMBEDDING_KIND=sentence_transformer
 #COCOINDEX_EMBEDDING_MODEL=all-MiniLM-L6-v2                 # 384 dims, fastest (default)
 #COCOINDEX_EMBEDDING_MODEL=all-mpnet-base-v2                # 768 dims, higher quality
@@ -288,17 +289,20 @@ how one run covers a source that is not uniform.
 #   none      (default) unchanged behaviour, no extra dependency
 #   normalize folds accents/case/punctuation ("bob smith" -> "Bob Smith")
 #   llm       also merges "Bob" -> "Bob Smith", "Acme Corp" -> "Acme Corporation"
-#             Requires: uv pip install "cocoindex[entity_resolution]" (faiss)
-#             The CORE extra, not entity_resolution_llm — see below.
-#             Without it, degrades to normalize with a warning — never fails.
+#             Requires: uv pip install "cocoindex[entity_resolution_llm]"
+#             (or the smaller "cocoindex[entity_resolution]" — see below)
+#             Without either, degrades to normalize with a warning — never fails.
 ENTITY_RESOLUTION=none
 ```
 
 `llm` uses Flexible GraphRAG's own `PairResolver` and `Embedder` implementations, wired to the
-`LLM_PROVIDER` and embedding model you already configured — so resolution uses the same models
-as the rest of the pipeline, and CocoIndex's
-[built-in LLM resolver](https://cocoindex.io/docs/ops/entity_resolution/)
-(`cocoindex[entity_resolution_llm]`) is not needed.
+`LLM_PROVIDER` and embedding model you already configured, so resolution uses the same models as
+the rest of the pipeline. That only needs `cocoindex[entity_resolution]`.
+
+`cocoindex[entity_resolution_llm]` is the better default anyway: the difference is one package
+(`instructor` — faiss-cpu is in both, litellm is already a base dependency), and it makes the
+whole of [CocoIndex's entity-resolution API](https://cocoindex.io/docs/ops/entity_resolution/)
+available, including its built-in `LlmPairResolver`.
 
 Per document, not per corpus: two different files are never merged together. Extraction is per
 chunk, so this runs afterwards — `Bob` in one chunk and `Bob Smith` in the next are only

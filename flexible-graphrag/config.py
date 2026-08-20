@@ -687,12 +687,18 @@ an aristocratic family that rules the planet Caladan, the rainy planet, since 10
                     "max_new_tokens": int(os.getenv("VLLM_MAX_NEW_TOKENS", "2048")),
                 }
             elif self.llm_provider == LLMProvider.LITELLM:
-                # LiteLLM proxy - unified OpenAI-compatible API for 100+ providers
-                # Run: litellm --model ollama/llama3 (starts proxy on port 4000)
+                # LiteLLM — unified access to 100+ providers, two ways:
+                #   direct (default) leave LITELLM_API_BASE unset and litellm calls the
+                #     provider itself using its env vars (OPENAI_API_KEY, …). No proxy
+                #     process, which matters on Windows.
+                #   proxy            set LITELLM_API_BASE=http://localhost:4000/v1 after
+                #     running: litellm --model ollama/llama3
+                # None rather than a default endpoint, so "unset" really means direct —
+                # llm_factory only passes these to LiteLLM(...) when they have a value.
                 self.llm_config = {
                     "model": os.getenv("LITELLM_MODEL", "gpt-4o-mini"),
-                    "api_base": os.getenv("LITELLM_API_BASE", "http://localhost:4000/v1"),
-                    "api_key": os.getenv("LITELLM_API_KEY", "local"),
+                    "api_base": os.getenv("LITELLM_API_BASE") or None,
+                    "api_key": os.getenv("LITELLM_API_KEY") or None,
                     "temperature": float(os.getenv("LITELLM_TEMPERATURE", "0.1")),
                     "timeout": float(os.getenv("LITELLM_TIMEOUT", "120.0")),
                     "context_window": int(os.getenv("LITELLM_CONTEXT_WINDOW", "4096")),

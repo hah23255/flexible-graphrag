@@ -176,13 +176,19 @@ def get_langchain_llm(config: Any) -> Any:
 
         if provider == "litellm":
             from langchain_openai import ChatOpenAI
-            # LiteLLM proxy default port is 4000.
-            api_base = llm_config.get("api_base", "http://localhost:4000/v1")
+            # Direct by default; base_url/api_key only when a LiteLLM proxy is configured
+            # (LITELLM_API_BASE). Both must go through _kw: passing api_key=None
+            # explicitly makes langchain_openai build ONLY the async client, and the
+            # classic QA chain's ainvoke() falls back to the sync _generate(), which then
+            # fails with "Sync client is not available". Omitting them instead lets
+            # ChatOpenAI pick up OPENAI_API_KEY from the environment as usual.
             return ChatOpenAI(
                 model=llm_config.get("model", "local-model"),
                 temperature=llm_config.get("temperature", 0.1),
-                api_key=llm_config.get("api_key", "local"),
-                base_url=api_base,
+                **_kw(
+                    api_key=llm_config.get("api_key"),
+                    base_url=llm_config.get("api_base"),
+                ),
             )
 
         if provider == "vllm":

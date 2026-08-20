@@ -91,7 +91,8 @@ SEARCH_DB=elasticsearch
 #                 (Markdown, Python, Rust, TypeScript, SQL, …) when PIPELINE_BACKEND=cocoindex.
 #                 File language is auto-detected from extension via detect_code_language().
 #                 Only active in the CocoIndex pipeline (PIPELINE_BACKEND=cocoindex).
-#                 Requires: uv pip install "cocoindex[text]"  (or a full cocoindex install)
+#                 No extra needed — the splitters are in the base cocoindex package
+#                 as of 1.0.20 (the old "text" extra was removed there).
 CHUNKER_BACKEND=llamaindex
 #CHUNKER_BACKEND=langchain
 #CHUNKER_BACKEND=cocoindex
@@ -144,8 +145,11 @@ KG_EXTRACTOR_BACKEND=llamaindex
 #   none      (default) unchanged behaviour, no extra dependency
 #   normalize folds accents/case/punctuation ("bob smith" -> "Bob Smith")
 #   llm       also merges "Bob" -> "Bob Smith", "Acme Corp" -> "Acme Corporation"
-#             REQUIRES: uv pip install "cocoindex[entity_resolution]" (faiss).
-#             Without it, degrades to normalize with a warning — never fails.
+#             REQUIRES: uv pip install "cocoindex[entity_resolution_llm]"
+#             (or the smaller "cocoindex[entity_resolution]" — the difference is
+#              just `instructor`, which only CocoIndex's own LlmPairResolver uses;
+#              ours is wired to your configured LLM_PROVIDER instead).
+#             Without either, degrades to normalize with a warning — never fails.
 # NOTE: resolution rewrites entity ids, so enabling it against a corpus already
 # ingested without it leaves old and new nodes disagreeing. Turn it on from the
 # start, or re-ingest clean.
@@ -1002,17 +1006,26 @@ FIREWORKS_MODEL=accounts/fireworks/models/gpt-oss-120b
 # VLLM_TEMPERATURE=0.1
 # HF_TOKEN=
 
-# LiteLLM Configuration (proxy for 100+ providers)
-# Requires proxy extra: pip install "litellm[proxy]"  (cmd: pip install litellm[proxy])
-# Run: litellm --model ollama/gpt-oss:20b --port 4000
-# Docs: https://docs.litellm.ai/docs/proxy/quick_start
-# LITELLM_MODEL=ollama/gpt-oss:20b            # Model name as configured in LiteLLM
-# LITELLM_API_BASE=http://localhost:11434     # Direct to Ollama (LiteLLM routes ollama/* models here automatically)
-# Model name as configured in LiteLLM
+# LiteLLM Configuration — unified access to 100+ providers, two ways:
+#
+#   DIRECT (default)  Leave LITELLM_API_BASE unset. The litellm library calls the
+#                     provider itself using its own env vars (OPENAI_API_KEY, …), so
+#                     the model name carries the provider: gpt-4.1-mini, ollama/llama3,
+#                     anthropic/claude-…  No proxy process — Windows-safe.
+#
+#   PROXY             Set LITELLM_API_BASE to a running LiteLLM proxy.
+#                     Requires proxy extra: pip install "litellm[proxy]"
+#                     Run: litellm --model ollama/gpt-oss:20b --port 4000
+#                     Docs: https://docs.litellm.ai/docs/proxy/quick_start
+#
+# Model name (provider inferred from the prefix in direct mode)
 LITELLM_MODEL=gpt-4.1-mini
-# LiteLLM proxy endpoint
-LITELLM_API_BASE=http://localhost:4000/v1
-# LITELLM_API_KEY=local                       # LiteLLM master key (or "local" if none)
+#LITELLM_MODEL=ollama/gpt-oss:20b
+# Proxy endpoint — set ONLY for proxy mode. Unset means direct.
+#LITELLM_API_BASE=http://localhost:4000/v1
+# Talking straight to Ollama is direct mode too, not a proxy:
+#LITELLM_API_BASE=http://localhost:11434
+# LITELLM_API_KEY=local                       # LiteLLM master key — proxy mode only
 # LITELLM_FUNCTION_CALLING=true
 
 # OpenRouter Configuration (unified API for 200+ models)
@@ -1062,13 +1075,15 @@ EMBEDDING_KIND=openai
 #         fireworks | openai_like | litellm
 #
 # sentence_transformer: CocoIndex-native SentenceTransformerEmbedder (GPU-accelerated, no API key)
-# Requires: uv pip install "cocoindex[sentence-transformers]"
+# Requires: uv pip install "cocoindex[sentence_transformers]"
 #COCOINDEX_EMBEDDING_KIND=sentence_transformer
 #
 # litellm: CocoIndex LiteLLMEmbedder — 100+ providers (OpenAI, Ollama, Bedrock, Gemini …)
 # Uses the litellm Python library DIRECTLY — no proxy server, no Windows antivirus issues.
-# (Unlike EMBEDDING_KIND=litellm which requires the LiteLLM proxy server running in WSL2.)
-# Requires: uv pip install "cocoindex[litellm]"  (litellm package must be installed)
+# (EMBEDDING_KIND=litellm on the default pipeline behaves the same way — direct unless
+#  LITELLM_EMBEDDING_API_BASE / LITELLM_API_BASE point at a proxy.)
+# Requires: uv pip install "cocoindex[litellm]"  — already satisfied, litellm is a
+# base dependency of flexible-graphrag; the extra only makes the requirement explicit.
 #COCOINDEX_EMBEDDING_KIND=litellm
 
 # CocoIndex sentence-transformer model (used when COCOINDEX_EMBEDDING_KIND=sentence_transformer)

@@ -112,27 +112,30 @@ Who drives ingest, and where per-document state lives:
 uv pip install -e ".[cocoindex]"
 
 # Optional extras
-uv pip install "cocoindex[text]"                  # native syntax-aware splitter (30+ languages)
-uv pip install "cocoindex[sentence-transformers]" # local GPU embeddings, no API key
-uv pip install "cocoindex[litellm]"               # 100+ embedding providers, no proxy server
-uv pip install "cocoindex[entity_resolution]"     # ENTITY_RESOLUTION=llm (pulls faiss-cpu)
+uv pip install "cocoindex[sentence_transformers]" # local GPU embeddings, no API key
+uv pip install "cocoindex[litellm]"               # 100+ embedding providers — already satisfied,
+                                                  # litellm is a base dependency
+uv pip install "cocoindex[entity_resolution_llm]" # ENTITY_RESOLUTION=llm (see below)
 
-python -c "import cocoindex; print(cocoindex.__version__)"   # expect >= 1.0.16
+python -c "import cocoindex; print(cocoindex.__version__)"   # expect >= 1.0.20
 ```
 
-`ENTITY_RESOLUTION=normalize` needs no extra. `llm` needs the `entity_resolution` extra and
-degrades to `normalize` with a warning without it, so it never fails an ingest — it just
+`ENTITY_RESOLUTION=normalize` needs no extra. `llm` needs one of the two extras below, and
+degrades to `normalize` with a warning without either, so it never fails an ingest — it just
 quietly does less.
 
-That is the **core** extra, deliberately, not
-[`entity_resolution_llm`](https://cocoindex.io/docs/ops/entity_resolution/). CocoIndex's
-built-in LLM resolver is not used: Flexible GraphRAG supplies its own `PairResolver` and
-`Embedder`, wired to the `LLM_PROVIDER` and embedding model you already configured, so
-resolution uses the same models as the rest of the pipeline.
+| extra | gives you |
+|---|---|
+| `entity_resolution` | the minimum for `ENTITY_RESOLUTION=llm`. Flexible GraphRAG supplies its own `PairResolver` and `Embedder`, wired to the `LLM_PROVIDER` and embedding model you already configured, so resolution uses the same models as the rest of the pipeline. |
+| `entity_resolution_llm` | the whole of [CocoIndex's entity-resolution API](https://cocoindex.io/docs/ops/entity_resolution/), including its built-in `LlmPairResolver`, alongside custom resolvers like ours. |
 
-Upstream marks `entity_resolution_llm` "recommended", so it is an easy one to install by
-mistake. It pulls `instructor` — which nothing here calls — and pins `rich` and `jiter` down a
-version. Harmless, but pointless weight.
+**`entity_resolution_llm` is the better default.** It lists faiss-cpu, `instructor` and
+`litellm`; faiss-cpu is common to both extras and litellm is already a base dependency here, so
+the only difference between the two is `instructor` — one package for the whole API surface.
+
+`LlmPairResolver` uses `instructor` to make the model return a validated Pydantic decision
+rather than prose. Our own resolver does not need it — it prompts for a bare name and maps the
+answer back to a candidate.
 
 !!! warning "Install the extras you need, not `cocoindex[all]`"
     `[all]` is about 30 packages — Valkey, Snowflake, BigQuery, Doris, Kafka, Iggy, OCI,

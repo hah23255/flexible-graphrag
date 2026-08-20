@@ -37,6 +37,16 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 ARG UV_NATIVE_TLS=false
 ENV UV_NATIVE_TLS=${UV_NATIVE_TLS}
 
+# uv install mode — mirrors the backend Dockerfile, where the full rationale lives. In short:
+#   UV_LINK_MODE=copy  uv hardlinks from its cache by default (st_nlink=2), and nltk >= 3.10.3's
+#                      pathsec.py refuses to open multiply-linked files, so LlamaIndex chunking
+#                      fails with "Security Violation [pathsec.open]" on every ingest. Docker-only
+#                      symptom — Windows os.stat() reports st_nlink=1 for hardlinks.
+#   UV_NO_CACHE=1      keeps the ~7.5 GB uv wheel cache out of the image (a later `rm -rf` cannot
+#                      reclaim it — layers are additive) and removes the hardlink source.
+ENV UV_LINK_MODE=copy \
+    UV_NO_CACHE=1
+
 # Step 1: Langflow. Pinned to the validated version (host quickstart uses the same 1.11.2; the
 # earlier langflow-1.10.2 API fixes still apply in the component files). Installed first, before
 # flexible-graphrag. No fastapi pin needed — 1.11.2 resolves fastapi 0.141.1, which works.
@@ -49,11 +59,27 @@ RUN uv pip install --system langflow==1.11.2
 # editable install: hatchling reads `readme` and validates `[tool.hatch.build.targets.wheel.force-include]`
 # during `build_editable`, so they have to exist at /app even though `COPY . .` re-copies them below.
 COPY pyproject.toml uv.toml extras-overrides.txt README.md Dockerfile env-sample.txt ./
-ARG EXTRAS="langchain,langchain-extras"
+#
+# cocoindex is in the DEFAULT set for the same reason as the backend image: `COPY . .` below
+# brings in cocoindex_integration/ regardless, an image user cannot add an extra after the
+# fact, and the CI workflow passes cocoindex here anyway — so the default matches what is
+# actually published. (Today the CocoIndex bridge starts only in main.py, which this image
+# does not run; the package is here so cocoindex_integration/ imports resolve and so running
+# CocoIndex from a Langflow component later needs no new image.)
+ARG EXTRAS="langchain,langchain-extras,cocoindex"
 RUN if [ -n "$EXTRAS" ]; then \
         uv pip install --override extras-overrides.txt --system -e ".[$EXTRAS]"; \
     else \
         uv pip install --system -e .; \
+    fi
+
+# CocoIndex's own extras — mirrors the backend Dockerfile (EXTRAS above passes
+# flexible-graphrag extras, which cannot reach CocoIndex's).  Without this the image
+# would have cocoindex but fail on ENTITY_RESOLUTION=llm (faiss/instructor) and
+# COCOINDEX_EMBEDDING_KIND=sentence_transformer.  See Dockerfile for the full rationale.
+ARG COCOINDEX_EXTRAS="entity_resolution_llm,sentence_transformers"
+RUN if echo "$EXTRAS" | grep -q cocoindex && [ -n "$COCOINDEX_EXTRAS" ]; then \
+        uv pip install --system "cocoindex[$COCOINDEX_EXTRAS]"; \
     fi
 
 # Step 3: verify PyJWT owns the `jwt` module.

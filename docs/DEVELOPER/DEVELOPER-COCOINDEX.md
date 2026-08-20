@@ -276,10 +276,10 @@ Runs after every chunk of a document is extracted, rewriting `subject`/`obj` acr
 `Bob Smith` in the next are comparable. Per document, never across the corpus.
 
 `normalize` folds accents/case/punctuation in pure Python. `llm` adds semantic merges and needs
-`cocoindex[entity_resolution]` — the **core** extra: `FlexibleEmbedder` and `LLMPairResolver`
-implement CocoIndex's `Embedder` and `PairResolver` protocols using the configured models, so
-CocoIndex's own LLM resolver is never called. Missing extra degrades to `normalize` with a
-warning.
+`cocoindex[entity_resolution_llm]` (or the smaller `cocoindex[entity_resolution]`; the
+difference is only `instructor`). `FlexibleEmbedder` and `LLMPairResolver` implement CocoIndex's
+`Embedder` and `PairResolver` protocols using the configured models, so CocoIndex's own LLM
+resolver is never called on our path. Missing extra degrades to `normalize` with a warning.
 
 `LLMPairResolver` refuses ambiguous bare first names before consulting the model: it counts, over
 the whole corpus, how many full names share each first name. `Priya` merges into `Priya Raman`

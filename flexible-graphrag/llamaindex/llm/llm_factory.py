@@ -355,15 +355,27 @@ def create_llm(provider: LLMProvider, config: Dict[str, Any]):
         import litellm
         litellm.drop_params = True
         model = config.get("model", "gpt-4o-mini")
-        api_base = config.get("api_base", "http://localhost:4000")
-        logger.info(f"Configuring LiteLLM - Model: {model}, API Base: {api_base}")
-        return LiteLLM(
-            model=model,
-            api_base=api_base,
-            api_key=config.get("api_key", "local"),
-            temperature=config.get("temperature", 0.1),
-            pydantic_program_mode=_resolve_pydantic_program_mode(config),
+        # Only pass api_base / api_key when explicitly configured. Without them
+        # litellm calls the provider directly using its own env vars (e.g.
+        # OPENAI_API_KEY) — no proxy process required, which matters on Windows.
+        # Set LITELLM_API_BASE only when routing through a LiteLLM proxy server.
+        # Mirrors the same handling in embedding_factory.py for EMBEDDING_KIND=litellm.
+        api_base = config.get("api_base") or None
+        api_key = config.get("api_key") or None
+        logger.info(
+            "Configuring LiteLLM - Model: %s, API Base: %s",
+            model, api_base or "(direct — no proxy)",
         )
+        kwargs: dict = {
+            "model": model,
+            "temperature": config.get("temperature", 0.1),
+            "pydantic_program_mode": _resolve_pydantic_program_mode(config),
+        }
+        if api_base:
+            kwargs["api_base"] = api_base
+        if api_key:
+            kwargs["api_key"] = api_key
+        return LiteLLM(**kwargs)
 
     elif provider == LLMProvider.OPENROUTER:
         api_key = config.get("api_key")

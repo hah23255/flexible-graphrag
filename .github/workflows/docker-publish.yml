@@ -14,7 +14,7 @@ on:
       backend_extras:
         description: 'Backend/langflow optional extras (comma-separated; rdf is redundant with base deps, add observability for OTel tracing)'
         required: false
-        default: 'langchain,langchain-extras'
+        default: 'langchain,langchain-extras,cocoindex'
 
 env:
   DOCKERHUB_ORG: integratedsemantics
@@ -58,7 +58,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -107,7 +107,7 @@ jobs:
           # Pass EXTRAS for the backend AND langflow images (both install flexible-graphrag[extras]);
           # frontend images don't use it.
           build-args: |
-            ${{ (matrix.name == 'backend' || matrix.name == 'langflow') && format('EXTRAS={0}', inputs.backend_extras || 'langchain,langchain-extras') || '' }}
+            ${{ (matrix.name == 'backend' || matrix.name == 'langflow') && format('EXTRAS={0}', inputs.backend_extras || 'langchain,langchain-extras,cocoindex') || '' }}
           # Layer cache per image name — speeds up re-runs significantly
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}

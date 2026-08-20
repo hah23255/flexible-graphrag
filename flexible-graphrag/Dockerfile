@@ -18,6 +18,25 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     build-essential gcc curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# uv install mode — both settings are load-bearing, not tuning:
+#
+#   UV_LINK_MODE=copy  uv defaults to hardlinking from its cache into site-packages, leaving every
+#                      installed file with st_nlink=2.  nltk >= 3.10.3 ships a path-hardening module
+#                      (nltk/pathsec.py) that REFUSES to open any multiply-linked file (CWE-59), so
+#                      LlamaIndex's SentenceSplitter dies the moment it loads stopwords:
+#                        PermissionError: Security Violation [pathsec.open]: refusing multiply-linked
+#                        file '.../llama_index/core/_static/nltk_cache/corpora/stopwords/english'
+#                      i.e. every ingest fails at the chunking stage.  Invisible on Windows dev venvs
+#                      because os.stat() there reports st_nlink=1 for hardlinks — Docker only.
+#
+#   UV_NO_CACHE=1      without it the wheel cache (~7.5 GB — torch, docling, CUDA libs) is written
+#                      into /root/.cache/uv and shipped in the image.  Cleaning it in a later RUN
+#                      would not help: layers are additive, so the bytes stay in the earlier layer.
+#                      Also removes the hardlink source, reinforcing the setting above.
+#                      Trade-off: no cross-build wheel reuse; Docker layer caching still applies.
+ENV UV_LINK_MODE=copy \
+    UV_NO_CACHE=1
+
 # Copy dependency files first for better layer caching.
 # extras-overrides.txt must be present before install so --override can reference it.
 # README.md + the force-included deploy files (Dockerfile, env-sample.txt) must be present before the
@@ -57,13 +76,20 @@ RUN if [ -n "$EXTRAS" ]; then \
     fi
 
 # CocoIndex's own extras (not reachable through EXTRAS above, which passes
-# flexible-graphrag extras). Same reasoning — an image cannot add them later.
-#   text               CHUNKER_BACKEND=cocoindex (tree-sitter splitter)
-#   entity_resolution  ENTITY_RESOLUTION=llm (faiss-cpu)
-# Deliberately NOT included:
-#   litellm                 litellm is already a base dependency, pinned <1.92
-#   sentence-transformers   pulls torch; use the huggingface extra if you want it
-ARG COCOINDEX_EXTRAS="text,entity_resolution"
+# flexible-graphrag extras). Same reasoning — an image cannot add them later, so
+# take the superset where it is cheap. CocoIndex pins only floors, so none of
+# these caps anything we already install.
+#   (CHUNKER_BACKEND=cocoindex needs no extra — the tree-sitter splitters are in the
+#    base package as of 1.0.20, which removed the old `text` extra.)
+#   entity_resolution_llm  faiss-cpu + instructor + litellm. ENTITY_RESOLUTION=llm
+#                          itself only needs the core `entity_resolution` extra —
+#                          Flexible GraphRAG supplies its own PairResolver/Embedder —
+#                          but the superset is just one extra package (instructor)
+#                          and also covers CocoIndex's built-in LLM resolver.
+#   sentence-transformers  COCOINDEX_EMBEDDING_KIND=sentence_transformer. Cheap here:
+#                          docling-slim[standard] is a base dependency and already
+#                          pulls torch + torchvision, so this adds only the wrappers.
+ARG COCOINDEX_EXTRAS="entity_resolution_llm,sentence_transformers"
 RUN if echo "$EXTRAS" | grep -q cocoindex && [ -n "$COCOINDEX_EXTRAS" ]; then \
         uv pip install --system "cocoindex[$COCOINDEX_EXTRAS]"; \
     fi

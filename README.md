@@ -1340,8 +1340,16 @@ Do not enable more than one of these orchestrators at once (startup skips / forc
 **To enable:** add `PIPELINE_BACKEND=cocoindex` to `.env` and install with
 `uv pip install -e ".[cocoindex]"`. All REST/MCP/UI endpoints remain unchanged.
 
+**Worked example:** [`examples/cocoindex/meeting_notes_graph_any/`](examples/cocoindex/meeting_notes_graph_any/README.md)
+ports CocoIndex's own `meeting_notes_graph_neo4j` example to run against **any** of the 15
+property graph databases and **any** of the 10 auto-sync data sources. It shows a custom
+`KGExtractor` (with untagged documents delegated back to the built-in extractor), entity
+resolution, and three ways to run the same extractor — a short app, the standard pipeline, and
+the server for UI-driven use.
+
 See [CocoIndex Integration](docs/GETTING-STARTED/COCOINDEX-INTEGRATION.md) and
-[CocoIndex Configuration](docs/CONFIGURATION/CONFIG-COCOINDEX.md) for details.
+[CocoIndex Configuration](docs/CONFIGURATION/CONFIG-COCOINDEX.md) for details, or the
+[CocoIndex Developer Guide](docs/DEVELOPER/DEVELOPER-COCOINDEX.md) to build on it.
 
 ---
 
@@ -1590,6 +1598,16 @@ See [docs/DEVELOPER/OBSERVABILITY/OBSERVABILITY.md](docs/DEVELOPER/OBSERVABILITY
     - `ingest_with_ontology.py`: Ontology-guided ingestion example class
     - `rdf_export_import_examples.py`: RDF export/import patterns
     - `config_rdf_stores.py`: RDF store config reference snippets
+  - `/cocoindex`: CocoIndex pipeline examples
+    - `/meeting_notes_graph_any`: CocoIndex's `meeting_notes_graph_neo4j` ported to run against any configured graph store and data source
+      - `extractor.py`: the meeting-notes extraction as a registered `KGExtractor`
+      - `mini_app.py`: short CocoIndex app — source, custom extraction, property graph
+      - `pipeline_app.py`: the standard flexible-graphrag pipeline with this extractor plugged in
+      - `run_backend.py`: starts the app server configured for this example, so the UI can drive it
+      - `example_config.py`: settings shared by the runners
+      - `meeting_notes.py`: extraction schema, prompt, section splitter, `.env` loading
+      - `meeting_notes_ontology.ttl`: the Meeting/Person/Task graph in RDF, for the RDF retriever
+      - `/sample_notes`: the notes the example ingests
 
 ## License
 

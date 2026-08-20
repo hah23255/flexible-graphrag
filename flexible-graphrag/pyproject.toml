@@ -133,11 +133,13 @@ dependencies = [
     "llama-index-embeddings-openai-like",
     "llama-index-embeddings-litellm",
     # litellm is a transitive dep of the two llama-index-*-litellm packages above (BASE deps), so its
-    # pin must live here, not in an extra. Ceiling: litellm 1.92.0 added a Rust/PyO3 bridge (litellm-rust)
-    # that fails to build on Python 3.14 (PyO3 0.23.5 caps at 3.13); 1.91.x is pure-Python. Floor: keep
-    # langchain-arangodb (langchain-extras) from transitively downgrading it. Raise the ceiling once
-    # litellm ships a 3.14-capable build.
-    "litellm>=1.81,<1.92",
+    # pin must live here, not in an extra. Floor: keep langchain-arangodb (langchain-extras) from
+    # transitively downgrading it — same floor CocoIndex uses for its own litellm extra.
+    #
+    # Ceiling removed (was <1.92): 1.92.0 had added a Rust/PyO3 bridge (litellm-rust) that could not
+    # build on Python 3.14, since PyO3 0.23.5 capped at 3.13. That no longer applies — litellm 1.97.0
+    # resolves on 3.14 with litellm-rust absent from the resolution entirely.
+    "litellm>=1.81",
     "llama-index-vector-stores-neo4jvector",
     "llama-index-vector-stores-qdrant",
     "llama-index-vector-stores-elasticsearch",
@@ -400,7 +402,9 @@ langflow = [
 # CocoIndex 1.x integration — incremental pipeline + target/source connectors.
 # Install: uv pip install -e ".[cocoindex]"
 cocoindex = [
-    "cocoindex>=1.0.16",
+    # >=1.0.20: the `text` extra was removed there — the tree-sitter splitters moved
+    # into the base package, so CHUNKER_BACKEND=cocoindex needs no extra.
+    "cocoindex>=1.0.20",
 ]
 
 # Install: uv pip install -e ".[huggingface]"

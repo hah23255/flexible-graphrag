@@ -75,15 +75,23 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-# Single top-level module (flat layout).
-only-include = ["main.py"]
+# Single top-level module (flat layout). Leading "/" anchors to the project root —
+# unanchored, this also matches venv-3.14/Lib/site-packages/*/main.py, and every match
+# maps to the same wheel path, so which one lands is walk-order dependent.
+only-include = ["/main.py"]
 
 [tool.hatch.build.targets.sdist]
+# Leading "/" anchors each pattern to the project root. Without it these are plain
+# globs that match at ANY depth, so "main.py"/"README.md" also matched inside a local
+# venv (venv-3.14/Lib/site-packages/pydantic/main.py, fastmcp READMEs, ...) and shipped
+# them in the sdist. uv's venv self-ignores via its own nested .gitignore, but hatchling
+# only reads the project-root .gitignore, so it never saw that.
 include = [
-    "main.py",
-    "test-http-mode.py",
-    "claude-desktop-configs/",
-    "mcp-inspector/",
-    "README.md",
-    "pyproject.toml",
+    "/main.py",
+    "/test-http-mode.py",
+    "/claude-desktop-configs/",
+    "/mcp-inspector/",
+    "/README.md",
+    "/pyproject.toml",
 ]
+exclude = ["venv*/"]

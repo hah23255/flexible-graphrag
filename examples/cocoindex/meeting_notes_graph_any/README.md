@@ -35,7 +35,7 @@ the main README. You need:
 * that store actually running (see [docker/](../../../docker/))
 
 Optional but used by the defaults here:
-`uv pip install "cocoindex[entity_resolution]"` for `ENTITY_RESOLUTION=llm` —
+`uv pip install "cocoindex[entity_resolution_llm]"` for `ENTITY_RESOLUTION=llm` —
 without it the run degrades to `normalize` with a warning rather than failing.
 
 Everything below runs from this directory.
@@ -390,15 +390,16 @@ The shipped default is `none`. **This example** overrides it to `llm` in
 `example_config.py`, since that is the strategy that does the interesting merge.
 
 ```bash
-uv pip install "cocoindex[entity_resolution]"   # core only — pulls faiss-cpu
+uv pip install "cocoindex[entity_resolution_llm]"
 ```
 
-That is the **core** extra, not
-[`entity_resolution_llm`](https://cocoindex.io/docs/ops/entity_resolution/): the
-LLM comparison here is Flexible GraphRAG's own `LLMPairResolver`, wired to
-whatever `LLM_PROVIDER` you have configured, so CocoIndex's built-in LLM
-resolver is not used. Without the extra, `llm` falls back to `normalize` with a
-warning rather than failing.
+The smaller `cocoindex[entity_resolution]` is enough for this example — the LLM
+comparison is Flexible GraphRAG's own `LLMPairResolver`, wired to whatever
+`LLM_PROVIDER` you have configured, so CocoIndex's
+[built-in resolver](https://cocoindex.io/docs/ops/entity_resolution/) is not
+used. The `_llm` variant differs by one package (`instructor`) and keeps that
+whole API available, which is why it is the one shown. Without either, `llm`
+falls back to `normalize` with a warning rather than failing.
 
 Two things to know:
 

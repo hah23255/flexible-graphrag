@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-08-20] — v0.8.0: Docker image fixes, CocoIndex in the published images, litellm direct mode
+
+### Added
+
+- **litellm without a proxy** — `LLM_PROVIDER=litellm` now works pointing straight at a provider, not only at a litellm proxy. `api_base`/`api_key` are omitted when unset instead of being passed as empty values.
+- **CocoIndex in both published images** — `cocoindex` is in the default `EXTRAS` for the backend and langflow images, with CocoIndex's own `entity_resolution_llm` + `sentence_transformers` installed alongside. A pip user can add an extra after the fact; an image user cannot.
+
+### Changed
+
+- CocoIndex floor raised to **`>=1.0.20`** and the `text` extra dropped — 1.0.20 moved the tree-sitter splitters into the base package and removed that extra.
+- litellm is now floor-only (`>=1.81`); the ceiling is gone.
+- The README's CocoIndex section points at the meeting-notes example and the CocoIndex developer guide.
+
+### Fixed
+
+- **Every ingest failed in the Docker images** — uv installs by hardlinking from its cache, and nltk ≥ 3.10.3's new `pathsec.py` refuses to open any multiply-linked file (`st_nlink=2`), so LlamaIndex's `SentenceSplitter` died loading stopwords: `Security Violation [pathsec.open]`. Both images now set `UV_LINK_MODE=copy`. Docker-only — Windows `os.stat()` reports `st_nlink=1` for hardlinks, so dev venvs never saw it.
+- **The uv wheel cache shipped inside the images** — `UV_NO_CACHE=1`; a later `rm -rf` cannot reclaim it, as layers are additive.
+- **The langflow image had `cocoindex` without its extras** — CI passed the extra to it, but the Dockerfile had no `COCOINDEX_EXTRAS` step, so `ENTITY_RESOLUTION=llm` and `COCOINDEX_EMBEDDING_KIND=sentence_transformer` would fail on import there.
+- **The MCP sdist contained files from a local venv** — hatchling's `include` patterns were unanchored, so `main.py`/`README.md` matched at any depth and pulled in 17 files from `venv-3.14/`. Patterns are now rooted with a leading `/`.
+
 ## [2026-08-18] — v0.8.0: CocoIndex custom KG extractors, entity resolution, entity properties, meeting-notes example
 
 ### Added
