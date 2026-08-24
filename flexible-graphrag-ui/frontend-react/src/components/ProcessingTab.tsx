@@ -29,6 +29,12 @@ import {
   FileDisplayInfo 
 } from '../types/api';
 
+// A file the server refused to store (unsupported extension, bad name, too large)
+interface SkippedFile {
+  filename: string;
+  reason: string;
+}
+
 interface ProcessingTabProps {
   currentTheme: Theme;
   isDarkMode: boolean;
@@ -397,9 +403,12 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
     }
   };
 
+  const formatSkipped = (skipped: SkippedFile[]): string =>
+    skipped.map(file => `${file.filename}: ${file.reason}`).join('\n');
+
   // Upload files (for upload data source)
-  const uploadFiles = async (): Promise<string[]> => {
-    if (configuredFiles.length === 0) return [];
+  const uploadFiles = async (): Promise<{ paths: string[]; skipped: SkippedFile[] }> => {
+    if (configuredFiles.length === 0) return { paths: [], skipped: [] };
     
     setIsUploading(true);
     setUploadProgress(0);
@@ -423,13 +432,11 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
       });
       
       if (response.data.success) {
-        if (response.data.skipped && response.data.skipped.length > 0) {
-          const skippedInfo = response.data.skipped
-            .map((file: any) => `${file.filename}: ${file.reason}`)
-            .join('\n');
-          onError(`Some files were skipped:\n${skippedInfo}`);
-        }
-        
+        // Skipped files are returned rather than reported here: only the caller knows
+        // whether anything survived, and "all skipped" needs a different message than
+        // "some skipped".
+        const skipped: SkippedFile[] = response.data.skipped || [];
+
         // Update configured files with the saved filenames for progress matching
         const uploadedFiles = response.data.files.map((uploadedFile: any) => {
           // Find the original file and create a new file object with the saved filename
@@ -444,7 +451,7 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
         // Update the parent's configured files
         onConfiguredFilesChange(uploadedFiles);
         
-        return response.data.files.map((file: any) => file.path);
+        return { paths: response.data.files.map((file: any) => file.path), skipped };
       } else {
         throw new Error('Upload failed');
       }
@@ -480,7 +487,25 @@ export const ProcessingTab: React.FC<ProcessingTabProps> = ({
       }
 
       if (configuredDataSource === 'upload') {
-        const uploadedPaths = await uploadFiles();
+        const { paths: uploadedPaths, skipped } = await uploadFiles();
+
+        // Nothing survived the upload (e.g. every file had an unsupported extension).
+        // Stop here: posting paths: [] starts a job that can only fail, and its "failed"
+        // status then overwrites the skip reasons the user actually needs to read.
+        if (uploadedPaths.length === 0) {
+          onError(
+            skipped.length > 0
+              ? `No files could be uploaded:\n${formatSkipped(skipped)}`
+              : 'No files could be uploaded'
+          );
+          onProcessingStateChange(false);
+          return;
+        }
+
+        if (skipped.length > 0) {
+          onError(`Some files were skipped:\n${formatSkipped(skipped)}`);
+        }
+
         request.paths = uploadedPaths;
         request.data_source = 'filesystem';
       } else if (configuredDataSource === 'cmis') {

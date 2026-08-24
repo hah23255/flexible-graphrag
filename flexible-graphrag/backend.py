@@ -915,7 +915,14 @@ class FlexibleGraphRAGBackend:
             if data_source == "filesystem":
                 # Extract filesystem_config from kwargs if provided (used by detectors)
                 filesystem_config = kwargs.get('filesystem_config', {})
-                file_paths = paths or filesystem_config.get('paths') or self.settings.source_paths
+                # `paths is not None` on purpose, NOT truthiness: an explicitly empty list
+                # means "the caller had nothing to ingest" (e.g. a UI upload where every file
+                # was skipped), which must fail below rather than silently fall through to the
+                # server's SOURCE_PATHS. Only an omitted `paths` (None) uses the config default.
+                if paths is not None:
+                    file_paths = paths
+                else:
+                    file_paths = filesystem_config.get('paths') or self.settings.source_paths
                 if not file_paths:
                     self._update_processing_status(
                         processing_id, 

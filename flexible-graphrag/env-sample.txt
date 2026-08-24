@@ -1201,7 +1201,9 @@ DATA_SOURCE=filesystem
 # Source Paths (for filesystem data source - REST API and MCP server)
 # Note: UI clients use file upload dialogs instead of this configuration
 # For path format examples, see docs/DATA-SOURCE-CONFIGURATION.md
-SOURCE_PATHS=["./sample-docs/cmispress.txt"]
+# Relative paths resolve against the backend's working directory (flexible-graphrag/),
+# so the repo's sample-docs/ at the project root is "../sample-docs/".
+SOURCE_PATHS=["../sample-docs/cmispress.txt"]
 
 # CMIS Configuration (if using CMIS)
 CMIS_URL=http://localhost:8080/alfresco/api/-default-/public/cmis/versions/1.1/atom

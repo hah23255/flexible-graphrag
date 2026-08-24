@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-08-23] — Security: path traversal in the file upload endpoint
+
+### Security
+
+- **Path traversal in `POST /api/upload` (GHSA-hhhf-79mm-5w28)** — the destination was built as `upload_dir / file.filename`. The multipart `filename` is entirely client-controlled, and `Path`'s `/` operator follows `../` segments and *discards the left side altogether* when the right side is absolute, so `../../../../etc/cron.d/pwn.md` or `/etc/pwn.md` wrote outside `uploads/` — unauthenticated, since the endpoint has no auth. Uploads now go through `safe_upload_filename()`, which reduces the value to a bare basename with `ntpath.basename` (chosen over `posixpath` so a Windows-style `..\..\` or `C:` prefix is neutralized even when the server runs on Linux) and rejects empty, `.`, `..` and null-byte names; the write site additionally refuses any resolved path whose parent is not the upload directory. Rejected files come back in the response's `skipped` list. Regression tests: `tests/test_upload_filename.py`.
+
+### Fixed
+
+- **An ingest with an explicitly empty `paths` silently ran the server's `SOURCE_PATHS` instead** — `backend.py` selected the path list with `paths or filesystem_config.get('paths') or settings.source_paths`, so `[]` (the caller had nothing to ingest) was indistinguishable from omitted (use the configured default) and fell through to the server's own configuration. Now only `paths is None` uses the default; an empty list fails with "No file paths provided for filesystem source", which the existing guard could never reach before. Affects REST and MCP callers as well as the UIs — most visibly when a UI upload skipped every file (e.g. an unsupported extension) and then ingested anyway, surfacing as a confusing missing-file error instead of the skip reason.
+- **The UI started a doomed ingest when every uploaded file was skipped** — if the server rejected all of them (e.g. an unsupported extension), the upload returned no paths but the UI posted `/api/ingest` with `paths: []` anyway. The resulting "Processing failed" status then overwrote the brief message naming the actual reason, so the user was told the run failed but never why. All three UIs now stop before the ingest call and report the per-file skip reasons as the outcome (`frontend-react/src/components/ProcessingTab.tsx`, `frontend-vue/src/components/ProcessingTab.vue`, `frontend-angular/src/app/components/processing-tab/processing-tab.ts`). `uploadFiles()` returns the skipped list to its caller instead of reporting it itself, since only the caller knows whether anything survived — "all skipped" and "some skipped" need different messages. Angular additionally no longer falls back to client-side file *names* as ingest paths when an upload fails; those are bare basenames that would resolve against the backend's working directory rather than the upload directory.
+- **The shipped `SOURCE_PATHS` default pointed at a directory that does not exist** — `./sample-docs/cmispress.txt` is resolved against the backend's working directory (`flexible-graphrag/`), but `sample-docs/` lives at the project root. Corrected to `../sample-docs/...` in `env-sample.txt` (and documented inline), so the default works for the documented `uv run start.py` invocation.
+
 ## [2026-08-20] — v0.8.0: Docker image fixes, CocoIndex in the published images, litellm direct mode
 
 ### Added

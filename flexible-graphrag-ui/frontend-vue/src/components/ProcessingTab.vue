@@ -276,6 +276,12 @@
 import { defineComponent, ref, computed, watch } from 'vue';
 import axios from 'axios';
 
+// A file the server refused to store (unsupported extension, bad name, too large)
+interface SkippedFile {
+  filename: string;
+  reason: string;
+}
+
 interface ProcessingStatusResponse {
   processing_id: string;
   status: 'started' | 'processing' | 'completed' | 'failed' | 'cancelled';
@@ -882,7 +888,23 @@ export default defineComponent({
 
         if (props.configuredDataSource === 'upload') {
           // For upload, we need to upload files first, then use their paths
-          const uploadedPaths = await uploadFiles();
+          const { paths: uploadedPaths, skipped } = await uploadFiles();
+
+          // Nothing survived the upload (e.g. every file had an unsupported extension).
+          // Stop here: posting paths: [] starts a job that can only fail, and its "failed"
+          // status then overwrites the skip reasons the user actually needs to read.
+          if (uploadedPaths.length === 0) {
+            error.value = skipped.length > 0
+              ? `No files could be uploaded:\n${formatSkipped(skipped)}`
+              : 'No files could be uploaded';
+            isProcessing.value = false;
+            return;
+          }
+
+          if (skipped.length > 0) {
+            error.value = `Some files were skipped:\n${formatSkipped(skipped)}`;
+          }
+
           request.paths = uploadedPaths;
           request.data_source = 'filesystem'; // Use filesystem processing for uploaded files
         } else if (props.configuredDataSource === 'cmis') {
@@ -962,8 +984,11 @@ export default defineComponent({
       }
     };
 
-    const uploadFiles = async (): Promise<string[]> => {
-      if (props.configuredFiles.length === 0) return [];
+    const formatSkipped = (skipped: SkippedFile[]): string =>
+      skipped.map(file => `${file.filename}: ${file.reason}`).join('\n');
+
+    const uploadFiles = async (): Promise<{ paths: string[]; skipped: SkippedFile[] }> => {
+      if (props.configuredFiles.length === 0) return { paths: [], skipped: [] };
       
       isUploading.value = true;
       uploadProgress.value = 0;
@@ -987,15 +1012,12 @@ export default defineComponent({
         });
         
         if (response.data.success) {
-          // Show information about skipped files if any
-          if (response.data.skipped && response.data.skipped.length > 0) {
-            const skippedInfo = response.data.skipped
-              .map((file: any) => `${file.filename}: ${file.reason}`)
-              .join('\n');
-            error.value = `Some files were skipped:\n${skippedInfo}`;
-          }
-          
-          return response.data.files.map((file: any) => file.path);
+          // Skipped files are returned rather than reported here: only the caller knows
+          // whether anything survived, and "all skipped" needs a different message than
+          // "some skipped".
+          const skipped: SkippedFile[] = response.data.skipped || [];
+
+          return { paths: response.data.files.map((file: any) => file.path), skipped };
         } else {
           throw new Error('Upload failed');
         }

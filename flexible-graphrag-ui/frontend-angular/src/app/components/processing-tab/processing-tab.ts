@@ -3,6 +3,12 @@ import { MatCheckboxChange } from '@angular/material/checkbox';
 import { ApiService } from '../../services/api.service';
 import { AsyncProcessingResponse, ProcessingStatusResponse } from '../../models/api.models';
 
+// A file the server refused to store (unsupported extension, bad name, too large)
+interface SkippedFile {
+  filename: string;
+  reason: string;
+}
+
 interface FileItem {
   index: number;
   name: string;
@@ -439,7 +445,23 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
       
       if (this.configuredDataSource === 'upload') {
         // For upload, upload files first then use filesystem processing
-        const uploadedPaths = await this.uploadFiles();
+        const { paths: uploadedPaths, skipped } = await this.uploadFiles();
+
+        // Nothing survived the upload (e.g. every file had an unsupported extension).
+        // Stop here: posting paths: [] starts a job that can only fail, and its "failed"
+        // status then overwrites the skip reasons the user actually needs to read.
+        if (uploadedPaths.length === 0) {
+          this.error = skipped.length > 0
+            ? `No files could be uploaded:\n${this.formatSkipped(skipped)}`
+            : 'No files could be uploaded';
+          this.isProcessing = false;
+          return;
+        }
+
+        if (skipped.length > 0) {
+          this.error = `Some files were skipped:\n${this.formatSkipped(skipped)}`;
+        }
+
         processingData.data_source = 'filesystem'; // Use filesystem processing for uploaded files
         processingData.paths = uploadedPaths;
       } else {
@@ -537,7 +559,11 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
     }
   }
 
-  private uploadFiles(): Promise<string[]> {
+  private formatSkipped(skipped: SkippedFile[]): string {
+    return skipped.map(file => `${file.filename}: ${file.reason}`).join('\n');
+  }
+
+  private uploadFiles(): Promise<{ paths: string[]; skipped: SkippedFile[] }> {
     console.log('Uploading files:', this.configuredFiles);
     
     const formData = new FormData();
@@ -552,6 +578,7 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
           
           // Extract uploaded file paths for processing (match Vue/React pattern)
           let uploadedPaths: string[] = [];
+          const skipped: SkippedFile[] = response.skipped || [];
           
           if (response.success && response.files) {
             uploadedPaths = response.files.map((file: any) => file.path);
@@ -567,11 +594,13 @@ export class ProcessingTabComponent implements OnInit, OnChanges {
               return originalFile;
             }).filter(Boolean);
           } else {
-            // Fallback: use original file names
-            uploadedPaths = this.configuredFiles.map(f => f.name);
+            // No fallback to client-side file names: those are bare basenames that would
+            // resolve against the backend's working directory, not the upload directory.
+            // An empty list is correct here and the caller reports it.
+            uploadedPaths = [];
           }
           
-          resolve(uploadedPaths);
+          resolve({ paths: uploadedPaths, skipped });
         },
         error: (error: any) => {
           console.error('Error uploading files:', error);

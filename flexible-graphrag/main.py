@@ -1,4 +1,5 @@
 import os
+import ntpath
 import logging
 import sys
 from datetime import datetime
@@ -2009,6 +2010,34 @@ def cleanup_uploads(keep_recent_files: int = 0):
     except Exception as e:
         logger.warning(f"Error during upload cleanup: {str(e)}")
 
+def safe_upload_filename(filename: str) -> Optional[str]:
+    """Reduce a client-supplied upload filename to a bare, safe basename.
+
+    Clients control the multipart ``filename`` field entirely, so it may contain
+    directory separators ("../../etc/cron.d/x"), an absolute path ("/etc/x"), or a
+    Windows drive prefix ("C:x") - all of which ``upload_dir / filename`` would
+    happily follow outside the upload directory. ``ntpath.basename`` is used on every
+    platform because it strips "/", "\\" and drive prefixes alike, so a Windows-style
+    path is neutralized even when the server runs on Linux.
+
+    Returns the safe basename, or None if nothing usable is left.
+    """
+    if not filename:
+        return None
+
+    # Null bytes would truncate the path at the OS layer
+    if "\x00" in filename:
+        return None
+
+    name = ntpath.basename(filename).strip()
+
+    # "." and ".." survive basename() but are not filenames
+    if not name or name in (".", ".."):
+        return None
+
+    return name
+
+
 @app.post("/api/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
     """Upload files and store them in upload directory for processing"""
@@ -2023,9 +2052,21 @@ async def upload_files(files: List[UploadFile] = File(...)):
         # File size limit (100MB per file)
         MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB in bytes
         
+        # Anything written must land directly inside this directory
+        upload_root = upload_dir.resolve()
+
         for file in files:
             # Validate file type (basic validation)
             if not file.filename:
+                continue
+
+            # Strip any directory components a client may have put in the filename
+            safe_name = safe_upload_filename(file.filename)
+            if safe_name is None:
+                skipped_files.append({
+                    "filename": file.filename,
+                    "reason": "Invalid or unsafe filename"
+                })
                 continue
             
             # Read file content to check size
@@ -2041,7 +2082,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
                 
             # Check if file type is supported
             supported_extensions = {'.pdf', '.docx', '.xlsx', '.pptx', '.txt', '.md', '.html', '.csv', '.png', '.jpg', '.jpeg'}
-            file_extension = Path(file.filename).suffix.lower()
+            file_extension = Path(safe_name).suffix.lower()
             
             if file_extension not in supported_extensions:
                 skipped_files.append({
@@ -2051,8 +2092,18 @@ async def upload_files(files: List[UploadFile] = File(...)):
                 continue
             
             # Save file to upload directory (overwrite if exists)
-            file_path = upload_dir / file.filename
-            
+            file_path = (upload_root / safe_name).resolve()
+
+            # Defense in depth: never write outside the upload directory, whatever
+            # basename() left behind (e.g. a symlinked name already in uploads/)
+            if file_path.parent != upload_root:
+                skipped_files.append({
+                    "filename": file.filename,
+                    "reason": "Rejected: resolves outside the upload directory"
+                })
+                logger.warning(f"[WARN] Rejected upload path outside uploads dir: {file.filename!a}")
+                continue
+
             # Write file content (content already read for size validation)
             # This will overwrite existing files with the same name
             with open(file_path, "wb") as buffer:
@@ -2060,12 +2111,12 @@ async def upload_files(files: List[UploadFile] = File(...)):
             
             uploaded_files.append({
                 "filename": file.filename,
-                "saved_as": file_path.name,  # Now always matches original filename
+                "saved_as": file_path.name,  # sanitized name actually written to disk
                 "path": str(file_path),
                 "size": len(content)
             })
             
-            logger.info(f"Uploaded file: {file.filename} -> {file_path}")
+            logger.info(f"Uploaded file: {file.filename!a} -> {file_path}")
         
         response_message = f"Successfully uploaded {len(uploaded_files)} files"
         if skipped_files:
