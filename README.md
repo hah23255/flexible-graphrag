@@ -1,3 +1,26 @@
+# Flexible GraphRAG
+
+[![PyPI - flexible-graphrag](https://img.shields.io/pypi/v/flexible-graphrag?label=flexible-graphrag&color=blue)](https://pypi.org/project/flexible-graphrag/)
+[![Downloads - flexible-graphrag](https://img.shields.io/pepy/dt/flexible-graphrag)](https://pepy.tech/project/flexible-graphrag)
+[![PyPI - flexible-graphrag-mcp](https://img.shields.io/pypi/v/flexible-graphrag-mcp?label=flexible-graphrag-mcp&color=blue)](https://pypi.org/project/flexible-graphrag-mcp/)
+[![Downloads - flexible-graphrag-mcp](https://img.shields.io/pepy/dt/flexible-graphrag-mcp)](https://pepy.tech/project/flexible-graphrag-mcp)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
+[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/stevereiner/flexible-graphrag)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://stevereiner.github.io/flexible-graphrag/)
+
+<p align="center">
+  <a href="./screen-shots/auto-sync/auto-sync.png">
+    <img src="./screen-shots/auto-sync/auto-sync.png" alt="Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j" width="700">
+  </a>
+</p>
+
+<p align="center"><em>Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j</em></p>
+
+**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, Alfresco, and Nuxeo. Databases and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom Langflow components). As a further option, ingest can run on a **CocoIndex** (Rust engine) pipeline that reuses the same sources, targets, parsers and KG extractors, adding step-level memoization and automatic delete reconciliation.  
 
 **New 8/18/26 — v0.8.0 release:** Optional **CocoIndex integration** — Rust-backed [CocoIndex](https://github.com/cocoindex-io/cocoindex) pipeline mixed with Flexible GraphRAG sources (incl. detectors), functions, and targets (more PG/vector/RDF/search); same UI/REST/MCP. Standalone `app.py` also supported. Now with **custom KG extractors** (bring your own, or fall back to the built-in one per document) and **entity resolution**. New **meeting-notes example** ([`examples/cocoindex/meeting_notes_graph_any/`](examples/cocoindex/meeting_notes_graph_any/README.md)) — a CocoIndex example ported to run against any configured graph store and source. See [CocoIndex Integration](#cocoindex-integration).
 
@@ -15,31 +38,7 @@
 
 **New:** [KG Spaces Integration of Flexible GraphRAG in Alfresco ACA Client](https://github.com/stevereiner/kg-spaces-aca)
 
-# Flexible GraphRAG
-
-[![PyPI - flexible-graphrag](https://img.shields.io/pypi/v/flexible-graphrag?label=flexible-graphrag&color=blue)](https://pypi.org/project/flexible-graphrag/)
-[![Downloads - flexible-graphrag](https://img.shields.io/pepy/dt/flexible-graphrag)](https://pepy.tech/project/flexible-graphrag)
-[![PyPI - flexible-graphrag-mcp](https://img.shields.io/pypi/v/flexible-graphrag-mcp?label=flexible-graphrag-mcp&color=blue)](https://pypi.org/project/flexible-graphrag-mcp/)
-[![Downloads - flexible-graphrag-mcp](https://img.shields.io/pepy/dt/flexible-graphrag-mcp)](https://pepy.tech/project/flexible-graphrag-mcp)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
-[![Angular](https://img.shields.io/badge/Angular-19-DD0031?logo=angular&logoColor=white)](https://angular.dev/)
-[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org/)
-
-**Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, Alfresco, and Nuxeo. Databases and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom Langflow components). As a further option, ingest can run on a **CocoIndex** (Rust engine) pipeline (`PIPELINE_BACKEND=cocoindex`) that reuses the same sources, targets, parsers and KG extractors, adding step-level memoization and automatic delete reconciliation.  
-
-<p align="center">
-  <a href="./screen-shots/auto-sync/auto-sync.png">
-    <img src="./screen-shots/auto-sync/auto-sync.png" alt="Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j" width="700">
-  </a>
-</p>
-
-<p align="center"><em>Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j</em></p>
-
-## v0.6.0 in brief
-
-Version **0.6.0** broadens framework and database choice: **LangChain** is a full peer to **LlamaIndex** (per-stage env pickers for chunking, vector, search, property graph, KG extraction, fusion). **15** property graph backends: **8** on both frameworks, **Google Cloud Spanner** (LlamaIndex-only), **6** LangChain-only (ArangoDB, Apache AGE, Azure Cosmos DB for Gremlin, HugeGraph, SurrealDB, TigerGraph). **RDF** includes **Apache Jena Fuseki**, **Ontotext GraphDB**, **Oxigraph**, and **Amazon Neptune RDF**. Incremental delete, LangChain adapters, and cleanup paths were extended across stores (see [CHANGELOG.md](CHANGELOG.md)).
+**New in v0.6.0:** Version 0.6.0 broadened framework and database choice: **LangChain** is a full peer to **LlamaIndex** (per-stage env pickers for chunking, vector, search, property graph, KG extraction, fusion). **15** property graph backends: **8** on both frameworks, **Google Cloud Spanner** (LlamaIndex-only), **6** LangChain-only (ArangoDB, Apache AGE, Azure Cosmos DB for Gremlin, HugeGraph, SurrealDB, TigerGraph). **RDF** includes **Apache Jena Fuseki**, **Ontotext GraphDB**, **Oxigraph**, and **Amazon Neptune RDF**. Incremental delete, LangChain adapters, and cleanup paths were extended across stores.
 
 ## Features
 
