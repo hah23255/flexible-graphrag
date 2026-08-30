@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+    <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1180" fill="#f5f7fa"/>
+
+  <!-- HEADER -->
+  <text x="40" y="58" font-size="38" font-weight="700" fill="#0f172a">Flexible GraphRAG v0.8.0 — optional CocoIndex and Langflow pipelines</text>
+  <text x="40" y="94" font-size="20" fill="#475569">Can use 1 of 3 ingest pipelines with same configured data sources and database targets, with same UI and same REST / MCP APIs</text>
+
+  <!-- ============ ROW 1: CLIENTS ============ -->
+  <text x="40" y="142" font-size="14" font-weight="700" letter-spacing="2" fill="#64748b">CLIENTS</text>
+
+  <rect x="40" y="156" width="280" height="104" rx="14" fill="#ffffff" stroke="#f0b471" stroke-width="1.8"/>
+  <text x="62" y="200" font-size="22" font-weight="700" fill="#b45309">CocoIndex CLI</text>
+  <text x="62" y="230" font-size="16" fill="#475569">runs the pipeline standalone</text>
+
+  <rect x="350" y="156" width="370" height="104" rx="14" fill="#ffffff" stroke="#a9c3f2" stroke-width="1.8"/>
+  <text x="372" y="200" font-size="22" font-weight="700" fill="#1d4ed8">Web Frontends</text>
+  <text x="372" y="230" font-size="16" fill="#475569">React · Angular · Vue (TypeScript)</text>
+
+  <rect x="750" y="156" width="300" height="104" rx="14" fill="#ffffff" stroke="#c7b7f0" stroke-width="1.8"/>
+  <text x="772" y="200" font-size="22" font-weight="700" fill="#6d28d9">MCP Clients</text>
+  <text x="772" y="230" font-size="16" fill="#475569">AI agents, Claude Desktop</text>
+  <line x1="1052" y1="208" x2="1096" y2="208" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="1106" y="156" width="454" height="104" rx="14" fill="#ffffff" stroke="#c7b7f0" stroke-width="1.8"/>
+  <text x="1130" y="200" font-size="22" font-weight="700" fill="#6d28d9">MCP Server</text>
+  <text x="1130" y="230" font-size="16" fill="#475569">flexible-graphrag-mcp — full REST API parity</text>
+
+  <line x1="535" y1="260" x2="535" y2="310" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="1333" y1="260" x2="1333" y2="310" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- CLI bypass (dashed) -->
+  <polyline points="110,260 110,408 660,408 660,438" fill="none" stroke="#d97706" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arA)"/>
+  <text x="196" y="400" font-size="15" font-style="italic" fill="#b45309">standalone — app.py, no REST server</text>
+
+  <!-- ============ ROW 2: API ============ -->
+  <text x="40" y="300" font-size="14" font-weight="700" letter-spacing="2" fill="#64748b">API</text>
+  <rect x="480" y="312" width="1080" height="86" rx="14" fill="#ffffff" stroke="#a9c3f2" stroke-width="1.8"/>
+  <text x="504" y="350" font-size="22" font-weight="700" fill="#1d4ed8">FastAPI REST server</text>
+  <text x="504" y="378" font-size="16" fill="#475569">main.py · port 8000 — serves the web frontends and the MCP server</text>
+
+  <!-- ============ ROW 3: SOURCES + PIPELINES ============ -->
+  <text x="40" y="432" font-size="14" font-weight="700" letter-spacing="2" fill="#64748b">SOURCES</text>
+  <text x="500" y="432" font-size="14" font-weight="700" letter-spacing="2" fill="#64748b">PIPELINES</text>
+
+  <rect x="40" y="440" width="420" height="300" rx="14" fill="#ecfdf5" stroke="#86d3b4" stroke-width="1.8"/>
+  <text x="64" y="482" font-size="22" font-weight="700" fill="#047857">14 data sources</text>
+  <text x="64" y="510" font-size="15.5" fill="#065f46">10 auto-sync via event change detectors</text>
+  <text x="64" y="548" font-size="16.5" fill="#334155">Local filesystem</text>
+  <text x="64" y="578" font-size="16.5" fill="#334155">Amazon S3</text>
+  <text x="64" y="608" font-size="16.5" fill="#334155">Azure Blob</text>
+  <text x="64" y="638" font-size="16.5" fill="#334155">GCS</text>
+  <text x="64" y="668" font-size="16.5" fill="#334155">Google Drive</text>
+  <text x="255" y="548" font-size="16.5" fill="#334155">OneDrive</text>
+  <text x="255" y="578" font-size="16.5" fill="#334155">SharePoint</text>
+  <text x="255" y="608" font-size="16.5" fill="#334155">Box</text>
+  <text x="255" y="638" font-size="16.5" fill="#334155">Alfresco</text>
+  <text x="255" y="668" font-size="16.5" fill="#334155">Nuxeo</text>
+  <line x1="64" y1="690" x2="436" y2="690" stroke="#86d3b4" stroke-width="1"/>
+  <text x="64" y="714" font-size="15" fill="#475569">watchdog · SQS · change feed · Pub/Sub ·</text>
+  <text x="64" y="734" font-size="15" fill="#475569">delta queries · event APIs — shared by all pipelines</text>
+
+  <line x1="462" y1="590" x2="496" y2="590" stroke="#059669" stroke-width="2" marker-end="url(#arG)"/>
+
+  <line x1="700" y1="398" x2="700" y2="438" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="1030" y1="398" x2="1030" y2="438" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="1393" y1="398" x2="1393" y2="438" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- pipeline: cocoindex -->
+  <rect x="500" y="440" width="333" height="300" rx="14" fill="#fffbf5" stroke="#e08c2b" stroke-width="2.2"/>
+  <path d="M 500 454 a 14 14 0 0 1 14 -14 h 305 a 14 14 0 0 1 14 14 v 24 h -333 z" fill="#fff2e0"/>
+  <text x="522" y="468" font-size="14" font-weight="700" letter-spacing="1.4" fill="#b45309">NEW IN v0.8.0 — INGEST</text>
+  <text x="522" y="516" font-size="23" font-weight="700" fill="#b45309">CocoIndex pipeline</text>
+  <text x="522" y="544" font-size="16" fill="#7c4a12">PIPELINE_BACKEND=cocoindex</text>
+  <text x="522" y="586" font-size="16.5" fill="#334155">Rust incremental engine</text>
+  <text x="522" y="618" font-size="16.5" fill="#334155">Step-level memoization</text>
+  <text x="522" y="650" font-size="16.5" fill="#334155">Delete reconciliation</text>
+  <text x="522" y="682" font-size="16.5" fill="#334155">Mixes CocoIndex + Flexible</text>
+  <text x="522" y="720" font-size="14.5" font-style="italic" fill="#64748b">search reads the same indexes</text>
+
+  <!-- pipeline: default -->
+  <rect x="863" y="440" width="333" height="300" rx="14" fill="#ffffff" stroke="#2563eb" stroke-width="2.2"/>
+  <path d="M 863 454 a 14 14 0 0 1 14 -14 h 305 a 14 14 0 0 1 14 14 v 24 h -333 z" fill="#eaf1fe"/>
+  <text x="885" y="468" font-size="14" font-weight="700" letter-spacing="1.4" fill="#1d4ed8">DEFAULT — INGEST + SEARCH</text>
+  <text x="885" y="516" font-size="23" font-weight="700" fill="#1d4ed8">Default pipeline</text>
+  <text x="885" y="544" font-size="16" fill="#1e40af">LlamaIndex / LangChain</text>
+  <text x="885" y="586" font-size="16.5" fill="#334155">Ingest, hybrid search,</text>
+  <text x="885" y="614" font-size="16.5" fill="#334155">AI query and AI chat</text>
+  <text x="885" y="650" font-size="16.5" fill="#334155">Incremental updates with</text>
+  <text x="885" y="678" font-size="16.5" fill="#334155">per-file state in Postgres</text>
+  <text x="885" y="720" font-size="14.5" font-style="italic" fill="#64748b">document_state table</text>
+
+  <!-- pipeline: langflow -->
+  <rect x="1226" y="440" width="334" height="300" rx="14" fill="#ffffff" stroke="#7c3aed" stroke-width="2.2"/>
+  <path d="M 1226 454 a 14 14 0 0 1 14 -14 h 306 a 14 14 0 0 1 14 14 v 24 h -334 z" fill="#f3edfe"/>
+  <text x="1248" y="468" font-size="14" font-weight="700" letter-spacing="1.4" fill="#6d28d9">OPTIONAL — INGEST + SEARCH</text>
+  <text x="1248" y="516" font-size="23" font-weight="700" fill="#6d28d9">Langflow flows</text>
+  <text x="1248" y="544" font-size="16" fill="#5b21b6">ENABLE_LANGFLOW_FLOWS=true</text>
+  <text x="1248" y="586" font-size="16.5" fill="#334155">Customizable visual flows</text>
+  <text x="1248" y="614" font-size="16.5" fill="#334155">for ingest, search, AI query</text>
+  <text x="1248" y="650" font-size="16.5" fill="#334155">12 custom Flexible</text>
+  <text x="1248" y="678" font-size="16.5" fill="#334155">GraphRAG components</text>
+
+  <!-- pipelines -> targets -->
+  <polyline points="666,740 666,766 300,766 300,792" fill="none" stroke="#d97706" stroke-width="2" marker-end="url(#arA)"/>
+  <polyline points="666,740 666,766 760,766 760,792" fill="none" stroke="#d97706" stroke-width="2" marker-end="url(#arA)"/>
+  <line x1="1030" y1="740" x2="1030" y2="792" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="1393" y1="740" x2="1393" y2="792" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- ============ ROW 4: TARGETS ============ -->
+  <text x="40" y="782" font-size="14" font-weight="700" letter-spacing="2" fill="#64748b">TARGET STORES</text>
+
+  <rect x="40" y="794" width="520" height="290" rx="14" fill="#fffbf5" stroke="#f0b471" stroke-width="1.8"/>
+  <text x="64" y="836" font-size="22" font-weight="700" fill="#b45309">CocoIndex native</text>
+  <text x="64" y="862" font-size="15.5" fill="#7c4a12">only from the CocoIndex pipeline</text>
+  <text x="64" y="906" font-size="16.5" font-weight="600" fill="#334155">Graph</text>
+  <text x="190" y="906" font-size="16.5" fill="#334155">Neo4j · FalkorDB · SurrealDB</text>
+  <text x="64" y="942" font-size="16.5" font-weight="600" fill="#334155">Vector</text>
+  <text x="190" y="942" font-size="16.5" fill="#334155">Qdrant · LanceDB · pgvector</text>
+  <text x="64" y="978" font-size="16.5" font-weight="600" fill="#334155">Splitter</text>
+  <text x="190" y="978" font-size="16.5" fill="#334155">syntax-aware chunking</text>
+  <line x1="64" y1="1004" x2="536" y2="1004" stroke="#f0b471" stroke-width="1"/>
+  <text x="64" y="1032" font-size="15.5" fill="#475569">Plus CocoIndex's own connector set:</text>
+  <text x="64" y="1058" font-size="15.5" fill="#475569">relational and analytical DBs, message streams</text>
+
+  <rect x="600" y="794" width="960" height="290" rx="14" fill="#ffffff" stroke="#a9c3f2" stroke-width="1.8"/>
+  <text x="624" y="836" font-size="22" font-weight="700" fill="#1d4ed8">Flexible GraphRAG targets — LlamaIndex / LangChain</text>
+  <text x="624" y="862" font-size="15.5" fill="#1e40af">available to all three pipelines</text>
+
+  <rect x="624" y="880" width="215" height="140" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="646" y="922" font-size="30" font-weight="700" fill="#0f172a">15</text>
+  <text x="646" y="950" font-size="16.5" font-weight="600" fill="#334155">property graphs</text>
+  <text x="646" y="978" font-size="14.5" fill="#64748b">Neo4j, ArcadeDB,</text>
+  <text x="646" y="1000" font-size="14.5" fill="#64748b">FalkorDB, LadyBugDB, …</text>
+
+  <rect x="857" y="880" width="215" height="140" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="879" y="922" font-size="30" font-weight="700" fill="#0f172a">4</text>
+  <text x="879" y="950" font-size="16.5" font-weight="600" fill="#334155">RDF triple stores</text>
+  <text x="879" y="978" font-size="14.5" fill="#64748b">Fuseki, GraphDB,</text>
+  <text x="879" y="1000" font-size="14.5" fill="#64748b">Oxigraph, Neptune</text>
+
+  <rect x="1090" y="880" width="215" height="140" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="1112" y="922" font-size="30" font-weight="700" fill="#0f172a">10</text>
+  <text x="1112" y="950" font-size="16.5" font-weight="600" fill="#334155">vector stores</text>
+  <text x="1112" y="978" font-size="14.5" fill="#64748b">Qdrant, Milvus,</text>
+  <text x="1112" y="1000" font-size="14.5" fill="#64748b">Weaviate, LanceDB, …</text>
+
+  <rect x="1323" y="880" width="215" height="140" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="1345" y="922" font-size="30" font-weight="700" fill="#0f172a">3</text>
+  <text x="1345" y="950" font-size="16.5" font-weight="600" fill="#334155">search engines</text>
+  <text x="1345" y="978" font-size="14.5" fill="#64748b">Elasticsearch,</text>
+  <text x="1345" y="1000" font-size="14.5" fill="#64748b">OpenSearch, BM25</text>
+
+  <text x="624" y="1058" font-size="15.5" fill="#475569">Per-backend .env switches: llamaindex | langchain | cocoindex — database choice is separate</text>
+
+  <!-- FOOTER -->
+  <text x="40" y="1136" font-size="16" fill="#475569">Apache 2.0 · github.com/stevereiner/flexible-graphrag</text>
+  <text x="1560" y="1136" font-size="16" text-anchor="end" fill="#475569">CocoIndex: github.com/cocoindex-io/cocoindex</text>
+</svg>

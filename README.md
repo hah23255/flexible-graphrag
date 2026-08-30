@@ -13,12 +13,20 @@
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://stevereiner.github.io/flexible-graphrag/)
 
 <p align="center">
-  <a href="./screen-shots/auto-sync/auto-sync.png">
-    <img src="./screen-shots/auto-sync/auto-sync.png" alt="Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j" width="700">
+  <a href="./screen-shots/langflow/langflow-sharepoint-graphdb-neo4j.png">
+    <img src="./screen-shots/langflow/langflow-sharepoint-graphdb-neo4j.png" alt="Flexible GraphRAG in Langflow pipeline mode: a SharePoint auto-sync source using Microsoft Graph delta queries, a PDF parsed by LiteParse, and one ingest populating Qdrant vector, Elasticsearch search, Neo4j property graph, and Graphwise GraphDB RDF at the same time, with the processing tab showing initial sync status and AI chat answering questions from an ontology-mode knowledge graph" width="900">
   </a>
 </p>
 
-<p align="center"><em>Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j</em></p>
+<p align="center"><em>Langflow pipeline mode — a SharePoint auto-sync data source (MS Graph delta query) ingesting and targeting Qdrant vector, Elasticsearch, Neo4j, and Graphwise Ontotext GraphDB, with ontology-mode, AI chat drawing context from all four.</em></p>
+
+<p align="center">
+  <a href="./images/flexible-graphrag-v0.8.0-architecture.png">
+    <img src="./images/flexible-graphrag-v0.8.0-architecture.png" alt="Flexible GraphRAG v0.8.0 architecture: default, CocoIndex, and Langflow ingest pipelines sharing the same data sources, database targets, UI, and REST / MCP APIs" width="900">
+  </a>
+</p>
+
+<p align="center"><em>Can use 1 of 3 ingest pipelines with same configured data sources and database targets, with same UI and same REST / MCP APIs</em></p>
 
 **Flexible GraphRAG** is an open source AI context platform supporting a document processing pipeline (Docling, LlamaParse, or LiteParse), knowledge graph auto-building, ontologies, schemas, many LLM providers, GraphRAG and RAG, hybrid semantic search (fulltext, vector, property graph, RDF/SPARQL), AI query, and AI chat. The backend is **Python** with **LlamaIndex** and **LangChain** as peer frameworks. **LlamaIndex** is the default for each pipeline stage; **LangChain** can be selected per stage in environment configuration. The API is a REST **FastAPI** service. **Angular**, **React**, and **Vue** TypeScript frontends and an **MCP** server are included. The stack supports 14 data sources (10 with incremental auto-sync), 15 property graph databases, 4 RDF triple stores (Apache Jena Fuseki, Ontotext GraphDB, Oxigraph, Amazon Neptune RDF), 10 vector databases, OpenSearch / Elasticsearch / BM25 search, Alfresco, and Nuxeo. Databases and dashboards can be enabled with the provided Docker Compose layout. Optionally, the ingest pipeline, hybrid search, and AI query can run through customizable **Langflow** visual flows (12 custom Langflow components). As a further option, ingest can run on a **CocoIndex** (Rust engine) pipeline that reuses the same sources, targets, parsers and KG extractors, adding step-level memoization and automatic delete reconciliation.  
 
@@ -137,13 +145,21 @@
 
 ## Data Sources
 
-Flexible GraphRAG supports **14 different data sources** for ingesting documents into your knowledge base:
+Flexible GraphRAG supports **14 different data sources** for ingesting documents into your knowledge base (Nuxeo missing from older screenshots):
 
 <p align="center">
   <a href="./screen-shots/react/data-sources-1.jpeg">
     <img src="./screen-shots/react/data-sources-1.jpeg" alt="Data Sources" width="700">
   </a>
 </p>
+
+<p align="center">
+  <a href="./screen-shots/auto-sync/auto-sync.png">
+    <img src="./screen-shots/auto-sync/auto-sync.png" alt="Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres, Neo4j" width="700">
+  </a>
+</p>
+
+<p align="center"><em>Flexible GraphRAG data sources, processing tab, auto-sync document states in Postgres (default pipeline, with auto incremental update system enabled), Neo4j shown (Qdrant, Elasticsearch not shown)</em></p>
 
 ### File & Upload Sources
 1. **File Upload** - Direct file upload through web interface with drag & drop support
